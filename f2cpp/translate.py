@@ -778,8 +778,9 @@ class Translator:
     def err_stmt(self, node, ind):
         """statement using the error flag: drop pure bookkeeping, otherwise keep as comment"""
         k = cls(node.node) if cls(node) == "_Trimmed" else cls(node)
-        if k == "Assignment_Stmt" and self.is_err(node.items[0]) and not self.err_uses(node.items[2]):
-            return
+        if k == "Assignment_Stmt" and self.is_err(node.items[0]) and \
+                (not self.err_uses(node.items[2]) or self.is_err(node.items[2])):
+            return          # ierr = 0, ierr = ierr (e.g. PROJECT_CHK_IERR(ierr=ierr, ierr) after a long call)
         if k == "If_Stmt" and self.only_err_names(node.items[0]) and cls(node.items[1]) == "Return_Stmt":
             return
         if k == "If_Construct" and self.only_err_names(node.content[0].items[0]) and \

@@ -195,7 +195,9 @@ contains
     end do
     if (present(scale)) y = scale * y
     PROJECT_CHK_IERR(call fill(w, value=0.0, ierr=ierr), ierr)
-    PROJECT_CHK_IERR(call fill(y(2:), 1.0, ierr=ierr), ierr)
+    call fill(y(2:), &
+      &       1.0, ierr=ierr)
+    PROJECT_CHK_IERR( ierr=ierr, ierr)
     if (ierr /= 0) then
       print *, 'accumulate failed'
       return

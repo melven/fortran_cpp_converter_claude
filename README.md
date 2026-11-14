@@ -66,7 +66,7 @@ with less precise output (calls are passed through unchanged).
 | `PROJECT_CHK_IERR(call f(a, ierr), ierr)` | `f(a);` — the `ierr` argument is removed everywhere |
 | `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `if (!(c)) throw std::logic_error(...);` / `std::invalid_argument` (`call_templates`) |
 | `PROJECT_ALLOCATE(a(n), ierr)` | `a.resize(n);` |
-| other statements using `ierr` | kept as comment (`ierr = 0`, `if (ierr /= 0) return` are dropped) |
+| other statements using `ierr` | kept as comment (`ierr = 0`, `if (ierr /= 0) return`, `PROJECT_CHK_IERR(ierr=ierr, ierr)` are dropped) |
 | pFUnit `@test`, `@before`/`@after` | `TEST` / `TEST_F` with fixture |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR`, `ASSERT_LE((e - a).cwiseAbs().maxCoeff(), t)`, `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |

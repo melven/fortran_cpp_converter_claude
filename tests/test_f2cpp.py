@@ -160,6 +160,7 @@ def test_features(out):
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp
     assert "double accurate_sum(" in cpp
+    assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  // TODO(f2cpp): uses error flag" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(samples(Eigen::seq(0, n - 1)));" in cpp
     assert "b = (a.array() > 0.0).select(a, b);" in cpp
