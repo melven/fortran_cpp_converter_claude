@@ -244,7 +244,7 @@ class Translator:
                 raise Untranslatable("error-arg")
             p = self.lookup_proc(n)
             if p is None:
-                self.report.add("info", "unknown-name")
+                self.report.add("info", "unknown-name:" + n)
             return X(cname(str(node)))
         return self.var_ref(v, v.cname)
 
@@ -297,7 +297,7 @@ class Translator:
             args_c = ", ".join(self.expr(a.items[1] if cls(a) == "Component_Spec" else a).code
                                for a in items_of(args))
             return X(f"{self.prog.type_name(n, self.mod)}{{{args_c}}}", 0, "type", tname=n)
-        self.report.add("info", "external-function")
+        self.report.add("info", "external-function:" + n)
         return X(f"{cname(str(name_node))}({', '.join(self.plain_args(items_of(args)))})")
 
     def x_Data_Ref(self, node):
@@ -317,7 +317,7 @@ class Translator:
                     cur = X(cur.code, 0, "type", cur.prec, tname=n, raw=cur.raw,
                             qual=self.prog.type_name(n, self.mod) + "::")
                     continue
-                self.report.add("info", "unknown-component")
+                self.report.add("info", "unknown-component:" + n)
                 x = X(base + cname(str(pname)))
                 if subs is not None:
                     x = X(f"{x.code}({', '.join(self.plain_args(subs))})")
@@ -623,7 +623,7 @@ class Translator:
         elif p is not None:
             argc = self.bound_args(p, items_of(args))
         else:
-            self.report.add("info", "unknown-binding")
+            self.report.add("info", "unknown-binding:" + n)
             argc = self.plain_args(items_of(args))
         sep = "->" if obj.raw is not None else "."
         code = f"{obj.raw if obj.raw is not None else par(obj)}{sep}{obj.qual}{cname(str(bname))}" \

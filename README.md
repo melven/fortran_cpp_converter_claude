@@ -24,7 +24,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 | `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults |
 | `-n NS` | C++ namespace |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
-| `--report JSON` | construct coverage report: categories and counts only, **no source text** |
+| `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
 
 Pass all modules that depend on each other in one call (or via `-I`): types, ranks and
 signatures of used modules are needed for a good translation. Unknown modules still work,
