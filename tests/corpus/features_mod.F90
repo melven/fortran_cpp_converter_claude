@@ -38,6 +38,12 @@ module features_mod
 
 contains
 
+  function str(i) result(s)
+    integer, intent(in) :: i
+    character(len=12) :: s
+    write(s, '(i0)') i
+  end function str
+
   subroutine setup_solver(lu, n, ierr)
     type(block_lu_type), intent(out) :: lu
     integer, intent(in) :: n
@@ -150,7 +156,7 @@ contains
     case (1, 2)
       text = 'small ' // trim(label)
     case (3:max_items)
-      text = 'medium'
+      text = 'medium ' // str(k) // '/' // str(max_items)
     case default
       text = 'large'
     end select

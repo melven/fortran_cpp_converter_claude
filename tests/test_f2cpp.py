@@ -63,7 +63,7 @@ def test_report(out):
     files = out[1].files
     for name, counters in files.items():
         if "features" in name:
-            assert set(counters["untranslated"]) == {"error-arg:If_Construct"}
+            assert set(counters["untranslated"]) == {"error-arg:If_Construct", "stmt:Write_Stmt"}
         else:
             assert not counters["untranslated"], name
 
@@ -117,6 +117,7 @@ def test_features(out):
     assert "h.owned = std::make_unique<stats>();" in cpp
     assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
     assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
+    assert 'text = "medium " + std::to_string(k) + "/" + std::to_string(max_items);' in cpp
     assert "double accurate_sum(" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(this->samples(Eigen::seq(0, this->n - 1)));" in cpp

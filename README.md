@@ -85,6 +85,8 @@ myproj_chk_argument = 'if (!({0})) throw std::invalid_argument("invalid argument
 "myproj_macros.h" = ""                     # drop the Fortran macro header
 ```
 
+`function_map` renames functions in expressions (default: `str` → `std::to_string`).
+
 ## Existing C++ code (partially translated module hierarchy)
 
 ```toml

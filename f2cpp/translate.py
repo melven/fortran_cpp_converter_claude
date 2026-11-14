@@ -246,6 +246,10 @@ class Translator:
         v = self.lookup(n)
         if v is not None and cls(node) != "Intrinsic_Function_Reference" or (v is not None and v.rank > 0):
             return self.subscript(self.x_Name(name_node), v, items_of(args))
+        if n in self.cfg["function_map"]:
+            fn = self.cfg["function_map"][n]
+            return X(f"{fn}({', '.join(self.plain_args(items_of(args)))})", 0,
+                     "character" if fn == "std::to_string" else "unknown")
         p = self.lookup_proc(n)
         if p is not None:
             return self.result_x(self.call_code(p, items_of(args)), p)

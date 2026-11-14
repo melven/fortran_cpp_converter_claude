@@ -57,6 +57,8 @@ DEFAULTS = {
         "project_assert": 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");',
         "project_chk_argument": 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");',
     },
+    # called function (lower case) -> C++ function, same arguments
+    "function_map": {"str": "std::to_string"},
     "gtest_assert": "ASSERT",      # pFUnit asserts abort the test -> ASSERT_*; or "EXPECT"
     "keep_original": False,        # emit the Fortran statement as comment above each statement
 }
@@ -74,7 +76,7 @@ def load(path=None, **overrides):
                 cfg[key].update(val)
             else:
                 cfg[key] = val
-    for key in ("call_templates", "type_map", "module_headers", "kind_map"):    # Fortran names
+    for key in ("call_templates", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     for key, val in overrides.items():
