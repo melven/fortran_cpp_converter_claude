@@ -10,7 +10,7 @@ class Report:
 
     def start(self, name):
         self.cur = self.files.setdefault(name, {k: Counter() for k in
-                                                ("translated", "untranslated", "todo", "info")})
+                                                ("translated", "untranslated", "todo", "info", "missing")})
 
     def add(self, kind, category):
         if self.cur is not None:
@@ -22,6 +22,8 @@ class Report:
             nt, nu = sum(c["translated"].values()), sum(c["untranslated"].values())
             lines.append(f"{name}: {nt} statements translated, {nu} left as Fortran comment, "
                          f"{sum(c['todo'].values())} flagged for review")
+            for cat in c["missing"]:
+                lines.append(f"    missing module {cat}")
             for kind in ("untranslated", "todo", "info"):
                 for cat, n in c[kind].most_common():
                     lines.append(f"    {kind:12s} {n:4d}  {cat}")

@@ -111,6 +111,8 @@ class Translator:
         if v.base == "complex":
             return f"std::complex<{cfg['scalar']}>"
         if v.base == "type":
+            if v.tname not in self.cfg["type_map"] and self.find_type(v.tname) is None:
+                self.report.add("info", "unknown-type:" + v.tname)
             return self.prog.type_name(v.tname, self.mod)
         return "auto"
 

@@ -127,6 +127,13 @@ argument handling. Method names are assumed to be identical to the Fortran bindi
 e.g. to flatten kind indirections: `[['real\(kind=real_kind\)', 'real(kind=8)']]`.
 Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
 
+## Missing modules
+
+The summary and the report list used modules that are neither translated in the same call nor
+given with `-I`, if they are needed: with an `only` list, the names that are not covered by
+`function_map`, `call_templates`, `type_map` or `kind_map`; without one, the names in the
+file that could not be resolved.
+
 ## Parse errors
 
 The parser accepts Fortran 2008. If a file cannot be parsed, the fparser message is printed

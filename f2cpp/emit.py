@@ -446,6 +446,7 @@ class ModuleEmitter:
                 cpp.emit(0, "}  // namespace")
             cpp.emit(0, "")
 
+        self.missing_modules()
         if mod.is_test:
             return None, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc)
 
@@ -479,6 +480,25 @@ class ModuleEmitter:
                  protos_priv.out + ["", "}  // namespace", ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
         return "\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c)))
+
+    def missing_modules(self):
+        """report used modules whose definitions are neither parsed (file or -I) nor mapped"""
+        cfg = self.cfg
+        mapped = set(cfg["function_map"]) | set(cfg["call_templates"]) | set(cfg["type_map"]) | \
+            set(cfg["kind_map"])
+        kinds = ("unknown-name", "external-call", "external-function", "unknown-type")
+        unresolved = sorted({c.split(":", 1)[1] for c in self.report.cur["info"]
+                             if c.split(":")[0] in kinds} - mapped)
+        for u, only in self.mod.use_only.items():
+            if u in self.prog.modules or u in cfg["ignore_modules"]:
+                continue
+            if only is not None:
+                need = [n for n in dict.fromkeys(only) if n not in mapped]
+                if need:
+                    self.report.add("missing", f"{u}: needed for {', '.join(need)}")
+            elif unresolved:
+                self.report.add("missing", f"{u} (no only-list): unresolved names in this file: "
+                                           f"{', '.join(unresolved)}")
 
     def braces(self, lines):
         """brace style: put the opening brace of blocks on its own line"""

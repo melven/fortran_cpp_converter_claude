@@ -131,6 +131,7 @@ class Module:
     name: str
     node: object
     uses: list = field(default_factory=list)
+    use_only: dict = field(default_factory=dict)    # used module -> names of the only-lists (None: all)
     vars: dict = field(default_factory=dict)
     types: dict = field(default_factory=dict)
     procs: dict = field(default_factory=dict)
@@ -285,7 +286,7 @@ def collect_module(node):
             for s in part.content:
                 k = cls(s)
                 if k == "Use_Stmt":
-                    m.uses.append(lname(s.items[2]))
+                    pass                                # collected below (also inside procedures)
                 elif k == "Access_Stmt":
                     acc = str(s.items[0]).lower()
                     if s.items[1] is None:
@@ -312,6 +313,16 @@ def collect_module(node):
                 if cls(s) in ("Subroutine_Subprogram", "Function_Subprogram"):
                     p = collect_proc(s, m)
                     m.procs[p.name] = p
+    from fparser.two.utils import walk
+    for s in walk(node, F.Use_Stmt):
+        u = lname(s.items[2])
+        if u not in m.uses:
+            m.uses.append(u)
+        if s.items[4] is None or "only" not in str(s.items[3]).lower():
+            m.use_only[u] = None
+        elif m.use_only.get(u, []) is not None:
+            names = [lname(n).split("=>")[-1].strip() for n in items_of(s.items[4])]
+            m.use_only[u] = m.use_only.get(u, []) + names
     # generic interfaces -> C++ overloads
     for g, specifics in m.generics.items():
         for sname in specifics:

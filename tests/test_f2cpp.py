@@ -236,3 +236,17 @@ def test_custom_macro_names(tmp_path):
     assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp
     assert 'xy_log_debug("n = " + std::to_string(block_dim.size()));' in cpp
     assert 'if (!sys.offsets.mask(Eigen::seq(ub - 1, ue - 1)).any()) xy_log_debug("none");' in cpp
+
+
+def test_missing_modules(tmp_path):
+    (tmp_path / "m_mod.F90").write_text(
+        "module m_mod\nuse a_mod, only: str, a_type, helper\nuse b_mod, only: str\nuse c_mod\nuse d_mod\n"
+        "contains\nsubroutine s(x)\ntype(a_type) :: x\ncall helper(x)\ncall other(str(1))\nend subroutine\n"
+        "end module\n")
+    (tmp_path / "d_mod.F90").write_text("module d_mod\nend module\n")
+    c = config.load()
+    c["function_map"] = {"str": "std::to_string"}
+    report, _ = translate([str(tmp_path / "m_mod.F90")], c, str(tmp_path), [str(tmp_path / "d_mod.F90")])
+    missing = set(report.files[str(tmp_path / "m_mod.F90")]["missing"])
+    assert missing == {"a_mod: needed for a_type, helper",
+                       "c_mod (no only-list): unresolved names in this file: a_type, helper, other"}
