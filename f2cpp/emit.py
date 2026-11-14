@@ -384,9 +384,10 @@ class ModuleEmitter:
                     self.decl_stmt(sink, one, mod.vars, 1 if sink is cpp_priv else 0,
                                    prefix="inline " if sink is hpp else "")
             elif k == "Derived_Type_Def":
-                hpp.block(pending, 0)
+                sink = cpp_priv if mod.is_test else hpp     # test files have no header
+                sink.block(pending, 0)
                 pending = []
-                self.emit_type(hpp, mod.types[lname(s.content[0].items[1])], 0)
+                self.emit_type(sink, mod.types[lname(s.content[0].items[1])], 0)
             elif k == "Interface_Block":
                 head = s.content[0].items[0]
                 if head is not None and cls(head) != "Name" and str(head).upper() != "ABSTRACT":

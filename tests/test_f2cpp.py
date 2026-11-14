@@ -184,6 +184,7 @@ def test_pfunit(out):
     assert "using namespace project;" in t and "namespace project" not in t.replace("using namespace project;", "")
     f = read(out, "test_poly_mod.cpp")          # @before / @after -> fixture, helpers -> static functions
     assert "class test_poly_mod : public ::testing::Test" in f and "void SetUp() override { setUp(); }" in f
+    assert "class sample\n{" in f and "sample s;" in f
     assert "TEST_F(test_poly_mod, test_eval)" in f and "static scalar reference(scalar x);" in f
     assert "ASSERT_NEAR(reference(0.5), pol.eval(0.5), 1.e-14);" in f
     assert "ASSERT_NEAR(identity(3), E, 1.e-14);" in t and "ASSERT_NEAR(2.0 * B, M, 1.e-13);" in t

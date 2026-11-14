@@ -3,6 +3,10 @@ module test_poly_mod
   use poly_mod, only: poly_type, poly_eval
   implicit none
 
+  type :: sample_type
+    real :: x = 0.5
+  end type sample_type
+
   type(poly_type) :: pol
   real :: cf(0:2)
 
@@ -28,6 +32,8 @@ contains
 
   @test
   subroutine test_eval()
+    type(sample_type) :: s
+    @assertEqual(reference(s%x), pol%eval(s%x), tolerance=1.e-14)
     @assertEqual(reference(0.5), pol%eval(0.5), tolerance=1.e-14)
     @assertEqual(reference(-2.0), poly_eval(cf, -2.0), tolerance=1.e-14)
     @assertEqual(cf, pol%coeff, tolerance=0.0)
