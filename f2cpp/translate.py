@@ -30,6 +30,7 @@ class X:
     whole: bool = False      # complete variable (no subscripts)
     qual: str = ""           # "Parent::" for explicit parent calls
     fwd: str = None          # optional dummy: the std::optional object itself
+    neg: object = None       # the negated expression, if it has a simpler form than !(...)
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
 
@@ -446,6 +447,8 @@ class Translator:
         x = self.expr(operand)
         o = op.lower()
         if o == ".not.":
+            if x.neg is not None:
+                return x.neg
             return X("!" + par(x, P_UNARY), x.rank, "logical", P_UNARY, arr=x.arr)
         if o == "-":
             return X("-" + par(x, P_UNARY), x.rank, x.base, P_UNARY, arr=x.arr)
@@ -1397,17 +1400,19 @@ def i_present(tr, n, pos, kw):
 
 def i_allocated(tr, n, pos, kw):
     x = tr.expr(pos[0])
-    if x.var is None:
-        raise Untranslatable("allocated")
-    st = tr.storage(x.var)
     name = x.raw if x.raw is not None else par(x)
+    if x.var is None:       # unknown object (type from a module that is not parsed): assume an Eigen array
+        tr.note("allocated", f"{n}() of an object of unknown type")
+        st = "eigen"
+    else:
+        st = tr.storage(x.var)
     if st in ("uptr", "ptr"):
         if len(pos) > 1:
             return X(f"{name} == &{par(tr.expr(pos[1]), P_UNARY)}", 0, "logical", P_EQ)
-        return X(f"{name} != nullptr", 0, "logical", P_EQ)
+        return X(f"{name} != nullptr", 0, "logical", P_EQ, neg=X(f"{name} == nullptr", 0, "logical", P_EQ))
     if st in ("eigen", "objmat") or (st == "flat" and x.var.base not in ("type", "character")):
-        return X(f"{name}.size() > 0", 0, "logical", P_REL)
-    return X(f"!{name}.empty()", 0, "logical", P_UNARY)
+        return X(f"{name}.size() > 0", 0, "logical", P_REL, neg=X(f"{name}.size() == 0", 0, "logical", P_EQ))
+    return X(f"!{name}.empty()", 0, "logical", P_UNARY, neg=X(f"{name}.empty()", 0, "logical"))
 
 
 def i_limits(member):
