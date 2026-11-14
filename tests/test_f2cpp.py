@@ -13,7 +13,7 @@ HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
 SUPPORT = os.path.join(HERE, "support")
 EIGEN = "/usr/include/eigen3"
-MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod"]
+MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod"]
 
 needs_cxx = pytest.mark.skipif(not (shutil.which("g++") and os.path.isdir(EIGEN)), reason="g++/Eigen missing")
 
@@ -125,11 +125,21 @@ def test_features(out):
     assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
     assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
     assert 'text = "medium " + std::to_string(k) + "/" + std::to_string(max_items);' in cpp
-    assert "h.phi.assign(n + 1, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>(2, 2));  // TODO(f2cpp): " \
-        "lower bound /= 1" in cpp
-    assert "// TODO(f2cpp): 'phi' has lower bound(s) 0 in Fortran; indices are shifted accordingly" in cpp
+    # lower bound 0: shifted without warning; other lower bounds: warning
+    assert "h.phi.assign(n + 1, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>(2, 2));\n" in cpp
+    assert "has lower bound(s) 0" not in cpp
+    assert "Eigen::VectorXi idx(4), shifted(3);" in cpp and "shifted(0) = lo;" in cpp
+    assert "// TODO(f2cpp): 'shifted' has lower bound(s) -1 in Fortran; indices are shifted accordingly" in cpp
     assert "dt = t / 16 + t / (n * n) + static_cast<int>(std::pow(2, n));" in cpp
     assert "for (k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
+    poly = read(out, "poly_mod.cpp")
+    assert "// TODO(f2cpp):" not in poly
+    assert "degree = c.size() - 1;" in poly and "coeff.resize(degree + 1);" in poly
+    assert "for (k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
+    assert "vec w(c.size());" in poly and "w(k - 1) = k * c(k);" in poly
+    assert "d(Eigen::seq(0, n - 1)) = w(Eigen::seq(0, n - 1));" in poly
+    assert "p.resize(c.size() - 1 + 1, x.size());" in poly and "p(k, i - 1) = c(k) * std::pow(x(i - 1), k);" in poly
+    assert "hist[k] = (k + 1) * table(Eigen::seq(0, 1), Eigen::seq(0, 1));" in poly
     assert "h.phi[k](0, 0) = dt * k + h.phi[0].rows();" in cpp
     assert "phi.resize(h.phi.size());" in cpp
     assert "for (std::size_t k_ = 0; k_ < h.phi.size(); ++k_) phi[k_] = h.phi[k_].cast<scalar>();" in cpp
@@ -201,14 +211,15 @@ def test_compiles(out, name):
 @pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
 def test_same_results_as_fortran(out, tmp_path):
     d = out[0]
-    srcs = [os.path.join(CORPUS, f) for f in ("expm_mod.F90", "block_lu_mod.F90", "shape_mod.F90", "driver.F90")]
+    srcs = [os.path.join(CORPUS, f) for f in ("expm_mod.F90", "block_lu_mod.F90", "shape_mod.F90", "poly_mod.F90",
+                                               "driver.F90")]
     run(["gfortran", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-J", str(tmp_path), *srcs,
          "-llapack", "-o", str(tmp_path / "fdriver")], CORPUS)
     ref = run([str(tmp_path / "fdriver")], d).split()
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
-         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "-llapack", "-o", "cdriver"], d)
+         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 26
+    assert len(res) == len(ref) == 43
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 

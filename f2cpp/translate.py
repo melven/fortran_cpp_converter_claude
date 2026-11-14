@@ -1034,7 +1034,8 @@ class Translator:
             if lo is None or str(lo).strip() == "1":
                 sizes.append(self.expr(hi).code)
                 continue
-            self.note("lower-bound", "lower bound /= 1: indices are shifted, check uses")
+            if str(lo).strip() != "0":
+                self.note("lower-bound", "lower bound not 0 or 1: indices are shifted, check uses")
             if re.fullmatch(r"-?\s*\d+", str(lo)):
                 sizes.append(self.minus(hi, int(str(lo).replace(" ", "")) - 1))
             else:

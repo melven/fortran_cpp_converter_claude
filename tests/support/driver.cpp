@@ -4,6 +4,7 @@
 
 #include "block_lu_mod.hpp"
 #include "expm_mod.hpp"
+#include "poly_mod.hpp"
 #include "shape_mod.hpp"
 
 using namespace project;
@@ -46,5 +47,18 @@ int main()
   s2->scale(3.0);
   std::printf("%24.15E%24.15E%24.15E\n", total_area(*s1, *s2), s1->scaled_area(2.0), s2->scaled_area());
   std::printf("%4d%4d\n", describe(*s1), describe(*s2));
+  poly pol;
+  vec cf(4), dd(4), xs(3);
+  cf << 1.0, -2.0, 0.5, 0.25;
+  xs << 0.5, 1.5, -1.0;
+  pol.set(cf);
+  poly_derivative(cf, dd);
+  mat tab(3, 2);
+  std::vector<mat> hst(2, mat(2, 2));
+  moments_table(cf, xs, tab, hst);
+  std::printf("%24.15E%24.15E%24.15E\n", pol.eval(1.3), poly_eval(dd, 0.7), poly_eval(cf.tail(3), 2.0));
+  print(tab);
+  print(hst[0]);
+  print(hst[1]);
   return 0;
 }

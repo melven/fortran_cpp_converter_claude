@@ -31,8 +31,8 @@ class ModuleEmitter:
                 sizes.append(tr.expr(hi).code)
             else:
                 h, l = tr.expr(hi), tr.expr(lo)
-                if h.code.lstrip("-").isdigit() and l.code.lstrip("-").isdigit():
-                    sizes.append(str(int(h.code) - int(l.code) + 1))
+                if l.code.lstrip("-").isdigit():
+                    sizes.append(tr.minus(hi, int(l.code) - 1))
                 else:
                     sizes.append(f"{par(h, 70)} - {par(l, 70, True)} + 1")
         if v.init is not None:
@@ -100,7 +100,7 @@ class ModuleEmitter:
                 tr.emit(ind, f"// {TODO}: Fortran array pointer '{v.cname}' is translated as an owning array "
                              "(no aliasing of its target)")
             lbs = [str(lo).replace(" ", "") for lo, _ in v.dims if lo is not None]
-            if any(lb != "1" for lb in lbs):
+            if any(lb not in ("0", "1") for lb in lbs):
                 self.report.add("todo", "lower-bound")
                 tr.emit(ind, f"// {TODO}: '{v.cname}' has lower bound(s) {', '.join(lbs)} in Fortran; "
                              "indices are shifted accordingly, check its uses")

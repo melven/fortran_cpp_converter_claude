@@ -321,10 +321,12 @@ contains
     integer, intent(in) :: lo
     real, intent(in) :: v(lo:)
     integer :: k
-    integer :: idx(0:3)
+    integer :: idx(0:3), shifted(-1:1)
     idx = 0
     idx(0) = lo
-    k = idx(0) + int(v(lo)) + nint(v(lo + 1))
+    shifted = 0
+    shifted(-1) = lo
+    k = idx(0) + int(v(lo)) + nint(v(lo + 1)) + shifted(-1) - lo
   end function first_index
 
   subroutine stats_add(this, x, ierr)
