@@ -3,7 +3,7 @@
 module features_mod
   use shape_mod
   use block_lu_mod, only: block_lu_type
-  use legacy_mod, only: legacy_type, legacy_helper
+  use legacy_mod, only: legacy_type, legacy_helper, str
   implicit none
   private
 
@@ -37,12 +37,6 @@ module features_mod
   end type holder_type
 
 contains
-
-  function str(i) result(s)
-    integer, intent(in) :: i
-    character(len=12) :: s
-    write(s, '(i0)') i
-  end function str
 
   subroutine setup_solver(lu, n, ierr)
     type(block_lu_type), intent(out) :: lu

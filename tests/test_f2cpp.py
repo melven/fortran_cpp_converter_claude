@@ -63,7 +63,7 @@ def test_report(out):
     files = out[1].files
     for name, counters in files.items():
         if "features" in name:
-            assert set(counters["untranslated"]) == {"error-arg:If_Construct", "stmt:Write_Stmt"}
+            assert set(counters["untranslated"]) == {"error-arg:If_Construct"}
         else:
             assert not counters["untranslated"], name
 

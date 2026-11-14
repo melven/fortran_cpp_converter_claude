@@ -3,7 +3,7 @@
 module legacy_mod
   implicit none
   private
-  public :: legacy_type, legacy_helper
+  public :: legacy_type, legacy_helper, str
 
   type :: legacy_type
     real :: value = 0.0
@@ -13,6 +13,12 @@ module legacy_mod
   end type legacy_type
 
 contains
+
+  function str(i) result(s)
+    integer, intent(in) :: i
+    character(len=12) :: s
+    write(s, '(i0)') i
+  end function str
 
   subroutine legacy_update(this, v, ierr)
     class(legacy_type), intent(inout) :: this
