@@ -119,6 +119,12 @@ argument handling. Method names are assumed to be identical to the Fortran bindi
 e.g. to flatten kind indirections: `[['real\(kind=real_kind\)', 'real(kind=8)']]`.
 Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
 
+## Parse errors
+
+The parser accepts Fortran 2008. If a file cannot be parsed, the fparser message is printed
+and the pre-processed text is written to `<file>.f2cpp_prepass`; the reported line number
+refers to that file. Work around unsupported syntax with `pre_patches`.
+
 ## Known limitations (manual work)
 
 - **LAPACK / external calls** are passed through with a TODO. `tests/support/lapack_compat.hpp`

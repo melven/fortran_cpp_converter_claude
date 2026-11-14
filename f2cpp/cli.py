@@ -30,15 +30,17 @@ def parse_file(path, cfg, parser):
 def translate(paths, cfg, outdir, interface_only=(), report=None):
     """translate all files in paths; interface_only files are parsed for their symbols only"""
     report = report or Report()
-    parser = ParserFactory().create(std="f2003")
+    parser = ParserFactory().create(std="f2008")
     prog = Program(cfg)
     todo = []
     for path in list(paths) + list(interface_only):
         try:
             mods = parse_file(path, cfg, parser)
         except Exception as e:      # fparser syntax errors
-            print(f"f2cpp: cannot parse {path}: {str(e).splitlines()[0] if str(e) else type(e).__name__}",
-                  file=sys.stderr)
+            print(f"f2cpp: cannot parse {path} (line numbers refer to the pre-processed text, "
+                  f"written to {path}.f2cpp_prepass):\n{e}", file=sys.stderr)
+            with open(path) as f, open(path + ".f2cpp_prepass", "w") as g:
+                g.write(prepass(f.read(), cfg))
             report.start(path)
             report.add("untranslated", "parse-error")
             continue

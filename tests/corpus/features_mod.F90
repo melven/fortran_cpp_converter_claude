@@ -44,6 +44,8 @@ module features_mod
     real, allocatable :: blocks(:, :, :, :)       !< dense blocks (bs, bs, i, j)
     type(stats_type), allocatable :: cells(:, :)
     real, allocatable :: spare(:)
+    integer, allocatable :: grp_idx(:)
+    real, contiguous, pointer :: grp_tmp(:) => null()
   end type Grid_type
 
 contains

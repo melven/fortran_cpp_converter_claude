@@ -37,7 +37,7 @@ class ModuleEmitter:
                     sizes.append(f"{par(h, 70)} - {par(l, 70, True)} + 1")
         if v.init is not None:
             if lname(v.init).replace(" ", "").endswith("null()"):
-                return code if st == "uptr" else code + " = nullptr"
+                return code + " = nullptr" if st == "ptr" else code
             x = tr.expr(v.init)
             if v.rank > 0 and x.rank == 0:
                 if st != "eigen" or not sizes:
@@ -95,6 +95,10 @@ class ModuleEmitter:
     def warn_lower_bounds(self, tr, variables, ind):
         """C++ arrays are 0-based; indices of arrays with a Fortran lower bound /= 1 are shifted"""
         for v in variables:
+            if v.has("pointer") and v.rank > 0 and not v.alias:
+                self.report.add("todo", "array-pointer")
+                tr.emit(ind, f"// {TODO}: Fortran array pointer '{v.cname}' is translated as an owning array "
+                             "(no aliasing of its target)")
             lbs = [str(lo).replace(" ", "") for lo, _ in v.dims if lo is not None]
             if any(lb != "1" for lb in lbs):
                 self.report.add("todo", "lower-bound")

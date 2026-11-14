@@ -1,6 +1,6 @@
 # f2cpp
 
-Rule-based Fortran 2003 → C++ (Eigen / googletest) translator. The real target code base is
+Rule-based Fortran 2003 (parsed as 2008) → C++ (Eigen / googletest) translator. The real target code base is
 confidential and never available here: develop against the synthetic corpus in `tests/corpus`
 and against construct reports (`--report`, no source text) supplied by the user.
 
