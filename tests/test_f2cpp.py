@@ -295,3 +295,22 @@ def test_pfunit_file_extension(tmp_path):
     t = (tmp_path / "test_expm_mod.cpp").read_text()
     assert t.startswith("/// @file test_expm_mod.cpp\n") and "TEST(test_expm_mod, test_expm_zero)" in t
     assert not (tmp_path / "test_expm_mod.hpp").exists()
+
+
+def test_interface_bodies_of_external_procedures(tmp_path):
+    (tmp_path / "c_api_mod.F90").write_text(
+        "module c_api_mod\nimplicit none\npublic\ninteger, parameter :: SUCCESS = 0\ninterface\n"
+        "function apiAddText(handle, path, name, ierr) result(res) bind(C, name='api_add_text')\n"
+        "integer, value :: handle\ncharacter(len=*), intent(in) :: path, name\ninteger :: ierr\ninteger :: res\n"
+        "end function\nend interface\nend module\n")
+    (tmp_path / "use_mod.F90").write_text(
+        "module use_mod\nuse c_api_mod, only: apiAddText, SUCCESS\ncontains\nsubroutine s(node, ierr)\n"
+        "type(node_type) :: node\ninteger :: ierr, rc\n"
+        "rc = apiAddText(node%handle, name='type', path=trim(node%path), ierr=ierr)\n"
+        "if (rc == SUCCESS) rc = 1\nend subroutine\nend module\n")
+    path = str(tmp_path / "use_mod.F90")
+    report, _ = translate([path], config.load(), str(tmp_path), [str(tmp_path / "c_api_mod.F90")])
+    cpp = (tmp_path / "use_mod.cpp").read_text()
+    assert 'rc = apiAddText(node.handle, node.path, "type");' in cpp     # resolved: keyword arguments ordered
+    info = report.files[path]["info"]
+    assert not any(c.startswith(("external-function", "unknown-name")) for c in info)

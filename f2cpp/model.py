@@ -90,6 +90,7 @@ class Proc:
     bind_name: str = None
     pass_arg: str = None
     generic: str = None          # generic name this specific is emitted as
+    external: bool = False       # declared by an interface body only (no definition to translate)
     is_ctor: bool = False
     is_dtor: bool = False
     is_test: str = None          # pFUnit role: test | before | after
@@ -304,6 +305,13 @@ def collect_module(node):
                         if cls(b) in ("Function_Body", "Subroutine_Body"):
                             p = collect_proc(b, m)
                             m.ifaces[p.name] = p
+                            if str(head).upper() != "ABSTRACT":
+                                # explicit interface of an external procedure (e.g. bind(C)): callable
+                                p.external = True
+                                m.procs.setdefault(p.name, p)
+                                if head is not None and cls(head) == "Name":
+                                    m.generic_spelling[lname(head)] = cname(str(head).strip())
+                                    m.generics.setdefault(lname(head), []).append(p.name)
                         elif cls(b) == "Procedure_Stmt" and head is not None and cls(head) == "Name":
                             m.generic_spelling[lname(head)] = cname(str(head).strip())
                             m.generics.setdefault(lname(head), []).extend(
