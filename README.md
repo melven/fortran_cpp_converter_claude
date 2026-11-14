@@ -153,6 +153,10 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 - Not translated (kept as comment): I/O, `where`/`forall` constructs, implied-do, named
   `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, internal
   procedures, slices of flat (rank ≥ 4) arrays and over the vector index of `std::vector<mat>`, most string intrinsics, `program` units.
+- **Name lookup across modules** is simpler than in Fortran: a name is searched in the module
+  itself and then in all (transitively) used modules, public names only. `only:` lists and
+  renames (`a => b`) are not evaluated, so if two used modules define the same public name,
+  the first one found is taken.
 - Fortran is case-insensitive: the spelling of the declaration is used. Names differing only
   in case from other C++ names in scope are not detected.
 

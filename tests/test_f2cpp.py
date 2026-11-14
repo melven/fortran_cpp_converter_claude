@@ -250,3 +250,18 @@ def test_missing_modules(tmp_path):
     missing = set(report.files[str(tmp_path / "m_mod.F90")]["missing"])
     assert missing == {"a_mod: needed for a_type, helper",
                        "c_mod (no only-list): unresolved names in this file: a_type, helper, other"}
+
+
+def test_private_names_of_other_modules_are_not_used(tmp_path):
+    (tmp_path / "a_mod.F90").write_text(
+        "module a_mod\nprivate\npublic :: pub\ncontains\n"
+        "subroutine pub(x, ierr)\nreal :: x\ninteger :: ierr\nend subroutine\n"
+        "subroutine hidden(x, ierr)\nreal :: x\ninteger :: ierr\nend subroutine\nend module\n")
+    (tmp_path / "b_mod.F90").write_text(
+        "module b_mod\nuse a_mod, only: pub\ncontains\nsubroutine s(x, ierr)\nreal :: x\ninteger :: ierr\n"
+        "call pub(ierr=ierr, x=x)\ncall hidden(ierr=ierr, x=x)\nend subroutine\nend module\n")
+    report, _ = translate([str(tmp_path / "b_mod.F90")], config.load(), str(tmp_path), [str(tmp_path / "a_mod.F90")])
+    cpp = (tmp_path / "b_mod.cpp").read_text()
+    assert "pub(x);" in cpp                                 # resolved: keyword arguments reordered
+    assert "hidden(/*x=*/ x);" in cpp                       # not resolved: passed through
+    assert "external-call:hidden" in report.files[str(tmp_path / "b_mod.F90")]["info"]

@@ -75,12 +75,14 @@ class Translator:
         if self.proc is not None and n in self.proc.vars:
             return self.proc.vars[n]
         for m in self.prog.visible(self.mod):
-            if n in m.vars:
+            if n in m.vars and (m is self.mod or m.is_public(n, m.vars[n].access)):
                 return m.vars[n]
         return None
 
     def lookup_proc(self, n):
         for m in self.prog.visible(self.mod):
+            if m is not self.mod and not m.is_public(n):
+                continue                    # private names of other modules are not visible
             if n in m.procs:
                 return m.procs[n]
             if n in m.generics:
