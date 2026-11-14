@@ -1,0 +1,35 @@
+# Example configuration; all keys and defaults: f2cpp/config.py
+namespace = "myproj"
+extra_includes = ['"myproj_math.hpp"']        # must provide scalar, vec, mat
+constructor_bindings = ["configure"]
+destructor_bindings = ["finalize"]
+
+[macros]                                      # macro -> Fortran replacement before parsing
+MYPROJ_CHK_IERR = "{0}"
+MYPROJ_ALLOCATE = "allocate({0})"
+MYPROJ_ASSERT = "call myproj_assert({0})"
+MYPROJ_CHK_ARGUMENT = "call myproj_chk_argument({0})"
+
+[call_templates]                              # call statement -> C++ statement(s)
+myproj_assert = 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");'
+myproj_chk_argument = 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");'
+
+[include_map]
+"myproj_macros.h" = ""
+
+[kind_map]
+real_kind = "double"
+
+[type_map]                                    # Fortran type -> existing C++ class
+# dict_type = "std::map<std::string, std::string>"
+
+[module_headers]                              # untranslated module -> existing header
+# dict_mod = "myproj_dict.hpp"
+
+# project helper functions / subroutines with a direct C++ counterpart (same arguments)
+[function_map]
+str = "std::to_string"
+
+[call_templates]
+# sort_rank(x, iperm): iperm = (1-based) permutation that sorts x in ascending order
+sort_rank = "{1}.resize({0}.size()); std::iota({1}.begin(), {1}.end(), 1); std::stable_sort({1}.begin(), {1}.end(), [&](int i_, int j_) { return {0}(i_ - 1) < {0}(j_ - 1); });"

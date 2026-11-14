@@ -118,12 +118,12 @@ def test_features(out):
     assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
     assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
     assert 'text = "medium " + std::to_string(k) + "/" + std::to_string(max_items);' in cpp
-    assert "std::vector<std::vector<mat>> blocks;" in hpp and "std::vector<std::vector<stats>> cells;" in hpp
-    assert "g.blocks.assign(n, std::vector<mat>(n + 1, mat(2, 2)));" in cpp
-    assert "g.cells.clear(); g.cells.resize(n); for (auto& r0_ : g.cells) { r0_.resize(n + 1); }" in cpp
-    assert "for (auto& b0_ : g.blocks) for (auto& b1_ : b0_) b1_.setZero();" in cpp
-    assert "for (j = 1; j <= static_cast<int>(g.blocks[0].size()); ++j) {" in cpp
-    assert "g.blocks[i - 1][j - 1](0, 1) = g.blocks[i - 1][j - 1](1, 0) + g.cells[i - 1][j - 1].total" in cpp
+    assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp
+    assert "g.blocks.resize(2 * 2 * n * (n + 1));" in cpp and "g.cells.resize(n, n + 1);" in cpp
+    assert "g.blocks.setZero();" in cpp
+    assert "for (j = 1; j <= (n + 1); ++j) {" in cpp
+    assert "g.blocks(0 + 2 * (1 + 2 * (i - 1 + n * (j - 1)))) = " in cpp
+    assert "+ g.cells(i - 1, j - 1).total + 2;" in cpp
     assert "tmp = v((order.array() - 1));" in cpp and "v((iperm.array() - 1)) = tmp;" in cpp
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp
@@ -191,10 +191,13 @@ def test_translated_unit_tests_pass(out):
 def test_custom_macro_names(tmp_path):
     (tmp_path / "m_mod.F90").write_text(
         "module m_mod\ncontains\nsubroutine s(block_dim, ierr)\ninteger, intent(in) :: block_dim(:)\n"
-        "integer, intent(out) :: ierr\nXY_CHK_ARGUMENT(all(block_dim >= 0), ierr)\nend subroutine\nend module\n")
+        "integer, intent(out) :: ierr\nXY_CHK_ARGUMENT(all(block_dim >= 0), ierr)\n"
+        "call log_debug('n = ' // str(size(block_dim)))\nend subroutine\nend module\n")
     (tmp_path / "c.toml").write_text(
         '[macros]\nXY_CHK_ARGUMENT = "call XY_CHK_ARGUMENT({0})"\n'
+        "[function_map]\nstr = \"std::to_string\"\nlog_debug = \"xy_log_debug\"\n"
         "[call_templates]\nXY_CHK_ARGUMENT = 'if (!({0})) throw std::invalid_argument(\"{0:str}\");'\n")
     translate([str(tmp_path / "m_mod.F90")], config.load(str(tmp_path / "c.toml")), str(tmp_path))
     cpp = (tmp_path / "m_mod.cpp").read_text()
     assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp
+    assert 'xy_log_debug("n = " + std::to_string(block_dim.size()));' in cpp

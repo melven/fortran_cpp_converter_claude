@@ -65,7 +65,7 @@ contains
     g%blocks = 0.0
     do j = 1, size(g%blocks, 4)
       do i = 1, size(g%blocks, 3)
-        g%blocks(:, :, i, j) = real(i + j)
+        g%blocks(1, 1, i, j) = real(i + j)
         g%blocks(1, 2, i, j) = g%blocks(2, 1, i, j) + g%cells(i, j)%total + size(g%blocks, 1)
       end do
     end do

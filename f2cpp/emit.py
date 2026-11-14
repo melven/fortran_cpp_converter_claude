@@ -50,7 +50,9 @@ class ModuleEmitter:
             self.report.add("todo", "raw-pointer")
             return code + f" = nullptr /* {TODO}: non-owning Fortran pointer */"
         if sizes and not member:
-            if st == "eigen":
+            if st == "flat":
+                return f"{code}({' * '.join(f'({d})' if not d.isalnum() else d for d in sizes)})"
+            if st in ("eigen", "objmat"):
                 return f"{code}({', '.join(sizes)})"
             if st in ("vec3", "stdvec"):
                 return f"{code}({tr.nested_ctor(v, sizes)})"

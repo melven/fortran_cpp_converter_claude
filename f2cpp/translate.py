@@ -119,16 +119,28 @@ class Translator:
                 return "uptr"
             return "ptr" if v.has("pointer") else "scalar"
         if v.base in ("real", "integer", "logical", "complex"):
-            return "eigen" if v.rank <= 2 else "vec3"
-        return "stdvec"
+            return "eigen" if v.rank <= 2 else "vec3" if v.rank == 3 else "flat"
+        return "stdvec" if v.rank == 1 else "objmat" if v.rank == 2 else "flat"
+
+    def extents(self, v):
+        """extents of a flat (column-major) array as C++ expressions"""
+        dims = v.dims if all(hi is not None for _, hi in v.dims) else v.alloc_dims
+        if not dims:
+            raise Untranslatable("flat-array-extent")
+        res = []
+        for lo, hi in dims:
+            if lo is None:
+                res.append(par(self.expr(hi)))
+            else:
+                res.append(f"({par(self.expr(hi), P_ADD)} - {par(self.expr(lo), P_ADD, True)} + 1)")
+        return res
 
     def nest(self, v):
         """(depth of the std::vector nesting, rank of the Eigen object stored in it)
 
-        numeric arrays of rank n > 2: (nested) std::vector of matrices, a(:, :, i, j) -> a[i][j]
-        arrays of objects / strings of rank n: n nested std::vector, a(i, j) -> a[i][j]"""
+        numeric rank 3: std::vector of matrices, a(:, :, i) -> a[i]; rank-1 object arrays: std::vector"""
         st = self.storage(v)
-        return (v.rank - 2, 2) if st == "vec3" else (v.rank, 0) if st == "stdvec" else (0, v.rank)
+        return (1, 2) if st == "vec3" else (1, 0) if st == "stdvec" else (0, v.rank)
 
     def leaf_type(self, v):
         return self.eigen_type(v, 2) if self.storage(v) == "vec3" else self.elem_type(v)
@@ -164,6 +176,11 @@ class Translator:
             return f"{e}*"
         if st == "eigen":
             return self.eigen_type(v, v.rank)
+        if st == "objmat":
+            return f"Eigen::Array<{e}, Eigen::Dynamic, Eigen::Dynamic>"
+        if st == "flat":
+            self.report.add("todo", "flat-array")
+            return self.eigen_type(v, 1) if v.base not in ("type", "character") else f"std::vector<{e}>"
         t = self.leaf_type(v)
         for _ in range(self.nest(v)[0]):
             t = f"std::vector<{t}>"
@@ -178,7 +195,7 @@ class Translator:
                 f"const std::optional<{t}>&"
         if v.opt_kind == "optref":
             return f"std::optional<std::reference_wrapper<{'const ' if const else ''}{t}>>"
-        if v.has("allocatable") or v.has("pointer") or st in ("vec3", "stdvec"):
+        if v.has("allocatable") or v.has("pointer") or st in ("vec3", "stdvec", "objmat", "flat"):
             return f"const {t}&" if const else f"{t}&"
         if st == "eigen":
             if self.cfg["array_args"] == "ref" or (v.needs_ref and self.cfg["array_args"] == "auto"):
@@ -381,6 +398,15 @@ class Translator:
             subs, lbs, res.obj = subs[:lr], lbs[:lr], True
         sc = [self.sub_code(s, lb) for s, lb in zip(subs, lbs)]
         kinds = [k for k, _ in sc]
+        if st == "flat":
+            if any(k != "idx" for k in kinds):
+                raise Untranslatable("slice-of-flat-array")
+            ext, idx = self.extents(v), sc[-1][1]
+            for (_, c), e in zip(reversed(sc[:-1]), reversed(ext[:-1])):
+                idx = f"{c} + {e} * ({idx})"
+            self.note("flat-array", f"rank-{v.rank} array stored flat (column-major)")
+            res.code = f"{base}({idx})" if v.base not in ("type", "character") else f"{base}[{idx}]"
+            return res
         res.rank = sum(k != "idx" for k in kinds)
         if len(sc) == 1:
             res.code = base if kinds[0] == "all" else f"{base}({sc[0][1]})"
@@ -800,7 +826,8 @@ class Translator:
             raise Untranslatable("polymorphic-assignment")
         target = par(lhs) if lhs.code.startswith("*") and lhs.rank > 0 else lhs.code
         rhs = self.expr(rhs_n)
-        if lhs.rank > 0 and rhs.rank == 0 and self.storage(v) in ("eigen", "vec3"):
+        if lhs.rank > 0 and rhs.rank == 0 and (self.storage(v) in ("eigen", "vec3") or
+                                               (self.storage(v) == "flat" and v.base not in ("type", "character"))):
             fill = ".setZero()" if is_zero(rhs.code) else f".setConstant({rhs.code})"
             self.emit(ind, f"{par(lhs)}{fill};")
             return
@@ -842,6 +869,9 @@ class Translator:
                     self.emit(ind, f"{s_name}.resize({', '.join(['0'] * src.var.rank)});")
                 elif src.var is not None and self.storage(src.var) in ("vec3", "stdvec"):
                     self.emit(ind, f"{s_name}.clear();")
+                return
+            if n in self.cfg["function_map"]:
+                self.emit(ind, f"{self.cfg['function_map'][n]}({', '.join(self.plain_args(args))});")
                 return
             if n in self.cfg["call_templates"]:
                 codes = self.plain_args(args)
@@ -968,8 +998,11 @@ class Translator:
                 self.emit(ind, f"{name} = std::make_unique<{t}>();" if st == "uptr" else f"{name} = new {t}();")
                 if st == "ptr":
                     self.note("pointer", "raw owning pointer")
-            elif st == "eigen":
+            elif st in ("eigen", "objmat"):
                 self.emit(ind, f"{name}.resize({', '.join(dims)});")
+            elif st == "flat":
+                self.note("flat-array", f"rank-{v.rank} array stored flat (column-major)")
+                self.emit(ind, f"{name}.resize({' * '.join(f'({d})' if not d.isalnum() else d for d in dims)});")
             elif st == "stdvec" and v.rank == 1:
                 self.emit(ind, f"{name}.resize({dims[0]});")
             elif st == "stdvec":
@@ -989,9 +1022,11 @@ class Translator:
             name = x.raw if x.raw is not None else x.code
             if st == "uptr":
                 self.emit(ind, f"{name}.reset();")
-            elif st == "eigen":
+            elif st in ("eigen", "objmat"):
                 self.emit(ind, f"{name}.resize({', '.join(['0'] * x.var.rank)});")
-            elif st in ("vec3", "stdvec"):
+            elif st == "flat" and x.var.base not in ("type", "character"):
+                self.emit(ind, f"{name}.resize(0);")
+            elif st in ("vec3", "stdvec", "flat"):
                 self.emit(ind, f"{name}.clear();")
             else:
                 raise Untranslatable("deallocate")
@@ -1183,6 +1218,8 @@ def i_size(tr, n, pos, kw):
             return X(f"static_cast<{tr.cfg['int']}>({b}.size())", 0, "integer")
         return X(f"{b}.size()", 0, "integer")
     d = tr.expr(dim).code
+    if st == "flat" and d.isdigit() and 1 <= int(d) <= x.var.rank:
+        return X(tr.extents(x.var)[int(d) - 1], 0, "integer")
     if depth and d.isdigit() and 1 <= int(d) <= x.var.rank:
         if int(d) <= lr:
             return X(f"{b}{'[0]' * depth}.{'rows' if d == '1' else 'cols'}()", 0, "integer")
@@ -1325,7 +1362,7 @@ def i_allocated(tr, n, pos, kw):
         if len(pos) > 1:
             return X(f"{name} == &{par(tr.expr(pos[1]), P_UNARY)}", 0, "logical", P_EQ)
         return X(f"{name} != nullptr", 0, "logical", P_EQ)
-    if st == "eigen":
+    if st in ("eigen", "objmat") or (st == "flat" and x.var.base not in ("type", "character")):
         return X(f"{name}.size() > 0", 0, "logical", P_REL)
     return X(f"!{name}.empty()", 0, "logical", P_UNARY)
 

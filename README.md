@@ -45,8 +45,9 @@ with less precise output (calls are passed through unchanged).
 | generic interface / generic binding | overloads |
 | `real` / `real(kind=8)` | `scalar` / `kind_map` entry (`double`) |
 | `real` array rank 1 / 2 | `vec` / `mat` |
-| numeric array rank ≥ 3 | nested `std::vector` of `mat`: `a(:, :, i, j)` → `a[i - 1][j - 1]` |
-| array of objects / strings, rank n | n nested `std::vector`: `c(i, j)` → `c[i - 1][j - 1]` |
+| numeric array rank 3 | `std::vector<mat>`: `a(:, :, i)` → `a[i - 1]` |
+| array of objects, rank 1 / 2 | `std::vector<T>` / `Eigen::Array<T, Dynamic, Dynamic>`: `b(i, j)%m(k, l)` → `b(i - 1, j - 1).m(k - 1, l - 1)` |
+| any array of rank ≥ 4 (objects: ≥ 3) | flat `vec` / `std::vector<T>` with explicit column-major index and a TODO; extents from the declaration or an `allocate` in the module |
 | vector subscript `v(iperm)` | `v((iperm.array() - 1))` |
 | `call move_alloc(a, b)` | `b = std::move(a);` (+ `a.resize(0)`) |
 | array dummies | `const mat&` / `mat&`; `Eigen::Ref<mat>` only for out/inout dummies that receive a slice in a translated call (`array_args = "auto"`; alternatives `"plain"`, `"ref"`) |
@@ -89,9 +90,11 @@ myproj_chk_argument = 'if (!({0})) throw std::invalid_argument("invalid argument
 "myproj_macros.h" = ""                     # drop the Fortran macro header
 ```
 
-`function_map` renames functions in expressions (default: `str` → `std::to_string`).
-`call_templates` also serves for project helpers; default: `sort_rank(x, iperm)` →
-`std::iota` + `std::stable_sort` (1-based ascending permutation).
+`function_map` renames project functions and subroutines with a direct C++ counterpart
+(function references and `call` statements; arguments unchanged, `ierr` removed), e.g.
+`str = "std::to_string"`. `call_templates` covers everything else, e.g. `sort_rank`.
+See `f2cpp.example.toml`; there are no project-specific defaults except the `PROJECT_*`
+placeholders.
 
 ## Existing C++ code (partially translated module hierarchy)
 
@@ -124,7 +127,7 @@ Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
   optional objects, pointers: check by hand.
 - Not translated (kept as comment): I/O, `where`/`forall` constructs, implied-do, named
   `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, internal
-  procedures, slices over the vector indices of nested vectors, most string intrinsics, `program` units.
+  procedures, slices of flat (rank ≥ 4) arrays and over the vector index of `std::vector<mat>`, most string intrinsics, `program` units.
 - Fortran is case-insensitive: the spelling of the declaration is used. Names differing only
   in case from other C++ names in scope are not detected.
 

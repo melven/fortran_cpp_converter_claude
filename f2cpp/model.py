@@ -50,6 +50,7 @@ class Var:
     is_this: bool = False
     is_const: bool = False
     force_ptr: bool = False      # select-type alias etc.
+    alloc_dims: list = None      # shape of an allocate statement for this name (flat arrays)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
     node: object = None
@@ -347,9 +348,17 @@ def classify_pointers(m):
     """Fortran pointers: owned (allocated somewhere) -> std::unique_ptr, dummies -> references,
     locals associated exactly once at the top level of the procedure -> local references"""
     from fparser.two.utils import walk
-    allocated = set()
+    allocated, shapes = set(), {}
     for a in walk(m.node, F.Allocate_Stmt):
         allocated |= {_target_name(o) for o in items_of(a.items[1])}
+        for o in items_of(a.items[1]):
+            if cls(o) == "Allocation" and o.items[1] is not None:
+                shapes.setdefault(_target_name(o), [tuple(s.items) for s in items_of(o.items[1])])
+    scopes = [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.procs.values()]
+    for scope in scopes:
+        for v in scope.values():
+            if v.name in shapes and len(shapes[v.name]) == v.rank:
+                v.alloc_dims = shapes[v.name]
     for t in m.types.values():
         for v in t.comps.values():
             if v.has("pointer") and v.rank == 0 and v.name in allocated:
