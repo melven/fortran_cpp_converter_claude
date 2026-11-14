@@ -142,6 +142,10 @@ def test_features(out):
     assert "// TODO(f2cpp): name is spelled inconsistently in the Fortran source: addValue, addvalue\n" \
            "  void addValue(scalar x);" in hpp
     assert "s.addValue(x);" in cpp and "h.owned->addValue(x);" in cpp and "void stats::addValue(scalar x)" in cpp
+    assert "k = [&] { Eigen::Index i_; x.cwiseAbs().maxCoeff(&i_); return static_cast<int>(i_) + 1; }() + " \
+           "[&] { Eigen::Index i_; x.minCoeff(&i_); return static_cast<int>(i_) + 1; }();" in cpp
+    assert "idx = [&] { Eigen::Index r_, c_; a.maxCoeff(&r_, &c_); " \
+           "return (Eigen::VectorXi(2) << r_ + 1, c_ + 1).finished(); }();" in cpp
     assert "class Grid {" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
     assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder {" in hpp
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp

@@ -8,6 +8,7 @@ module features_mod
   private
 
   public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
+  public :: argmax
   public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
@@ -157,6 +158,16 @@ contains
       m = sum(x) / real(size(x))
     end if
   end function mean
+
+  function argmax(x, a) result(k)
+    real, intent(in) :: x(:), a(:, :)
+    integer :: k
+    integer :: idx(2), one(1)
+    k = maxloc(abs(x), 1) + minloc(x, dim=1)
+    idx = maxloc(a)
+    one = minloc(x)
+    k = k + idx(1) + idx(2) + one(1)
+  end function argmax
 
   function normInf(x) result(r)
     real, intent(in) :: x(:)

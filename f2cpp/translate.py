@@ -1472,6 +1472,24 @@ def i_bound(tr, n, pos, kw):
     return X(f"{par(size, P_ADD)} {'+' if off > 0 else '-'} {abs(off)}", 0, "integer", P_ADD)
 
 
+def i_loc(tr, n, pos, kw):
+    """maxloc / minloc: 1-based position (independent of the lower bounds, as in Fortran)"""
+    x = tr.expr(pos[0])
+    dim = pos[1] if len(pos) > 1 else kw.get("dim")
+    if set(kw) - {"dim"} or len(pos) > 2 or x.rank not in (1, 2) or (dim is not None and x.rank != 1):
+        raise Untranslatable(f"intrinsic:{n}(mask/dim)")
+    fn = "maxCoeff" if n == "maxloc" else "minCoeff"
+    obj = f"({tr.matrix(x)})" if x.arr else par(x)
+    i, iv = tr.cfg["int"], tr.cfg["ivec"]
+    if x.rank == 2:
+        return X(f"[&] {{ Eigen::Index r_, c_; {obj}.{fn}(&r_, &c_); "
+                 f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}()", 1, "integer")
+    scalar = f"[&] {{ Eigen::Index i_; {obj}.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}()"
+    if dim is not None:
+        return X(scalar, 0, "integer")
+    return X(f"({iv}(1) << {scalar}).finished()", 1, "integer")
+
+
 def i_null(tr, n, pos, kw):
     return X("nullptr")
 
@@ -1493,7 +1511,7 @@ INTRINSICS = {
     "huge": i_limits("max"), "tiny": i_limits("min"), "epsilon": i_limits("epsilon"),
     "merge": i_merge, "reshape": i_reshape, "sign": i_sign,
     "len": i_len, "len_trim": i_len, "trim": i_identity, "adjustl": i_identity,
-    "null": i_null,
+    "null": i_null, "maxloc": i_loc, "minloc": i_loc,
 }
 for _n in MATH1:
     INTRINSICS[_n] = i_math1
