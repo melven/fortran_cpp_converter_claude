@@ -763,7 +763,12 @@ class Translator:
 
     def s_Pointer_Assignment_Stmt(self, node, ind):
         lhs, rhs = self.expr(node.items[0]), self.expr(node.items[2])
-        self.note("pointer", "pointer assignment: check lifetime / ownership")
+        if lhs.var is not None and lhs.var.alias:
+            self.emit(ind, f"auto&& {lhs.var.cname} = {rhs.code};")
+            return
+        if lhs.var is not None and self.storage(lhs.var) != "ptr":
+            raise Untranslatable("pointer-assignment:" + self.storage(lhs.var))
+        self.note("pointer", "non-owning raw pointer: replace by a reference / check lifetime")
         src = rhs.raw if rhs.raw is not None else "&" + par(rhs, P_UNARY)
         self.emit(ind, f"{lhs.raw or lhs.code} = {src};")
 

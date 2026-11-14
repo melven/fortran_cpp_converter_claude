@@ -37,7 +37,7 @@ class ModuleEmitter:
                     sizes.append(f"{par(h, 70)} - {par(l, 70, True)} + 1")
         if v.init is not None:
             if cls(v.init) == "Function_Reference" and lname(v.init.items[0]) == "null" or lname(v.init) == "null()":
-                return code + " = nullptr"
+                return code if st == "uptr" else code + " = nullptr"
             x = tr.expr(v.init)
             if v.rank > 0 and x.rank == 0:
                 if st != "eigen" or not sizes:
@@ -47,7 +47,8 @@ class ModuleEmitter:
                 return f"{code} = {t}::{fn}({', '.join(args)})"
             return f"{code} = {tr.matrix(x)}"
         if st == "ptr":
-            return code + " = nullptr"
+            self.report.add("todo", "raw-pointer")
+            return code + f" = nullptr /* {TODO}: non-owning Fortran pointer */"
         if sizes and not member:
             if st == "eigen":
                 return f"{code}({', '.join(sizes)})"
@@ -69,7 +70,7 @@ class ModuleEmitter:
         decls = []          # [type, [declarators]]: entities of equal type share one statement
         for n in names:
             v = vars_[n]
-            if n in skip or (n == tr.err and v.base == "integer" and v.rank == 0):
+            if n in skip or v.alias or (n == tr.err and v.base == "integer" and v.rank == 0):
                 continue
             try:
                 pre = prefix

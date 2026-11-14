@@ -7,6 +7,7 @@ module features_mod
   private
 
   public :: stats_type, clamp, mean, norm_inf, accumulate, describe_kind, fill, apply_scale
+  public :: holder_type, update_holder
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -29,7 +30,31 @@ module features_mod
     final :: stats_cleanup
   end type stats_type
 
+  type :: holder_type
+    type(stats_type) :: inner
+    type(stats_type), pointer :: owned => null()
+  end type holder_type
+
 contains
+
+  subroutine update_holder(h, x, ierr)
+    type(holder_type), intent(inout), target :: h
+    real, intent(in) :: x
+    integer, intent(out) :: ierr
+    type(stats_type), pointer :: s
+    real, pointer :: smp(:)
+
+    ierr = 0
+    s => h%inner
+    PROJECT_CHK_IERR(call s%add(x, ierr), ierr)
+    s%total = s%total + 1.0
+    if (.not. associated(h%owned)) then
+      allocate(h%owned)
+    end if
+    PROJECT_CHK_IERR(call h%owned%add(x, ierr), ierr)
+    smp => s%samples
+    smp(1) = 2.0 * smp(1)
+  end subroutine update_holder
 
   pure function clamp_real(x, lo, hi) result(y)
     real, intent(in) :: x, lo, hi

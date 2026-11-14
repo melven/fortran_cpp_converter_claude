@@ -107,6 +107,10 @@ def test_features(out):
     assert "std::optional<std::reference_wrapper<const shape>> b = std::nullopt" in hpp
     assert "if (b.has_value()) r = r / b->get().area();" in cpp
     assert "*" not in hpp.replace("/*", "").replace("*/", "")        # no raw pointers
+    assert "std::unique_ptr<stats> owned;" in hpp      # pointer that is allocated -> owned
+    assert "auto&& s = h.inner;" in cpp                # pointer associated once -> reference
+    assert "auto&& smp = s.samples;" in cpp and "smp(0) = 2.0 * smp(0);" in cpp
+    assert "h.owned = std::make_unique<stats>();" in cpp
     assert "double accurate_sum(" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(this->samples(Eigen::seq(0, this->n - 1)));" in cpp

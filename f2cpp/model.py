@@ -50,6 +50,7 @@ class Var:
     is_this: bool = False
     is_const: bool = False
     force_ptr: bool = False      # select-type alias etc.
+    alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
     node: object = None
 
@@ -333,6 +334,48 @@ def collect_module(node):
     return m
 
 
+def _target_name(node):
+    """name of the (last component of the) object designated by node"""
+    while cls(node) in ("Data_Ref", "Part_Ref", "Allocation"):
+        node = node.items[-1] if cls(node) == "Data_Ref" else node.items[0]
+    return lname(node)
+
+
+def classify_pointers(m):
+    """Fortran pointers: owned (allocated somewhere) -> std::unique_ptr, dummies -> references,
+    locals associated exactly once at the top level of the procedure -> local references"""
+    from fparser.two.utils import walk
+    allocated = set()
+    for a in walk(m.node, F.Allocate_Stmt):
+        allocated |= {_target_name(o) for o in items_of(a.items[1])}
+    for t in m.types.values():
+        for v in t.comps.values():
+            if v.has("pointer") and v.rank == 0 and v.name in allocated:
+                v.attrs = (v.attrs - {"pointer"}) | {"allocatable"}
+    for p in m.procs.values():
+        execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
+        body = execs[0] if execs else None
+        assigns = walk(body, F.Pointer_Assignment_Stmt) if body else []
+        nullified = {_target_name(o) for n in (walk(body, F.Nullify_Stmt) if body else [])
+                     for o in items_of(n.items[1])}
+        tested = {lname(items_of(f.items[1])[0]) for f in
+                  (walk(body, F.Intrinsic_Function_Reference) if body else [])
+                  if lname(f.items[0]) == "associated" and f.items[1] is not None}
+        for v in p.vars.values():
+            if not v.has("pointer"):
+                continue
+            if v.is_dummy:
+                v.attrs.discard("pointer")          # non-owning: plain reference
+            elif v.rank == 0 and v.name in allocated:
+                v.attrs = (v.attrs - {"pointer"}) | {"allocatable"}
+            else:
+                mine = [a for a in assigns if cls(a.items[0]) == "Name" and lname(a.items[0]) == v.name]
+                if len(mine) == 1 and any(mine[0] is c for c in body.content) and v.init is None \
+                        and v.name not in nullified and v.name not in tested and v.name not in allocated:
+                    v.alias = True
+                    v.attrs.discard("pointer")
+
+
 class Program:
     """all parsed modules"""
 
@@ -344,6 +387,8 @@ class Program:
         self.modules[module.name] = module
 
     def finish(self):
+        for m in self.modules.values():
+            classify_pointers(m)
         for m in self.modules.values():
             for t in m.types.values():
                 p = self.find_type(t.parent, m) if t.parent else None
