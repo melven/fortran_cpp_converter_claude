@@ -21,12 +21,13 @@ module block_lu_mod
     procedure :: factorize => block_lu_factorize
     procedure :: solve => block_lu_solve
     procedure :: get_size => block_lu_get_size
+    procedure :: finalize => block_lu_finalize
   end type block_lu_type
 
 contains
 
   subroutine block_lu_init(this, nblocks, bs, ierr)
-    class(block_lu_type), intent(inout) :: this
+    class(block_lu_type), intent(out) :: this
     integer, intent(in) :: nblocks, bs
     integer, intent(out) :: ierr
 
@@ -43,6 +44,15 @@ contains
     this%upper = 0.0
     this%factorized = .false.
   end subroutine block_lu_init
+
+  subroutine block_lu_finalize(this, ierr)
+    class(block_lu_type), intent(inout) :: this
+    integer, intent(out) :: ierr
+
+    ierr = 0
+    if (allocated(this%diag)) deallocate(this%diag, this%lower, this%upper, this%ipiv)
+    this%nblocks = 0
+  end subroutine block_lu_finalize
 
   pure function block_lu_get_size(this) result(n)
     class(block_lu_type), intent(in) :: this

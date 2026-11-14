@@ -95,6 +95,9 @@ def test_classes(out):
     assert "s = std::make_unique<circle>();" in cpp
     assert "if (typeid(s) == typeid(circle)) {" in cpp
     lu = read(out, "block_lu_mod.hpp")
+    assert "block_lu() = default;" in lu and "block_lu(int nblocks, int bs);" in lu and "~block_lu();" in lu
+    assert "block_lu::block_lu(int nblocks, int bs)" in read(out, "block_lu_mod.cpp")
+    assert "block_lu::~block_lu()" in read(out, "block_lu_mod.cpp")
     assert "private:" in lu and "int bs = 0;  ///< block size" in lu
 
 
@@ -112,6 +115,8 @@ def test_features(out):
     assert "auto&& s = h.inner;" in cpp                # pointer associated once -> reference
     assert "auto&& smp = s.samples;" in cpp and "smp(0) = 2.0 * smp(0);" in cpp
     assert "h.owned = std::make_unique<stats>();" in cpp
+    assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
+    assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
     assert "double accurate_sum(" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(this->samples(Eigen::seq(0, this->n - 1)));" in cpp
@@ -132,11 +137,13 @@ def test_pfunit(out):
 def test_options(tmp_path):
     c = cfg(keep_original=True, namespace="abc", array_args="ref", type_case="camel")
     c["namespace_map"] = [["block_.*", "linalg"]]
+    c["constructor_bindings"] = ["configure"]
     translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
     hpp = (tmp_path / "block_lu_mod.hpp").read_text()
     cpp = (tmp_path / "block_lu_mod.cpp").read_text()
     assert "namespace abc::linalg {" in hpp and "class BlockLu {" in hpp
     assert "void solve(Eigen::Ref<vec> x) const;" in hpp
+    assert "void init(int nblocks, int bs);" in hpp      # "init" is not a constructor name by default
     assert "// F: bs = this % bs" in cpp
 
 

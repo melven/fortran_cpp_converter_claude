@@ -37,6 +37,8 @@ with less precise output (calls are passed through unchanged).
 | module `foo_mod` | `foo_mod.hpp` / `foo_mod.cpp`, `namespace <ns>` (`namespace_map`: child namespaces per module) |
 | private module procedures / variables | anonymous namespace in the `.cpp` |
 | `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `virtual` / `override` / `= 0`, destructor |
+| binding `configure` with `intent(out)` passed object (`constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
+| binding `finalize` without further arguments (`destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
 | type-bound procedure, `this%x` | member function (const if `intent(in)`), `this->x` |
 | `class(t)` dummy / `class(t), allocatable` | `t&` / `std::unique_ptr<t>` |
 | `select type` | `typeid` (`type is`) / `dynamic_cast` (`class is`) |

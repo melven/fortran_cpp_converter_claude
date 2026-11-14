@@ -1,4 +1,5 @@
 namespace = "project"
+constructor_bindings = ["configure", "init"]
 extra_includes = ['"project_math.hpp"', '"lapack_compat.hpp"']
 
 [include_map]

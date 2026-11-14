@@ -23,8 +23,7 @@ int main()
   print(E);
   expm_moment(A, B, 0.9, M);
   print(M);
-  block_lu lu;
-  lu.init(3, 2);
+  block_lu lu(3, 2);
   for (int i = 1; i <= 3; ++i) {
     blk << 4.0 + i, -1.0, 1.0, 3.0;
     lu.set_block(i, i, blk);

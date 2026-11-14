@@ -28,6 +28,7 @@ program driver
   x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
   call lu%solve(x, ierr)
   print '(6es24.15)', x
+  call lu%finalize(ierr)
   call make_shape(1, s1, ierr)
   call make_shape(2, s2, ierr)
   call s1%scale(2.0, ierr)

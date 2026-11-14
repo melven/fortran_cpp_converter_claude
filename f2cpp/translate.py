@@ -543,6 +543,10 @@ class Translator:
             raise Untranslatable("passed-object")
         qual = f"{tn}::" if t is not None and self.prog.polymorphic(t) else ""   # non-virtual call
         sep = "->" if obj.raw is not None else "."
+        if p.is_ctor or p.is_dtor:
+            plain = f"{obj.raw if obj.raw is not None else par(obj)}{sep}{p.cname}()"
+            return self.lifetime_call(p, obj, self.bound_args(p, rest),
+                                      obj.tname is not None and obj.tname != p.method_of, plain)
         return f"{obj.raw if obj.raw is not None else par(obj)}{sep}{qual}{p.bind_name}" \
                f"({', '.join(self.bound_args(p, rest))})"
 
@@ -566,7 +570,25 @@ class Translator:
         sep = "->" if obj.raw is not None else "."
         code = f"{obj.raw if obj.raw is not None else par(obj)}{sep}{obj.qual}{cname(str(bname))}" \
                f"({', '.join(argc)})"
+        if p is not None and (p.is_ctor or p.is_dtor):
+            code = self.lifetime_call(p, obj, argc, bool(obj.qual), code)
         return code, p
+
+    def lifetime_call(self, p, obj, argc, parent, plain):
+        """call of a procedure that became a constructor / destructor"""
+        if p.is_dtor:
+            self.report.add("todo", "destructor-call")
+            return f"// {plain};  {TODO}: destructor runs automatically at the end of the lifetime " \
+                   "(reset the object by hand if it is reused)"
+        tn = self.prog.type_name(p.method_of, self.mod)
+        ctor = f"{tn}({', '.join(argc)})"
+        if parent:
+            self.note("constructor", "use a base class initialiser")
+            sep = "->" if obj.raw is not None else "."
+            return f"{obj.raw if obj.raw is not None else par(obj)}{sep}{tn}::operator=({ctor})"
+        if obj.var is not None and obj.var.polymorphic and not obj.var.is_this:
+            self.note("constructor", "constructor call on polymorphic object (slicing)")
+        return f"{obj.code} = {ctor}"
 
     # ------------------------------------------------------------------ intrinsics
     def intrinsic(self, n, args):
@@ -804,7 +826,7 @@ class Translator:
                     self.report.add("info", "external-call:" + n)
                     self.note("external-call", "external procedure, no interface known")
                 code = f"{str(desig)}({', '.join(self.plain_args(args))})"
-        self.emit(ind, code + ";")
+        self.emit(ind, code if code.startswith("//") else code + ";")
         self.last_err_call = (len(self.out) - 1, code) if had_err else None
 
     def pf_assert(self, name, args, ind):

@@ -116,8 +116,11 @@ class ModuleEmitter:
 
     def proto(self, tr, p, decl=True, qualify=""):
         ret, name, params, const = self.signature(tr, p, decl, qualify)
+        tn = self.prog.type_name(p.method_of).split("::")[-1] if p.method_of else ""
         if name.endswith("~"):
-            return f"{qualify}~{qualify[:-2].split('::')[-1]}()"
+            return f"{qualify}~{tn}()"
+        if p.is_ctor:
+            return f"{qualify}{tn}({params})"
         return f"{ret} {name}({params}){const}"
 
     def doc(self, tr, p, ind):
@@ -133,7 +136,10 @@ class ModuleEmitter:
         base = f" : public {prog.type_name(t.parent, self.mod)}" if t.parent else ""
         tr.emit(ind, f"class {name}{base} {{")
         tr.emit(ind, "public:")
-        if poly and not t.parent:
+        mine = [p for p in t.module.procs.values() if p.method_of == t.name]
+        if any(p.is_ctor for p in mine):
+            tr.emit(ind + 1, f"{name}() = default;")
+        if poly and not t.parent and not any(p.bind_name == "~" for p in mine):
             tr.emit(ind + 1, f"virtual ~{name}() = default;")
         # flatten: fparser spreads components / comments over several nodes
         comps, binds = [], []
@@ -163,13 +169,21 @@ class ModuleEmitter:
                     continue
                 ptr = self.tr(p)
                 self.doc(tr, p, ind + 1)
+                special = self.cfg["constructor_bindings"] + self.cfg["destructor_bindings"]
+                if bd.deferred and bd.name in special:
+                    tr.emit(ind + 1, f"// deferred '{bd.name}': constructor / destructor of the derived classes")
+                    continue
                 if bd.deferred:
                     # signature from the abstract interface, name from the binding
                     ret, _, params, const = self.signature(ptr, p, True)
                     tr.emit(ind + 1, f"virtual {ret} {bd.name}({params}){const} = 0;")
                     continue
                 sig = self.proto(ptr, p)
-                if bd.nopass:
+                if p.is_ctor:
+                    sig = ("explicit " if sig.count(",") == 0 and not sig.endswith("()") else "") + sig
+                elif p.is_dtor:
+                    sig = "virtual " + sig if poly and not t.parent else sig + (" override" if poly else "")
+                elif bd.nopass:
                     sig = "static " + sig
                 elif poly:
                     sig = sig + " override" if prog.overrides(t, bd.name) else "virtual " + sig

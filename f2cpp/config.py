@@ -8,6 +8,10 @@ DEFAULTS = {
     "namespace_map": [],
     "type_suffix": "_type",        # stripped from derived type names
     "type_case": "keep",           # "keep" | "camel"
+    # type-bound procedures with these binding names become constructors (if the passed
+    # object is intent(out)) / destructors (if there are no further arguments)
+    "constructor_bindings": ["configure"],
+    "destructor_bindings": ["finalize"],
     "error_arg": "ierr",           # error flag argument, removed (C++ uses exceptions)
     "scalar": "scalar",
     "vec": "vec",

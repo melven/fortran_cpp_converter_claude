@@ -89,6 +89,8 @@ class Proc:
     bind_name: str = None
     pass_arg: str = None
     generic: str = None          # generic name this specific is emitted as
+    is_ctor: bool = False
+    is_dtor: bool = False
     is_test: str = None          # pFUnit role: test | before | after
     doc: list = field(default_factory=list)
 
@@ -387,8 +389,20 @@ class Program:
         self.modules[module.name] = module
 
     def finish(self):
+        err = self.cfg["error_arg"].lower()
         for m in self.modules.values():
             classify_pointers(m)
+            for t in m.types.values():
+                for b in t.bindings.values():
+                    p = m.procs.get(b.impl)
+                    if b.deferred or p is None or p.method_of != t.name or not p.pass_arg \
+                            or p.kind != "subroutine":
+                        continue
+                    if b.name in self.cfg["constructor_bindings"] and p.vars[p.pass_arg].intent == "out":
+                        p.is_ctor = True
+                    elif b.name in self.cfg["destructor_bindings"] and \
+                            not [a for a in p.args if a not in (p.pass_arg, err)]:
+                        p.is_dtor, p.bind_name = True, "~"
         for m in self.modules.values():
             for t in m.types.values():
                 p = self.find_type(t.parent, m) if t.parent else None

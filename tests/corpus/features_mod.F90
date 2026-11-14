@@ -2,12 +2,13 @@
 !> Collection of language features (compile-checked only).
 module features_mod
   use shape_mod
+  use block_lu_mod, only: block_lu_type
   use legacy_mod, only: legacy_type, legacy_helper
   implicit none
   private
 
   public :: stats_type, clamp, mean, norm_inf, accumulate, describe_kind, fill, apply_scale
-  public :: holder_type, update_holder
+  public :: holder_type, update_holder, setup_solver
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -36,6 +37,17 @@ module features_mod
   end type holder_type
 
 contains
+
+  subroutine setup_solver(lu, n, ierr)
+    type(block_lu_type), intent(out) :: lu
+    integer, intent(in) :: n
+    integer, intent(out) :: ierr
+    type(block_lu_type) :: tmp
+
+    PROJECT_CHK_IERR(call lu%init(n, 2, ierr), ierr)
+    PROJECT_CHK_IERR(call tmp%init(nblocks=1, bs=n, ierr=ierr), ierr)
+    PROJECT_CHK_IERR(call tmp%finalize(ierr), ierr)
+  end subroutine setup_solver
 
   subroutine update_holder(h, x, ierr)
     type(holder_type), intent(inout), target :: h
