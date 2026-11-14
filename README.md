@@ -63,6 +63,21 @@ with less precise output (calls are passed through unchanged).
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
 | comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |
 
+## Macros
+
+The macro names are configuration; the defaults are placeholders (`PROJECT_...`):
+
+```toml
+[macros]                                   # macro -> Fortran replacement before parsing
+MYPROJ_CHK_IERR = "{0}"                    # disappears: plain call, exceptions propagate
+MYPROJ_ALLOCATE = "allocate({0})"          # disappears: resize / make_unique
+MYPROJ_ASSERT = "call MYPROJ_ASSERT({0})"  # stays: MYPROJ_ASSERT(cond); must exist in C++
+MYPROJ_CHK_ARGUMENT = "call MYPROJ_CHK_ARGUMENT({0})"
+```
+
+Only the macros of the `call NAME(...)` form are needed on the C++ side (one argument,
+throwing). The C++ name may differ from the Fortran one: `"call my_assert({0})"`.
+
 ## Existing C++ code (partially translated module hierarchy)
 
 ```toml

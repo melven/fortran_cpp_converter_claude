@@ -58,6 +58,9 @@ class Translator:
         self.prog, self.mod, self.proc, self.report = program, module, proc, report
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
+        # macros that stay macros in C++ (replacement "call NAME(...)")
+        self.macro_calls = {m.group(1).lower() for t in self.cfg["macros"].values()
+                            for m in [re.match(r"\s*call\s+(\w+)", t, re.I)] if m}
         self.overrides = {}
         self.out = []
         self.notes = []            # soft TODOs of the current statement
@@ -792,7 +795,7 @@ class Translator:
                 v = self.lookup(n)
                 if v is not None:
                     raise Untranslatable("procedure-pointer-call")
-                if not n.startswith("project_") and str(desig) != str(desig).upper():
+                if n not in self.macro_calls:
                     self.report.add("info", "external-call:" + n)
                     self.note("external-call", "external procedure, no interface known")
                 code = f"{str(desig)}({', '.join(self.plain_args(args))})"

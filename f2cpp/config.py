@@ -35,7 +35,10 @@ DEFAULTS = {
     "module_headers": {},
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
-    # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing
+    # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing.
+    # Replace the names by the real ones in the config file; a [macros] table there extends
+    # these defaults. "{0}" / "allocate({0})": the macro disappears in C++.
+    # "call NAME({0})": NAME({0}); is emitted, i.e. NAME must exist as C++ macro / function.
     "macros": {
         "PROJECT_CHK_IERR": "{0}",
         "PROJECT_ALLOCATE": "allocate({0})",
