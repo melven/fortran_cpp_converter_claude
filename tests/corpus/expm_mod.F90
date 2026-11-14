@@ -1,3 +1,7 @@
+!> @file: expm_mod.F90
+!> @brief Matrix exponential (synthetic test corpus)
+!
+! Some licence text.
 #include "project_macros.h"
 !> Matrix exponential and moments of the matrix exponential.
 module expm_mod

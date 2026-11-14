@@ -119,6 +119,7 @@ class TypeDef:
     generics: dict = field(default_factory=dict)
     finals: list = field(default_factory=list)
     private_comps: bool = False
+    spelling: str = None         # name as written in the type definition
     children: set = field(default_factory=set)
     node: object = None
 
@@ -233,6 +234,7 @@ def collect_proc(node, module):
 def collect_type(node, module):
     stmt = node.content[0]
     t = TypeDef(lname(stmt.items[1]), module, node=node)
+    t.spelling = str(stmt.items[1]).strip()
     for a in items_of(stmt.items[0]):
         s = lname(a)
         if s.startswith("extends"):
@@ -393,9 +395,20 @@ class Program:
     def __init__(self, cfg):
         self.cfg = cfg
         self.modules = {}
+        self.spellings = {}
 
     def add(self, module):
+        from fparser.two.utils import walk
         self.modules[module.name] = module
+        for n in walk(module.node, (F.Type_Name, F.Type_Attr_Spec)):     # spellings of type names
+            if cls(n) == "Type_Attr_Spec":
+                if str(n.items[0]).upper() != "EXTENDS":
+                    continue
+                n = n.items[1]
+            self.spellings.setdefault(lname(n), set()).add(str(n).strip())
+
+    def inconsistent_case(self, tname):
+        return len(self.spellings.get(tname, ())) > 1
 
     def finish(self):
         err = self.cfg["error_arg"].lower()
@@ -476,11 +489,14 @@ class Program:
         cfg = self.cfg
         if tname in cfg["type_map"]:
             return cfg["type_map"][tname]
-        n = tname
-        if cfg["type_suffix"] and n.endswith(cfg["type_suffix"]):
+        # spelling of the type definition; for unknown types the spelling of its uses if unique
+        defs = [m.types[tname].spelling for m in self.modules.values() if tname in m.types]
+        uses = self.spellings.get(tname, ())
+        n = defs[0] if defs else next(iter(uses)) if len(uses) == 1 else tname
+        if cfg["type_suffix"] and n.lower().endswith(cfg["type_suffix"].lower()):
             n = n[:-len(cfg["type_suffix"])]
         if cfg["type_case"] == "camel":
-            n = "".join(w.capitalize() for w in n.split("_"))
+            n = "".join(w.capitalize() for w in n.lower().split("_"))
         n = cname(n)
         t = self.find_type(tname, from_module) if from_module else None
         if t is not None and from_module is not None:

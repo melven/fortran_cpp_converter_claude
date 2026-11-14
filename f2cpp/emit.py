@@ -133,6 +133,10 @@ class ModuleEmitter:
         prog = self.prog
         name = prog.type_name(t.name)
         poly = prog.polymorphic(t)
+        if prog.inconsistent_case(t.name):
+            self.report.add("todo", "inconsistent-type-case")
+            tr.emit(ind, f"// {TODO}: type name is spelled inconsistently in the Fortran source: "
+                         + ", ".join(sorted(prog.spellings[t.name])))
         base = f" : public {prog.type_name(t.parent, self.mod)}" if t.parent else ""
         tr.emit(ind, f"class {name}{base} {{")
         tr.emit(ind, "public:")
@@ -308,7 +312,21 @@ class ModuleEmitter:
                 if cls(c) == "Comment":
                     tree_top.append(c)
         cpp_directives = [c for c in tree_top if str(c).startswith(CPP_MARK)]
-        top.block([c for c in tree_top if not str(c).startswith((CPP_MARK, BLANK_MARK))], 0)
+        # first comment block = file header; later blocks (module documentation) become plain
+        # comments: as doxygen comments they would document the namespace
+        blocks = [[]]
+        for c in tree_top:
+            if str(c).startswith((CPP_MARK, BLANK_MARK)):
+                blocks.append([])
+            else:
+                blocks[-1].append(c)
+        blocks = [b for b in blocks if b] or [[]]
+        top.block(blocks[0], 0)
+        if not any("@file" in line for line in top.out):
+            top.out = [plain_comment(line) for line in top.out]
+        mod_doc = self.tr()
+        mod_doc.block([c for b in blocks[1:] for c in b], 0)
+        mod_doc.out = [plain_comment(line) for line in mod_doc.out]
         dirs = self.tr()
         dirs.block(cpp_directives, 0)
 
@@ -402,16 +420,17 @@ class ModuleEmitter:
             cpp.emit(0, "")
 
         if mod.is_test:
-            return None, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture)
+            return None, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc)
 
         guard_text = "\n".join(hpp.out + protos_pub.out)
-        h = [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
+        h = self.file_header(top, cfg["header_ext"]) + \
+            [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
         h += self.std_includes(guard_text, [("functional", ["std::reference_wrapper"]),
                                             ("memory", ["std::unique_ptr"]), ("optional", ["std::optional"]),
                                             ("string", ["std::string"]), ("vector", ["std::vector"]),
                                             ("cstdint", ["std::int"]), ("complex", ["std::complex"])])
         h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
-        h += [""] + top.out + [self.open_ns(), ""]
+        h += [""] + mod_doc.out + [self.open_ns(), ""]
         if len(types_fwd) > 1:
             h += types_fwd + [""]
         h += strip_blank(hpp.out)
@@ -420,7 +439,8 @@ class ModuleEmitter:
         h += ["", f"}}  // namespace {self.ns}", ""]
 
         body = "\n".join(cpp.out + cpp_priv.out)
-        c = [BANNER.format(src=os.path.basename(self.src)), f'#include "{mod.name}{cfg["header_ext"]}"', ""]
+        c = self.file_header(top, cfg["source_ext"]) + \
+            [BANNER.format(src=os.path.basename(self.src)), f'#include "{mod.name}{cfg["header_ext"]}"', ""]
         c += self.std_includes(body, [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort"]),
                                       ("cmath", ["std::"]), ("limits", ["numeric_limits"]),
                                       ("stdexcept", ["throw std::"]),
@@ -433,11 +453,24 @@ class ModuleEmitter:
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
         return "\n".join(squeeze(h)), "\n".join(squeeze(c))
 
-    def assemble_test(self, top, dirs, cpp_priv, protos, cpp, fixture):
+    def file_header(self, top, ext):
+        """file header comment of the Fortran source with the file name replaced"""
+        import re
+        new = self.mod.name + ext
+        src = re.escape(os.path.basename(self.src))
+        res = []
+        for line in top.out:
+            line = re.sub(src, new, line, flags=re.I)
+            line = re.sub(r"(@file:?\s*)\S+\.(f90|f|pf)\b", lambda m: m.group(1) + new, line, flags=re.I)
+            res.append(line)
+        return res
+
+    def assemble_test(self, top, dirs, cpp_priv, protos, cpp, fixture, mod_doc):
         mod = self.mod
-        c = [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", "", "#include <cmath>"]
+        c = self.file_header(top, self.cfg["source_ext"]) + \
+            [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", "", "#include <cmath>"]
         c += [f"#include {i}" for i in self.cfg["extra_includes"]] + self.includes() + dirs.out
-        c += ["", self.open_ns(), ""] + self.using_other_ns() + top.out
+        c += [""] + mod_doc.out + [self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + protos.out + ["", "}  // namespace", ""]
         if fixture:
@@ -460,6 +493,13 @@ class _One:
 
 
 _One.__name__ = "Entity_Decl_List"
+
+
+def plain_comment(line):
+    """doxygen comment line -> ordinary comment line"""
+    s = line.lstrip()
+    return line[:len(line) - len(s)] + ("//" + s[4:] if s.startswith("///<") else "//" + s[3:]
+                                        if s.startswith("///") else s)
 
 
 def pf_role(p):

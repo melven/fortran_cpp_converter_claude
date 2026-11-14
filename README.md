@@ -69,6 +69,9 @@ with less precise output (calls are passed through unchanged).
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR`, `ASSERT_LE((e - a).cwiseAbs().maxCoeff(), t)`, `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
 | comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |
+| file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |
+| module documentation comment | plain `//` comment before the namespace (not doxygen) |
+| type names | spelling of the type definition (`Block_LU_type` → `Block_LU`); TODO if the source is inconsistent |
 
 ## Macros
 

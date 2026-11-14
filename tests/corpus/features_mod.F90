@@ -36,16 +36,16 @@ module features_mod
     type(stats_type), pointer :: owned => null()
   end type holder_type
 
-  type :: grid_type
+  type :: Grid_type
     real, allocatable :: blocks(:, :, :, :)       !< dense blocks (bs, bs, i, j)
     type(stats_type), allocatable :: cells(:, :)
     real, allocatable :: spare(:)
-  end type grid_type
+  end type Grid_type
 
 contains
 
   subroutine grid_demo(g, n, v, iperm, ierr)
-    type(grid_type), intent(inout) :: g
+    type(Grid_type), intent(inout) :: g
     integer, intent(in) :: n
     real, intent(inout) :: v(:)
     integer, intent(in) :: iperm(:)
@@ -88,7 +88,7 @@ contains
   end subroutine setup_solver
 
   subroutine update_holder(h, x, ierr)
-    type(holder_type), intent(inout), target :: h
+    type(Holder_Type), intent(inout), target :: h
     real, intent(in) :: x
     integer, intent(out) :: ierr
     type(stats_type), pointer :: s
