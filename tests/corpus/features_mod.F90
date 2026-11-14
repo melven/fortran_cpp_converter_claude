@@ -8,7 +8,7 @@ module features_mod
   private
 
   public :: stats_type, clamp, mean, norm_inf, accumulate, describe_kind, fill, apply_scale
-  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo
+  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -35,6 +35,10 @@ module features_mod
     type(stats_type) :: inner
     type(stats_type), pointer :: owned => null()
   end type holder_type
+
+  type :: history_type
+    real(kind=8), allocatable :: phi(:, :, :)     !< snapshots 0..n
+  end type history_type
 
   type :: Grid_type
     real, allocatable :: blocks(:, :, :, :)       !< dense blocks (bs, bs, i, j)
@@ -75,6 +79,26 @@ contains
     v(iperm) = tmp
     call move_alloc(tmp, g%spare)
   end subroutine grid_demo
+
+  subroutine get_history(h, n, t, phi, copy, ierr)
+    type(history_type), intent(inout) :: h
+    integer, intent(in) :: n
+    real, intent(in) :: t
+    real, intent(out) :: phi(:, :, 0:)
+    real(kind=8), intent(out) :: copy(:, :, 0:)
+    integer, intent(out) :: ierr
+    integer :: k
+    real :: dt
+
+    PROJECT_ALLOCATE(h%phi(2, 2, 0:n), ierr)
+    h%phi = 0.0d0
+    dt = t / 2**4 + t / n**2 + 2**n
+    do k = lbound(phi, 3), ubound(phi, 3)
+      h%phi(1, 1, k) = dt * k + ubound(h%phi, 1)
+    end do
+    phi = real(h%phi)
+    copy = h%phi
+  end subroutine get_history
 
   subroutine setup_solver(lu, n, ierr)
     type(block_lu_type), intent(out) :: lu

@@ -124,6 +124,13 @@ def test_features(out):
     assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
     assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
     assert 'text = "medium " + std::to_string(k) + "/" + std::to_string(max_items);' in cpp
+    assert "h.phi.assign(n + 1, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>(2, 2));" in cpp
+    assert "dt = t / 16 + t / (n * n) + static_cast<int>(std::pow(2, n));" in cpp
+    assert "for (k = 0; k <= static_cast<int>(phi.size()) - 1; ++k) {" in cpp
+    assert "h.phi[k](0, 0) = dt * k + h.phi[0].rows();" in cpp
+    assert "phi.resize(h.phi.size());" in cpp
+    assert "for (std::size_t k_ = 0; k_ < h.phi.size(); ++k_) phi[k_] = h.phi[k_].cast<scalar>();" in cpp
+    assert "copy = h.phi;" in cpp
     assert "class Grid {" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
     assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder {" in hpp
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp

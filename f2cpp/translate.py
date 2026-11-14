@@ -359,6 +359,14 @@ class Translator:
             return self.minus(node, -int(str(lb.items[1].items[0])))
         return f"{par(self.expr(node), P_ADD)} - {par(self.expr(lb), P_ADD, True)}"
 
+    def lower_bounds(self, v):
+        """lower bound nodes (None = 1) from the declaration, or - if literal - from an allocate"""
+        lbs = [d[0] for d in v.dims]
+        if v.alloc_dims and all(lb is None for lb in lbs):
+            lbs = [lo if lo is not None and re.fullmatch(r"-?\s*\d+", str(lo)) else None
+                   for lo, _ in v.alloc_dims]
+        return lbs
+
     def sub_code(self, s, lb):
         """-> ('idx'|'all'|'seq', code)"""
         if cls(s) != "Subscript_Triplet":
@@ -380,7 +388,7 @@ class Translator:
         st = self.storage(v)
         if st in ("scalar", "uptr", "ptr") or len(subs) != v.rank:
             raise Untranslatable("substring" if v.base == "character" else "subscript")
-        lbs = [d[0] for d in v.dims]
+        lbs = self.lower_bounds(v)
         base = par(x)
         res = X("", 0, v.base, 100, v, v.tname)
         depth, lr = self.nest(v)
@@ -484,10 +492,12 @@ class Translator:
         if a.rank > 0:
             return X(f"{self.as_array(a) if a.arr else par(a) + '.array()'}.pow({b.code})", a.rank, a.base,
                      arr=True)
-        if b.code in ("2", "3") and re.fullmatch(r"[\w.\[\]]+|[\w.\[\]]*(->[\w.\[\]]+)+", a.code):
+        if a.code.isdigit() and b.code.isdigit() and int(a.code) ** int(b.code) < 2 ** 31:
+            return X(str(int(a.code) ** int(b.code)), 0, "integer")
+        if b.code in ("2", "3", "4") and re.fullmatch(r"[\w.\[\]]+|[\w.\[\]]*(->[\w.\[\]]+)+", a.code):
             return X(" * ".join([a.code] * int(b.code)), 0, a.base, P_MUL)
-        if a.base == "integer" and b.base == "integer":
-            self.note("int-power", "integer power: std::pow returns floating point")
+        if a.base == "integer" and b.base == "integer":     # integer result as in Fortran
+            return X(f"static_cast<{self.cfg['int']}>(std::pow({a.code}, {b.code}))", 0, "integer")
         return X(f"std::pow({a.code}, {b.code})", 0, "real")
 
     def matrix(self, x):
@@ -812,7 +822,21 @@ class Translator:
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
         if st == "vec3":
-            r = self.expr(rhs_n)
+            # copy of a whole std::vector<mat>, possibly with type conversion: a = real(b)
+            src_n = rhs_n
+            if cls(src_n) == "Intrinsic_Function_Reference" and lname(src_n.items[0]) in \
+                    ("real", "dble", "int") and src_n.items[1] is not None:
+                src_n = self.split_arg(items_of(src_n.items[1])[0])[1]
+            r = self.expr(src_n) if cls(src_n) in ("Name", "Data_Ref") else self.expr(rhs_n)
+            if r.rank == v.rank and r.whole and r.var is not None and self.storage(r.var) == "vec3":
+                dst, src = lhs.raw or lhs.code, r.raw or r.code
+                if self.cpp_type(r.var) == self.cpp_type(v):
+                    self.emit(ind, f"{dst} = {src};")
+                else:
+                    self.emit(ind, f"{dst}.resize({src}.size());")
+                    self.emit(ind, f"for (std::size_t k_ = 0; k_ < {src}.size(); ++k_) "
+                                   f"{dst}[k_] = {src}[k_].cast<{self.elem_type(v)}>();")
+                return
             if r.rank != 0:
                 raise Untranslatable("nested-vector-assignment")
             fill = ".setZero()" if is_zero(r.code) else f".setConstant({r.code})"
@@ -975,7 +999,10 @@ class Translator:
             if lo is None:
                 sizes.append(self.expr(hi).code)
             else:
-                self.note("lower-bound", "array with non-default lower bound: check indices")
+                if re.fullmatch(r"-?\s*\d+", str(lo)):
+                    sizes.append(self.minus(hi, int(str(lo).replace(" ", "")) - 1))
+                    continue
+                self.note("lower-bound", "array with non-constant lower bound: check indices")
                 sizes.append(f"{par(self.expr(hi), P_ADD)} - {par(self.expr(lo), P_ADD, True)} + 1")
         return sizes
 
@@ -1337,7 +1364,7 @@ def i_cast(base, wrap=None):
         if kind is not None:
             t = tr.cfg["kind_map"].get(lname(kind), t)
         if x.rank > 0:
-            if wrap:
+            if wrap or x.rank > 2:
                 raise Untranslatable(f"intrinsic:{n}(array)")
             return X(f"{par(x)}.cast<{t}>()", x.rank, base, arr=x.arr)
         inner = f"std::{wrap}({x.code})" if wrap else x.code
@@ -1411,16 +1438,22 @@ def i_identity(tr, n, pos, kw):
 
 
 def i_bound(tr, n, pos, kw):
-    if n == "lbound":
-        x = tr.expr(pos[0])
-        if x.var is None or len(pos) < 2:
-            raise Untranslatable("intrinsic:lbound")
-        lb = x.var.dims[int(tr.expr(pos[1]).code) - 1][0]
-        return X(tr.expr(lb).code if lb is not None else "1", 0, "integer")
+    """lbound / ubound with the Fortran values (indices are shifted where they are used)"""
     x = tr.expr(pos[0])
-    if x.var is not None and any(d[0] is not None for d in x.var.dims):
-        raise Untranslatable("intrinsic:ubound(lower-bound)")
-    return i_size(tr, n, pos, kw)
+    dim = pos[1] if len(pos) > 1 else kw.get("dim")
+    if x.var is None or not x.whole or dim is None or not tr.expr(dim).code.isdigit():
+        raise Untranslatable("intrinsic:" + n)
+    lb = tr.lower_bounds(x.var)[int(tr.expr(dim).code) - 1]
+    lo = tr.expr(lb) if lb is not None else X("1", 0, "integer")
+    if n == "lbound":
+        return lo
+    size = i_size(tr, n, [pos[0], dim], {})
+    if lo.code == "1":
+        return size
+    off = int(lo.code) - 1 if re.fullmatch(r"-?\d+", lo.code) else None
+    if off is None:
+        return X(f"{par(size, P_ADD)} + {par(lo, P_ADD)} - 1", 0, "integer", P_ADD)
+    return X(f"{par(size, P_ADD)} {'+' if off > 0 else '-'} {abs(off)}", 0, "integer", P_ADD)
 
 
 def i_null(tr, n, pos, kw):
