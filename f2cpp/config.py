@@ -65,7 +65,7 @@ DEFAULTS = {
     },
     # called function / subroutine (lower case) -> C++ function, same arguments
     "function_map": {},
-    "gtest_assert": "EXPECT",      # EXPECT_* or "ASSERT" (pFUnit asserts abort the test like ASSERT_*)
+    "gtest_assert": "ASSERT",      # pFUnit asserts abort the test -> ASSERT_*; "EXPECT" changes the logic
     # the project provides EXPECT_NEAR / ASSERT_NEAR for Eigen types: used for array comparisons;
     # False: EXPECT_LE((expected - actual).cwiseAbs().maxCoeff(), tolerance)
     "gtest_eigen_near": True,
