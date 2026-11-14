@@ -478,7 +478,25 @@ class ModuleEmitter:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \
                  protos_priv.out + ["", "}  // namespace", ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
-        return "\n".join(squeeze(h)), "\n".join(squeeze(c))
+        return "\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c)))
+
+    def braces(self, lines):
+        """brace style: put the opening brace of blocks on its own line"""
+        if self.cfg["brace_style"] != "allman":
+            return lines
+        out = []
+        for line in lines:
+            s = line.strip()
+            if s.startswith("//") or s.startswith("#") or not s.endswith(" {") or s == "{":
+                out.append(line)
+                continue
+            ind = line[:len(line) - len(line.lstrip())]
+            head = s[:-2]
+            if head.startswith("} "):           # } else {  /  } else if (...) {
+                out.append(ind + "}")
+                head = head[2:]
+            out += [ind + head, ind + "{"]
+        return out
 
     def file_header(self, top, ext):
         """file header comment of the Fortran source with the file name replaced"""
@@ -509,7 +527,7 @@ class ModuleEmitter:
                     c.append(f"  void {fn}() override {{ {p.cname}(); }}")
             c += ["};", ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
-        return "\n".join(squeeze(c))
+        return "\n".join(self.braces(squeeze(c)))
 
 
 class _One:

@@ -75,6 +75,11 @@ with less precise output (calls are passed through unchanged).
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |
 | type, procedure and binding names | spelling of the definition (`Block_LU_type` → `Block_LU`, `myFunction`); TODO if the source is inconsistent |
 
+## Formatting
+
+`brace_style = "allman"` (default, `{` on its own line) or `"attached"`. Indentation is two
+spaces; run your formatter (clang-format) over the output for anything else.
+
 ## Macros
 
 The macro names are configuration; the defaults are placeholders (`PROJECT_...`). No macros
