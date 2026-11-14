@@ -106,6 +106,7 @@ class Binding:
     pass_arg: str = None
     access: str = None
     generic: str = None
+    spelling: str = None         # binding name as written in the type definition
 
 
 @dataclass
@@ -120,6 +121,7 @@ class TypeDef:
     finals: list = field(default_factory=list)
     private_comps: bool = False
     spelling: str = None         # name as written in the type definition
+    generic_spelling: dict = field(default_factory=dict)
     children: set = field(default_factory=set)
     node: object = None
 
@@ -134,6 +136,7 @@ class Module:
     procs: dict = field(default_factory=dict)
     ifaces: dict = field(default_factory=dict)      # abstract interface bodies
     generics: dict = field(default_factory=dict)    # generic name -> [specific names]
+    generic_spelling: dict = field(default_factory=dict)
     default_access: str = "public"
     access: dict = field(default_factory=dict)
     is_test: bool = False
@@ -255,6 +258,7 @@ def collect_type(node, module):
                     iface, attrs, _, bname, impl = b.items
                     bd = Binding(lname(bname), lname(impl) if impl is not None else lname(bname),
                                  lname(iface) if iface is not None else None)
+                    bd.spelling = cname(str(bname).strip())
                     for a in items_of(attrs):
                         s = re.sub(r"\s", "", lname(a))
                         if s == "deferred":
@@ -268,6 +272,7 @@ def collect_type(node, module):
                     t.bindings[bd.name] = bd
                 elif cls(b) == "Generic_Binding":
                     t.generics[lname(b.items[1])] = [lname(x) for x in items_of(b.items[2])]
+                    t.generic_spelling[lname(b.items[1])] = cname(str(b.items[1]).strip())
                 elif cls(b) == "Final_Binding":
                     t.finals += [lname(x) for x in items_of(b.items[1])]
     return t
@@ -299,6 +304,7 @@ def collect_module(node):
                             p = collect_proc(b, m)
                             m.ifaces[p.name] = p
                         elif cls(b) == "Procedure_Stmt" and head is not None and cls(head) == "Name":
+                            m.generic_spelling[lname(head)] = cname(str(head).strip())
                             m.generics.setdefault(lname(head), []).extend(
                                 lname(x) for x in items_of(b.items[0]))
         elif cls(part) == "Module_Subprogram_Part":
@@ -310,7 +316,7 @@ def collect_module(node):
     for g, specifics in m.generics.items():
         for sname in specifics:
             if sname in m.procs:
-                m.procs[sname].generic = g
+                m.procs[sname].generic = m.generic_spelling[g]
     # type-bound procedures -> methods
     for t in m.types.values():
         for g, specifics in t.generics.items():
@@ -327,7 +333,8 @@ def collect_module(node):
             p = m.procs.get(b.impl)
             if p is None or p.method_of:
                 continue
-            p.method_of, p.bind_name = t.name, b.generic or b.name
+            p.method_of = t.name
+            p.bind_name = t.generic_spelling[b.generic] if b.generic else b.spelling
             if not b.nopass and p.args:
                 p.pass_arg = b.pass_arg or p.args[0]
                 p.vars[p.pass_arg].is_this = True
@@ -396,6 +403,7 @@ class Program:
         self.cfg = cfg
         self.modules = {}
         self.spellings = {}
+        self.proc_spellings = {}
 
     def add(self, module):
         from fparser.two.utils import walk
@@ -407,8 +415,22 @@ class Program:
                 n = n.items[1]
             self.spellings.setdefault(lname(n), set()).add(str(n).strip())
 
+        # spellings of procedure / binding names at definitions and references
+        for n in walk(module.node, (F.Subroutine_Stmt, F.Function_Stmt, F.Specific_Binding, F.Generic_Binding,
+                                    F.Call_Stmt, F.Function_Reference, F.Part_Ref, F.Procedure_Designator)):
+            k = cls(n)
+            name = n.items[1] if k in ("Subroutine_Stmt", "Function_Stmt", "Generic_Binding") else \
+                n.items[3] if k == "Specific_Binding" else n.items[2] if k == "Procedure_Designator" else n.items[0]
+            if cls(name) == "Name":
+                self.proc_spellings.setdefault(lname(name), set()).add(str(name).strip())
+
     def inconsistent_case(self, tname):
         return len(self.spellings.get(tname, ())) > 1
+
+    def inconsistent_proc_case(self, name):
+        """-> sorted spellings if the procedure / binding name is not spelled consistently"""
+        s = self.proc_spellings.get(name.lower(), ())
+        return sorted(s) if len(s) > 1 else None
 
     def finish(self):
         err = self.cfg["error_arg"].lower()

@@ -7,7 +7,7 @@ module features_mod
   implicit none
   private
 
-  public :: stats_type, clamp, mean, norm_inf, accumulate, describe_kind, fill, apply_scale
+  public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
   public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
@@ -25,7 +25,7 @@ module features_mod
     type(legacy_type) :: legacy
     class(shape_type), allocatable :: owner
   contains
-    procedure :: add => stats_add
+    procedure :: addValue => stats_add
     procedure :: mean => stats_mean
     procedure, nopass :: version => stats_version
     final :: stats_cleanup
@@ -122,12 +122,12 @@ contains
 
     ierr = 0
     s => h%inner
-    PROJECT_CHK_IERR(call s%add(x, ierr), ierr)
+    PROJECT_CHK_IERR(call s%addValue(x, ierr), ierr)
     s%total = s%total + 1.0
     if (.not. associated(h%owned)) then
       allocate(h%owned)
     end if
-    PROJECT_CHK_IERR(call h%owned%add(x, ierr), ierr)
+    PROJECT_CHK_IERR(call h%owned%addvalue(x, ierr), ierr)
     smp => s%samples
     smp(1) = 2.0 * smp(1)
   end subroutine update_holder
@@ -158,12 +158,12 @@ contains
     end if
   end function mean
 
-  function norm_inf(x) result(r)
+  function normInf(x) result(r)
     real, intent(in) :: x(:)
     real :: r
     r = maxval(abs(x))
     if (any(x /= x)) r = huge(r)
-  end function norm_inf
+  end function normInf
 
   subroutine accumulate(x, y, alpha, scale, ierr)
     real, intent(in) :: x(:)

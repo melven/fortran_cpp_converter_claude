@@ -137,6 +137,11 @@ def test_features(out):
     assert "vec grp_tmp;\n  // TODO(f2cpp): Fortran array pointer 'grp_tmp' is translated as an owning array" in hpp
     assert '    throw std::invalid_argument("Invalid kind");' in cpp
     assert 'if (!(k < 1000)) throw std::logic_error("kind too large: " + std::to_string(k));' in cpp
+    # procedure / binding names: spelling of the definition, warning if inconsistent
+    assert "scalar normInf(const vec& x);" in hpp
+    assert "// TODO(f2cpp): name is spelled inconsistently in the Fortran source: addValue, addvalue\n" \
+           "  void addValue(scalar x);" in hpp
+    assert "s.addValue(x);" in cpp and "h.owned->addValue(x);" in cpp and "void stats::addValue(scalar x)" in cpp
     assert "class Grid {" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
     assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder {" in hpp
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp

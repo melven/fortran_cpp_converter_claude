@@ -637,7 +637,12 @@ class Translator:
             self.report.add("info", "unknown-binding:" + n)
             argc = self.plain_args(items_of(args))
         sep = "->" if obj.raw is not None else "."
-        code = f"{self.member(obj, cname(str(bname)), obj.qual)}" \
+        spelled = cname(str(bname))             # spelling of the definition if known
+        if owner is not None:
+            spelled = b.spelling if b is not None else owner.generic_spelling.get(n, spelled)
+            if b is not None and b.generic:
+                spelled = owner.generic_spelling[b.generic]
+        code = f"{self.member(obj, spelled, obj.qual)}" \
                f"({', '.join(argc)})"
         if p is not None and (p.is_ctor or p.is_dtor):
             code = self.lifetime_call(p, obj, argc, bool(obj.qual), code)

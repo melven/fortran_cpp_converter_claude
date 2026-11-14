@@ -72,7 +72,7 @@ with less precise output (calls are passed through unchanged).
 | comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |
 | file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |
-| type names | spelling of the type definition (`Block_LU_type` → `Block_LU`); TODO if the source is inconsistent |
+| type, procedure and binding names | spelling of the definition (`Block_LU_type` → `Block_LU`, `myFunction`); TODO if the source is inconsistent |
 
 ## Macros
 

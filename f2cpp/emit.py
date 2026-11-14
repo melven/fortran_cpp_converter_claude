@@ -137,6 +137,13 @@ class ModuleEmitter:
             return f"{qualify}{tn}({params})"
         return f"{ret} {name}({params}){const}"
 
+    def warn_name(self, tr, name, ind):
+        spellings = self.prog.inconsistent_proc_case(name)
+        if spellings:
+            self.report.add("todo", "inconsistent-name-case")
+            tr.emit(ind, f"// {TODO}: name is spelled inconsistently in the Fortran source: "
+                         + ", ".join(spellings))
+
     def doc(self, tr, p, ind):
         for c in p.doc:
             if not str(c).startswith((PF_MARK, CPP_MARK, BLANK_MARK)):
@@ -200,8 +207,11 @@ class ModuleEmitter:
                 if bd.deferred:
                     # signature from the abstract interface, name from the binding
                     ret, _, params, const = self.signature(ptr, p, True)
-                    tr.emit(ind + 1, f"virtual {ret} {bd.name}({params}){const} = 0;")
+                    self.warn_name(tr, bd.name, ind + 1)
+                    tr.emit(ind + 1, f"virtual {ret} {bd.spelling}({params}){const} = 0;")
                     continue
+                if not (p.is_ctor or p.is_dtor):
+                    self.warn_name(tr, bd.generic or bd.name, ind + 1)
                 sig = self.proto(ptr, p)
                 if p.is_ctor:
                     sig = ("explicit " if sig.count(",") == 0 and not sig.endswith("()") else "") + sig
@@ -418,15 +428,17 @@ class ModuleEmitter:
                     self.emit_proc(cpp, p, 0)
                 cpp.emit(0, "")
                 continue
-            public = mod.is_public(p.generic or p.name) or mod.is_public(p.name)
+            public = mod.is_public((p.generic or p.name).lower()) or mod.is_public(p.name)
             if p.method_of:
                 self.doc(cpp, p, 0) if not public else None
                 self.emit_proc(cpp, p, 0)
             elif public:
                 self.doc(protos_pub, p, 0)
+                self.warn_name(protos_pub, p.generic or p.name, 0)
                 protos_pub.emit(0, self.proto(ptr, p) + ";")
                 self.emit_proc(cpp, p, 0)
             else:
+                self.warn_name(protos_priv, p.generic or p.name, 1)
                 protos_priv.emit(1, self.proto(ptr, p) + ";")
                 cpp.emit(0, "namespace {")
                 self.doc(cpp, p, 0)
