@@ -52,26 +52,22 @@ class Var:
     force_ptr: bool = False      # select-type alias etc.
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
     node: object = None
-    array_ref = True             # class attribute: config array_args == "ref"
 
     def has(self, a):
         return a in self.attrs
 
     @property
     def opt_kind(self):
-        """representation of an optional dummy: std::optional (by value) or pointer"""
+        """representation of an optional dummy: std::optional of a value or of a reference"""
         if not (self.is_dummy and self.has("optional")):
             return None
-        if self.rank == 0 and self.base not in ("type", "character") and self.intent == "in":
-            return "optional"
-        if Var.array_ref and 0 < self.rank <= 2 and self.base in ("real", "integer", "logical") \
-                and not (self.has("allocatable") or self.has("pointer")):
-            return "optional"       # std::optional<Eigen::Ref<...>>
-        return "ptr"
+        if self.intent == "in" and self.base != "type":
+            return "optional"       # std::optional<T>
+        return "optref"             # std::optional<std::reference_wrapper<T>>
 
     @property
     def ptr_like(self):
-        if self.is_this or self.force_ptr or self.opt_kind:
+        if self.is_this or self.force_ptr or self.opt_kind == "optional":
             return True
         if self.rank == 0 and self.base == "type" and (self.has("allocatable") or self.has("pointer")):
             return True
@@ -343,7 +339,6 @@ class Program:
     def __init__(self, cfg):
         self.cfg = cfg
         self.modules = {}
-        Var.array_ref = cfg["array_args"] == "ref"
 
     def add(self, module):
         self.modules[module.name] = module

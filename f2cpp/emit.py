@@ -104,7 +104,7 @@ class ModuleEmitter:
             v = p.vars[a]
             s = f"{tr.param_type(v)} {v.cname}"
             if decl and v.opt_kind and i >= len(dummies) - n_opt:
-                s += " = std::nullopt" if v.opt_kind == "optional" else " = nullptr"
+                s += " = std::nullopt"
             params.append(s)
         ret = "void"
         if p.kind == "function":
@@ -383,7 +383,8 @@ class ModuleEmitter:
 
         guard_text = "\n".join(hpp.out + protos_pub.out)
         h = [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
-        h += self.std_includes(guard_text, [("memory", ["std::unique_ptr"]), ("optional", ["std::optional"]),
+        h += self.std_includes(guard_text, [("functional", ["std::reference_wrapper"]),
+                                            ("memory", ["std::unique_ptr"]), ("optional", ["std::optional"]),
                                             ("string", ["std::string"]), ("vector", ["std::vector"]),
                                             ("cstdint", ["std::int"]), ("complex", ["std::complex"])])
         h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()

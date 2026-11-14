@@ -29,6 +29,7 @@ class X:
     arr: bool = False        # Eigen Array (not Matrix) expression
     whole: bool = False      # complete variable (no subscripts)
     qual: str = ""           # "Parent::" for explicit parent calls
+    fwd: str = None          # optional dummy: the std::optional object itself
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
 
 
@@ -151,11 +152,10 @@ class Translator:
         t, st = self.cpp_type(v), self.storage(v)
         const = v.intent == "in"
         if v.opt_kind == "optional":
-            if st == "eigen":
-                return f"std::optional<Eigen::Ref<{'const ' if const else ''}{t}>>"
-            return f"std::optional<{t}>"
-        if v.opt_kind == "ptr":
-            return f"const {t}*" if const else f"{t}*"
+            return f"std::optional<{t}>" if st == "scalar" and v.base != "character" else \
+                f"const std::optional<{t}>&"
+        if v.opt_kind == "optref":
+            return f"std::optional<std::reference_wrapper<{'const ' if const else ''}{t}>>"
         if v.has("allocatable") or v.has("pointer") or st in ("vec3", "stdvec", "unsupported"):
             return f"const {t}&" if const else f"{t}&"
         if st == "eigen":
@@ -213,8 +213,11 @@ class Translator:
         x = X(code, v.rank, v.base, 100, v, v.tname, whole=True)
         if v.is_this:
             x.raw, x.code, x.prec = "this", "*this", P_UNARY
+        elif v.opt_kind == "optref":
+            x.code, x.fwd = f"{code}->get()", code
         elif v.ptr_like:
             x.raw, x.code, x.prec = code, "*" + code, P_UNARY
+            x.fwd = code if v.opt_kind else None
         return x
 
     def x_Part_Ref(self, node):
@@ -491,7 +494,7 @@ class Translator:
         for d in dummies[:last + 1]:
             dv = p.vars[d]
             if d not in given:
-                res.append("std::nullopt" if dv.opt_kind == "optional" else "nullptr")
+                res.append("std::nullopt" if dv.opt_kind else "nullptr")
                 continue
             x = self.expr(given[d])
             code = self.matrix(x)
@@ -501,16 +504,9 @@ class Translator:
                 dv.needs_ref = True     # slice passed to an out/inout dummy
                 if self.cfg["array_args"] == "plain":
                     self.note("slice-argument", f"slice passed to non-const reference '{dv.cname}'")
-            if dv.opt_kind == "ptr":
-                if x.var is not None and x.var.opt_kind == "ptr" and x.whole:
-                    code = x.raw                                    # forward optional argument
-                elif x.var is not None and x.raw is not None:
-                    code = x.raw if x.var.is_this else f"{x.raw}.get()" if self.storage(x.var) == "uptr" \
-                        else x.raw
-                else:
-                    code = "&" + par(x, P_UNARY)
-            elif dv.opt_kind == "optional" and x.var is not None and x.var.opt_kind == "optional" and x.whole:
-                code = x.raw
+            if dv.opt_kind and x.var is not None and x.var.opt_kind == dv.opt_kind and x.whole \
+                    and x.fwd is not None:
+                code = x.fwd                                        # forward optional argument
             elif passes_handle and x.raw is not None:
                 code = x.raw
             res.append(code)
@@ -1236,8 +1232,7 @@ def i_present(tr, n, pos, kw):
     v = tr.lookup(lname(pos[0]))
     if v is None or not v.opt_kind:
         raise Untranslatable("present")
-    return X(f"{v.cname}.has_value()" if v.opt_kind == "optional" else f"{v.cname} != nullptr", 0, "logical",
-             100 if v.opt_kind == "optional" else P_EQ)
+    return X(f"{v.cname}.has_value()", 0, "logical")
 
 
 def i_allocated(tr, n, pos, kw):

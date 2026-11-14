@@ -100,10 +100,13 @@ def test_classes(out):
 def test_features(out):
     hpp, cpp = read(out, "features_mod.hpp"), read(out, "features_mod.cpp")
     assert "scalar clamp(scalar x, scalar lo, scalar hi);" in hpp and "int clamp(int x, int lo, int hi);" in hpp
-    assert "scalar mean(const vec& x, const vec* weights = nullptr);" in hpp
+    assert "scalar mean(const vec& x, const std::optional<vec>& weights = std::nullopt);" in hpp
     assert "void fill(Eigen::Ref<vec> x, scalar value, std::optional<int> first = std::nullopt);" in hpp
     assert "void swap_rows(mat& a, int i, int j);" in hpp
     assert "wrappers::Legacy legacy;" in hpp and '#include "legacy.hpp"' in hpp
+    assert "std::optional<std::reference_wrapper<const shape>> b = std::nullopt" in hpp
+    assert "if (b.has_value()) r = r / b->get().area();" in cpp
+    assert "*" not in hpp.replace("/*", "").replace("*/", "")        # no raw pointers
     assert "double accurate_sum(" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(this->samples(Eigen::seq(0, this->n - 1)));" in cpp
