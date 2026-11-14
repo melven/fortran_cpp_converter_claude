@@ -300,7 +300,17 @@ class Translator:
                                for a in items_of(args))
             return X(f"{self.prog.type_name(n, self.mod)}{{{args_c}}}", 0, "type", tname=n)
         self.report.add("info", "external-function:" + n)
-        return X(f"{cname(str(name_node))}({', '.join(self.plain_args(items_of(args)))})")
+        return self.unknown_ref(cname(str(name_node)), items_of(args))
+
+    def unknown_ref(self, base, subs):
+        """name(...) of unknown kind: an array section if it has a triplet, else passed through as call"""
+        if not any(cls(s) == "Subscript_Triplet" for s in subs):
+            return X(f"{base}({', '.join(self.plain_args(subs))})")
+        sc = [self.sub_code(s, None) for s in subs]
+        self.note("unknown-array", "section of an array of unknown type (assumed Eigen, lower bound 1)")
+        if all(k == "all" for k, _ in sc):
+            return X(base, len(sc))
+        return X(f"{base}({', '.join(c for _, c in sc)})", sum(k != "idx" for k, _ in sc))
 
     def member(self, obj, name, qual=""):
         """code of member 'name' of obj; 'this->' is omitted unless a local name hides the member"""
@@ -331,7 +341,7 @@ class Translator:
                 self.report.add("info", "unknown-component:" + n)
                 x = X(self.member(cur, cname(str(pname)), cur.qual))
                 if subs is not None:
-                    x = X(f"{x.code}({', '.join(self.plain_args(subs))})")
+                    x = self.unknown_ref(x.code, subs)
             else:
                 x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
                 if subs is not None:
