@@ -176,3 +176,15 @@ def test_translated_unit_tests_pass(out):
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "test_expm_mod.cpp", "expm_mod.cpp",
          "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
     assert "[  PASSED  ] 5 tests." in run(["./gt"], d)
+
+
+def test_custom_macro_names(tmp_path):
+    (tmp_path / "m_mod.F90").write_text(
+        "module m_mod\ncontains\nsubroutine s(block_dim, ierr)\ninteger, intent(in) :: block_dim(:)\n"
+        "integer, intent(out) :: ierr\nXY_CHK_ARGUMENT(all(block_dim >= 0), ierr)\nend subroutine\nend module\n")
+    (tmp_path / "c.toml").write_text(
+        '[macros]\nXY_CHK_ARGUMENT = "call XY_CHK_ARGUMENT({0})"\n'
+        "[call_templates]\nXY_CHK_ARGUMENT = 'if (!({0})) throw std::invalid_argument(\"{0:str}\");'\n")
+    translate([str(tmp_path / "m_mod.F90")], config.load(str(tmp_path / "c.toml")), str(tmp_path))
+    cpp = (tmp_path / "m_mod.cpp").read_text()
+    assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp

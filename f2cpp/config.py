@@ -74,6 +74,9 @@ def load(path=None, **overrides):
                 cfg[key].update(val)
             else:
                 cfg[key] = val
+    for key in ("call_templates", "type_map", "module_headers", "kind_map"):    # Fortran names
+        cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
+    cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     for key, val in overrides.items():
         if val is not None:
             cfg[key] = val
