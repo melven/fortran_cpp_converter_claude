@@ -30,6 +30,7 @@ class X:
     whole: bool = False      # complete variable (no subscripts)
     qual: str = ""           # "Parent::" for explicit parent calls
     fwd: str = None          # optional dummy: the std::optional object itself
+    on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
 
 
@@ -300,17 +301,26 @@ class Translator:
         self.report.add("info", "external-function:" + n)
         return X(f"{cname(str(name_node))}({', '.join(self.plain_args(items_of(args)))})")
 
+    def member(self, obj, name, qual=""):
+        """code of member 'name' of obj; 'this->' is omitted unless a local name hides the member"""
+        if obj.raw == "this" and not self.cfg["explicit_this"]:
+            hidden = {v.cname for v in self.proc.vars.values() if not v.is_this} if self.proc else set()
+            hidden |= {v.cname for v in self.overrides.values()}
+            if qual or name not in hidden:
+                return qual + name
+        sep = "->" if obj.raw is not None else "."
+        return (obj.raw if obj.raw is not None else par(obj)) + sep + qual + name
+
     def x_Data_Ref(self, node):
         parts = list(node.items)
         cur = self.expr(parts[0])
+        on_this = cur.raw == "this"
         for p in parts[1:]:
             pname, subs = (p.items[0], items_of(p.items[1])) if cls(p) == "Part_Ref" else (p, None)
             n = lname(pname)
             if cur.rank > 0:
                 raise Untranslatable("component-of-array")
             td = self.find_type(cur.tname)
-            sep = "->" if cur.raw is not None else "."
-            base = (cur.raw if cur.raw is not None else par(cur)) + sep + cur.qual
             comp = self.prog.find_component(td, n) if td else None
             if comp is None:
                 if td and any(a.name == n for a in self.prog.ancestors(td)):
@@ -318,14 +328,15 @@ class Translator:
                             qual=self.prog.type_name(n, self.mod) + "::")
                     continue
                 self.report.add("info", "unknown-component:" + n)
-                x = X(base + cname(str(pname)))
+                x = X(self.member(cur, cname(str(pname)), cur.qual))
                 if subs is not None:
                     x = X(f"{x.code}({', '.join(self.plain_args(subs))})")
             else:
-                x = self.var_ref(comp, base + comp.cname)
+                x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
                 if subs is not None:
                     x = self.subscript(x, comp, subs)
             cur = x
+            cur.on_this = on_this
         return cur
 
     # index handling
@@ -602,10 +613,10 @@ class Translator:
         qual = f"{tn}::" if t is not None and self.prog.polymorphic(t) else ""   # non-virtual call
         sep = "->" if obj.raw is not None else "."
         if p.is_ctor or p.is_dtor:
-            plain = f"{obj.raw if obj.raw is not None else par(obj)}{sep}{p.cname}()"
+            plain = self.member(obj, p.cname) + "()"
             return self.lifetime_call(p, obj, self.bound_args(p, rest),
                                       obj.tname is not None and obj.tname != p.method_of, plain)
-        return f"{obj.raw if obj.raw is not None else par(obj)}{sep}{qual}{p.bind_name}" \
+        return f"{self.member(obj, p.bind_name, qual)}" \
                f"({', '.join(self.bound_args(p, rest))})"
 
     def method_call(self, desig, args):
@@ -626,7 +637,7 @@ class Translator:
             self.report.add("info", "unknown-binding:" + n)
             argc = self.plain_args(items_of(args))
         sep = "->" if obj.raw is not None else "."
-        code = f"{obj.raw if obj.raw is not None else par(obj)}{sep}{obj.qual}{cname(str(bname))}" \
+        code = f"{self.member(obj, cname(str(bname)), obj.qual)}" \
                f"({', '.join(argc)})"
         if p is not None and (p.is_ctor or p.is_dtor):
             code = self.lifetime_call(p, obj, argc, bool(obj.qual), code)
@@ -1201,8 +1212,7 @@ class Translator:
 
     def in_const_method(self, x):
         p = self.proc
-        return bool(p and p.pass_arg and p.vars[p.pass_arg].intent == "in" and (x.code.startswith("this->")
-                                                                               or x.code == "*this"))
+        return bool(p and p.pass_arg and p.vars[p.pass_arg].intent == "in" and (x.on_this or x.code == "*this"))
 
 
 def last_line(node):

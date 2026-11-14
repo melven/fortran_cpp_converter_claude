@@ -12,6 +12,7 @@ DEFAULTS = {
     # object is intent(out)) / destructors (if there are no further arguments)
     "constructor_bindings": ["configure"],
     "destructor_bindings": ["finalize"],
+    "explicit_this": False,       # True: always write this->member
     "error_arg": "ierr",           # error flag argument, removed (C++ uses exceptions)
     "scalar": "scalar",
     "vec": "vec",

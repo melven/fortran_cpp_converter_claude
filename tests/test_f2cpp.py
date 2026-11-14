@@ -85,9 +85,10 @@ def test_expressions(out):
     assert "PROJECT_" not in cpp and "project_macros" not in cpp
     assert "solve_inplace(D, N);" in cpp
     lu = read(out, "block_lu_mod.cpp")
-    assert "this->diag[i - 1] = this->diag[i - 1] - this->lower[i - 2] * this->upper[i - 2];" in lu
-    assert "this->diag.assign(nblocks, mat(bs, bs));" in lu
-    assert "for (i = this->nblocks - 1; i >= 1; --i) {" in lu
+    assert "diag[i - 1] = diag[i - 1] - lower[i - 2] * upper[i - 2];" in lu
+    assert "diag.assign(nblocks, mat(bs, bs));" in lu
+    assert "this->nblocks = nblocks;" in lu and "bs = this->bs;" in lu
+    assert "for (i = nblocks - 1; i >= 1; --i) {" in lu
 
 
 def test_classes(out):
@@ -97,7 +98,7 @@ def test_classes(out):
     assert "scalar area() const override;" in hpp
     assert "virtual ~shape() = default;" in hpp
     cpp = read(out, "shape_mod.cpp")
-    assert "this->shape::scale(factor);" in cpp
+    assert "shape::scale(factor);" in cpp and "a = pi * (radius * radius);" in cpp
     assert "s = std::make_unique<circle>();" in cpp
     assert "if (typeid(s) == typeid(circle)) {" in cpp
     lu = read(out, "block_lu_mod.hpp")
@@ -149,7 +150,7 @@ def test_features(out):
     assert "g.spare = std::move(tmp);" in cpp
     assert "double accurate_sum(" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
-    assert "m = project::mean(this->samples(Eigen::seq(0, this->n - 1)));" in cpp
+    assert "m = project::mean(samples(Eigen::seq(0, n - 1)));" in cpp
     assert "b = (a.array() > 0.0).select(a, b);" in cpp
     assert "} else if (k >= 3 && k <= max_items) {" in cpp
     assert "// F: IF (ierr /= 0) THEN" in cpp

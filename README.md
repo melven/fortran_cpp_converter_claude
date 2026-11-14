@@ -39,7 +39,7 @@ with less precise output (calls are passed through unchanged).
 | `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `virtual` / `override` / `= 0`, destructor |
 | binding `configure` with `intent(out)` passed object (`constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
-| type-bound procedure, `this%x` | member function (const if `intent(in)`), `this->x` |
+| type-bound procedure, `this%x` | member function (const if `intent(in)`), `x`; `this->x` only if a local variable or argument has the same name (`explicit_this = true`: always) |
 | `class(t)` dummy / `class(t), allocatable` | `t&` / `std::unique_ptr<t>` |
 | `select type` | `typeid` (`type is`) / `dynamic_cast` (`class is`) |
 | generic interface / generic binding | overloads |
