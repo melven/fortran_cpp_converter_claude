@@ -68,7 +68,9 @@ with less precise output (calls are passed through unchanged).
 | `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `if (!(c)) throw std::logic_error(...);` / `std::invalid_argument` (`call_templates`) |
 | `PROJECT_ALLOCATE(a(n), ierr)` | `a.resize(n);` |
 | other statements using `ierr` | kept as comment (`ierr = 0`, `if (ierr /= 0) return`, `PROJECT_CHK_IERR(ierr=ierr, ierr)` are dropped) |
-| pFUnit `@test`, `@before`/`@after` | `TEST` / `TEST_F` with fixture |
+| pFUnit `@test` subroutine `test_x` in module `test_foo_mod` | `TEST(test_foo_mod, test_x)`, outside the project namespace (`using namespace`) |
+| `@before` / `@after` | fixture class `test_foo_mod` with `SetUp` / `TearDown`, tests become `TEST_F` |
+| other procedures / variables of a test module | `static` functions / anonymous namespace |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see `gtest_eigen_near`, `test_includes`), `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
 | comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |

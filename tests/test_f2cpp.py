@@ -31,7 +31,7 @@ def cfg(**kw):
 @pytest.fixture(scope="module")
 def out(tmp_path_factory):
     d = str(tmp_path_factory.mktemp("out"))
-    files = [os.path.join(CORPUS, m + ".F90") for m in MODULES] + [os.path.join(CORPUS, "test_expm_mod.pf")]
+    files = [os.path.join(CORPUS, m + ".F90") for m in MODULES] + [os.path.join(CORPUS, "test_expm_mod.pf"), os.path.join(CORPUS, "test_poly_mod.pf")]
     report, _ = translate(files, cfg(), d, interface_only=[os.path.join(CORPUS, "legacy_mod.F90")])
     return d, report
 
@@ -181,6 +181,11 @@ def test_features(out):
 def test_pfunit(out):
     t = read(out, "test_expm_mod.cpp")
     assert "TEST(test_expm_mod, test_expm_zero)" in t
+    assert "using namespace project;" in t and "namespace project" not in t.replace("using namespace project;", "")
+    f = read(out, "test_poly_mod.cpp")          # @before / @after -> fixture, helpers -> static functions
+    assert "class test_poly_mod : public ::testing::Test" in f and "void SetUp() override { setUp(); }" in f
+    assert "TEST_F(test_poly_mod, test_eval)" in f and "static scalar reference(scalar x);" in f
+    assert "ASSERT_NEAR(reference(0.5), pol.eval(0.5), 1.e-14);" in f
     assert "ASSERT_NEAR(identity(3), E, 1.e-14);" in t and "ASSERT_NEAR(2.0 * B, M, 1.e-13);" in t
     assert 'ASSERT_NEAR(0.0, E(0, 1), 1.e-14) << "off-diagonal";' in t
     assert "ASSERT_ANY_THROW(expm(A, 1.0, E));" in t and '#include "gtest_eigen.hpp"' in t
@@ -202,7 +207,7 @@ def test_options(tmp_path):
 
 
 @needs_cxx
-@pytest.mark.parametrize("name", MODULES + ["test_expm_mod"])
+@pytest.mark.parametrize("name", MODULES + ["test_expm_mod", "test_poly_mod"])
 def test_compiles(out, name):
     cxx(out, name)
 
@@ -229,8 +234,8 @@ def test_same_results_as_fortran(out, tmp_path):
 def test_translated_unit_tests_pass(out):
     d = out[0]
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "test_expm_mod.cpp", "expm_mod.cpp",
-         "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
-    assert "[  PASSED  ] 5 tests." in run(["./gt"], d)
+         "test_poly_mod.cpp", "poly_mod.cpp", "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
+    assert "[  PASSED  ] 6 tests." in run(["./gt"], d)
 
 
 def test_custom_macro_names(tmp_path):

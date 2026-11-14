@@ -1,0 +1,36 @@
+module test_poly_mod
+  use funit
+  use poly_mod, only: poly_type, poly_eval
+  implicit none
+
+  type(poly_type) :: pol
+  real :: cf(0:2)
+
+contains
+
+  @before
+  subroutine setUp()
+    integer :: ierr
+    cf = [1.0, 2.0, 3.0]
+    call pol%set(cf, ierr)
+  end subroutine setUp
+
+  @after
+  subroutine tearDown()
+    cf = 0.0
+  end subroutine tearDown
+
+  function reference(x) result(y)
+    real, intent(in) :: x
+    real :: y
+    y = 1.0 + 2.0 * x + 3.0 * x**2
+  end function reference
+
+  @test
+  subroutine test_eval()
+    @assertEqual(reference(0.5), pol%eval(0.5), tolerance=1.e-14)
+    @assertEqual(reference(-2.0), poly_eval(cf, -2.0), tolerance=1.e-14)
+    @assertEqual(cf, pol%coeff, tolerance=0.0)
+  end subroutine test_eval
+
+end module test_poly_mod

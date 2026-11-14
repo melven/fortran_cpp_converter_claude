@@ -423,9 +423,10 @@ class ModuleEmitter:
                     macro = f"TEST_F({mod.name}, {p.cname})" if fixture else f"TEST({mod.name}, {p.cname})"
                     self.emit_proc(cpp, p, 0, head=macro)
                 else:
-                    protos_priv.emit(0, self.proto(ptr, p) + ";")
+                    # helpers: static (internal linkage, test files may define the same names)
+                    protos_priv.emit(0, "static " + self.proto(ptr, p) + ";")
                     self.doc(cpp, p, 0)
-                    self.emit_proc(cpp, p, 0)
+                    self.emit_proc(cpp, p, 0, head="static " + self.proto(ptr, p, decl=False))
                 cpp.emit(0, "")
                 continue
             public = mod.is_public((p.generic or p.name).lower()) or mod.is_public(p.name)
@@ -536,9 +537,13 @@ class ModuleEmitter:
             [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", "", "#include <cmath>"]
         c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
             self.includes() + dirs.out
-        c += [""] + mod_doc.out + [self.open_ns(), ""] + self.using_other_ns()
-        if cpp_priv.out or protos.out:
-            c += ["namespace {", ""] + strip_blank(cpp_priv.out) + protos.out + ["", "}  // namespace", ""]
+        # tests are not part of the project namespace
+        using = [f"using namespace {self.ns};"] + self.using_other_ns()
+        c += [""] + mod_doc.out + using + [""]
+        if cpp_priv.out:
+            c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ["", "}  // namespace", ""]
+        if protos.out:
+            c += protos.out + [""]
         if fixture:
             c += [f"class {mod.name} : public ::testing::Test {{", "protected:"]
             for p in mod.procs.values():
@@ -547,7 +552,7 @@ class ModuleEmitter:
                     fn = "SetUp" if role == "before" else "TearDown"
                     c.append(f"  void {fn}() override {{ {p.cname}(); }}")
             c += ["};", ""]
-        c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
+        c += strip_blank(cpp.out) + [""]
         return "\n".join(self.braces(squeeze(c)))
 
 
