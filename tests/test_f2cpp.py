@@ -181,9 +181,9 @@ def test_features(out):
 def test_pfunit(out):
     t = read(out, "test_expm_mod.cpp")
     assert "TEST(test_expm_mod, test_expm_zero)" in t
-    assert "ASSERT_LE((identity(3) - E).cwiseAbs().maxCoeff(), 1.e-14);" in t
-    assert 'ASSERT_NEAR(0.0, E(0, 1), 1.e-14) << "off-diagonal";' in t
-    assert "ASSERT_ANY_THROW(expm(A, 1.0, E));" in t
+    assert "EXPECT_NEAR(identity(3), E, 1.e-14);" in t and "EXPECT_NEAR(2.0 * B, M, 1.e-13);" in t
+    assert 'EXPECT_NEAR(0.0, E(0, 1), 1.e-14) << "off-diagonal";' in t
+    assert "EXPECT_ANY_THROW(expm(A, 1.0, E));" in t and '#include "gtest_eigen.hpp"' in t
     assert "ierr" not in t
 
 

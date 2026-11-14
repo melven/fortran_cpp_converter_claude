@@ -1,5 +1,6 @@
 namespace = "project"
 constructor_bindings = ["configure", "init"]
+test_includes = ['"gtest_eigen.hpp"']
 extra_includes = ['"project_math.hpp"', '"lapack_compat.hpp"']
 
 [include_map]

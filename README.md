@@ -69,8 +69,8 @@ with less precise output (calls are passed through unchanged).
 | `PROJECT_ALLOCATE(a(n), ierr)` | `a.resize(n);` |
 | other statements using `ierr` | kept as comment (`ierr = 0`, `if (ierr /= 0) return`, `PROJECT_CHK_IERR(ierr=ierr, ierr)` are dropped) |
 | pFUnit `@test`, `@before`/`@after` | `TEST` / `TEST_F` with fixture |
-| `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR`, `ASSERT_LE((e - a).cwiseAbs().maxCoeff(), t)`, `ASSERT_TRUE`, ... |
-| `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
+| `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `EXPECT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see `gtest_eigen_near`, `test_includes`), `EXPECT_TRUE`, ...; `gtest_assert = "ASSERT"` for `ASSERT_*` |
+| `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `EXPECT_ANY_THROW(call)` |
 | comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |
 | file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |

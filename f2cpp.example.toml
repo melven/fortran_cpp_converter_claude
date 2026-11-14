@@ -1,6 +1,7 @@
 # Example configuration; all keys and defaults: f2cpp/config.py
 namespace = "myproj"
 extra_includes = ['"myproj_math.hpp"']        # must provide scalar, vec, mat
+test_includes = ['"myproj_gtest_eigen.hpp"']  # EXPECT_NEAR for Eigen types
 constructor_bindings = ["configure"]
 destructor_bindings = ["finalize"]
 

@@ -534,7 +534,8 @@ class ModuleEmitter:
         mod = self.mod
         c = self.file_header(top, self.cfg["source_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", "", "#include <cmath>"]
-        c += [f"#include {i}" for i in self.cfg["extra_includes"]] + self.includes() + dirs.out
+        c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
+            self.includes() + dirs.out
         c += [""] + mod_doc.out + [self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + protos.out + ["", "}  // namespace", ""]

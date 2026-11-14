@@ -976,6 +976,8 @@ class Translator:
             e, a = xs
             if e.rank == 0 and a.rank == 0:
                 code = f"{A}_NEAR({e.code}, {a.code}, {tol})" if tol else f"{A}_EQ({e.code}, {a.code})"
+            elif e.rank > 0 and a.rank > 0 and self.cfg["gtest_eigen_near"]:
+                code = f"{A}_NEAR({self.matrix(e)}, {self.matrix(a)}, {tol or '0.0'})"
             else:
                 if e.rank > 0 and a.rank > 0 and not (e.arr or a.arr):
                     diff = f"({par(e, P_ADD)} - {par(a, P_ADD, True)}).cwiseAbs().maxCoeff()"
