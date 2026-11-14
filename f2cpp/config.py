@@ -18,9 +18,11 @@ DEFAULTS = {
     # real/integer kind -> C++ type; unknown kinds fall back to scalar / int
     "kind_map": {"8": "double", "4": "float", "real64": "double", "real32": "float",
                  "int64": "std::int64_t", "int32": "std::int32_t"},
-    # "ref": Eigen::Ref for non-allocatable array dummies (accepts slices, like Fortran)
-    # "plain": const vec& / vec&
-    "array_args": "ref",
+    # "auto": const vec& / vec&; Eigen::Ref only for out/inout dummies that receive a slice
+    #         (block, row, column) in one of the translated calls
+    # "plain": always const vec& / vec&
+    # "ref": always Eigen::Ref (accepts slices everywhere, like Fortran)
+    "array_args": "auto",
     "header_ext": ".hpp",
     "source_ext": ".cpp",
     # included by every generated header (must provide scalar, vec, mat)

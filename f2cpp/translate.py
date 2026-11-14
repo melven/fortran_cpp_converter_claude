@@ -29,6 +29,7 @@ class X:
     arr: bool = False        # Eigen Array (not Matrix) expression
     whole: bool = False      # complete variable (no subscripts)
     qual: str = ""           # "Parent::" for explicit parent calls
+    obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -158,7 +159,7 @@ class Translator:
         if v.has("allocatable") or v.has("pointer") or st in ("vec3", "stdvec", "unsupported"):
             return f"const {t}&" if const else f"{t}&"
         if st == "eigen":
-            if self.cfg["array_args"] == "ref":
+            if self.cfg["array_args"] == "ref" or (v.needs_ref and self.cfg["array_args"] == "auto"):
                 return f"const Eigen::Ref<const {t}>&" if const else f"Eigen::Ref<{t}>"
             return f"const {t}&" if const else f"{t}&"
         if v.base in ("type", "character"):
@@ -347,6 +348,7 @@ class Translator:
             if kind != "idx":
                 raise Untranslatable("rank3-slice")
             base, subs, lbs = f"{base}[{code}]", subs[:2], lbs[:2]
+            res.obj = True
         elif st != "eigen":
             raise Untranslatable("rank>3")
         sc = [self.sub_code(s, lb) for s, lb in zip(subs, lbs)]
@@ -494,6 +496,11 @@ class Translator:
             x = self.expr(given[d])
             code = self.matrix(x)
             passes_handle = dv.ptr_like and not dv.opt_kind       # unique_ptr& / pointer& dummy
+            if x.rank > 0 and dv.rank > 0 and dv.intent != "in" and self.storage(dv) == "eigen" and \
+                    not (x.whole or (x.obj and "(" not in code.split("]")[-1] and "." not in code.split("]")[-1])):
+                dv.needs_ref = True     # slice passed to an out/inout dummy
+                if self.cfg["array_args"] == "plain":
+                    self.note("slice-argument", f"slice passed to non-const reference '{dv.cname}'")
             if dv.opt_kind == "ptr":
                 if x.var is not None and x.var.opt_kind == "ptr" and x.whole:
                     code = x.raw                                    # forward optional argument

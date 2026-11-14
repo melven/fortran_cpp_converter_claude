@@ -50,6 +50,7 @@ class Var:
     is_this: bool = False
     is_const: bool = False
     force_ptr: bool = False      # select-type alias etc.
+    needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
     node: object = None
     array_ref = True             # class attribute: config array_args == "ref"
 

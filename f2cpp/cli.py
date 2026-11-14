@@ -49,6 +49,8 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
     prog.finish()
     os.makedirs(outdir, exist_ok=True)
     written = []
+    for path, m in todo:        # first pass: find array dummies that receive slices
+        ModuleEmitter(prog, m, Report(), path).generate()
     for path, m in todo:
         hpp, cpp = ModuleEmitter(prog, m, report, path).generate()
         for text, ext in ((hpp, cfg["header_ext"]), (cpp, cfg["source_ext"])):

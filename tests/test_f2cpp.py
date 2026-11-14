@@ -70,7 +70,7 @@ def test_report(out):
 
 def test_expressions(out):
     cpp = read(out, "expm_mod.cpp")
-    assert "void expm(const Eigen::Ref<const mat>& A, scalar t, Eigen::Ref<mat> E)" in cpp
+    assert "void expm(const mat& A, scalar t, mat& E)" in cpp
     assert "ierr" not in cpp
     assert "P = As * P;" in cpp
     assert "aug(Eigen::seq(0, n - 1), Eigen::seq(n, n + p - 1)) = B;" in cpp
@@ -100,7 +100,9 @@ def test_classes(out):
 def test_features(out):
     hpp, cpp = read(out, "features_mod.hpp"), read(out, "features_mod.cpp")
     assert "scalar clamp(scalar x, scalar lo, scalar hi);" in hpp and "int clamp(int x, int lo, int hi);" in hpp
-    assert "std::optional<Eigen::Ref<const vec>> weights = std::nullopt" in hpp
+    assert "scalar mean(const vec& x, const vec* weights = nullptr);" in hpp
+    assert "void fill(Eigen::Ref<vec> x, scalar value, std::optional<int> first = std::nullopt);" in hpp
+    assert "void swap_rows(mat& a, int i, int j);" in hpp
     assert "wrappers::Legacy legacy;" in hpp and '#include "legacy.hpp"' in hpp
     assert "double accurate_sum(" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
@@ -120,13 +122,13 @@ def test_pfunit(out):
 
 
 def test_options(tmp_path):
-    c = cfg(keep_original=True, namespace="abc", array_args="plain", type_case="camel")
+    c = cfg(keep_original=True, namespace="abc", array_args="ref", type_case="camel")
     c["namespace_map"] = [["block_.*", "linalg"]]
     translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
     hpp = (tmp_path / "block_lu_mod.hpp").read_text()
     cpp = (tmp_path / "block_lu_mod.cpp").read_text()
     assert "namespace abc::linalg {" in hpp and "class BlockLu {" in hpp
-    assert "void solve(vec& x) const;" in hpp
+    assert "void solve(Eigen::Ref<vec> x) const;" in hpp
     assert "// F: bs = this % bs" in cpp
 
 

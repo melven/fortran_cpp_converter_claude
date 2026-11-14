@@ -43,8 +43,8 @@ with less precise output (calls are passed through unchanged).
 | generic interface / generic binding | overloads |
 | `real` / `real(kind=8)` | `scalar` / `kind_map` entry (`double`) |
 | `real` array rank 1 / 2 / 3 | `vec` / `mat` / `std::vector<mat>` (last index = vector index) |
-| array dummies | `Eigen::Ref<...>` (accepts slices; `array_args = "plain"` for `const vec&`) |
-| `optional` | `std::optional<...>` (values, Eigen arrays) or pointer (objects) |
+| array dummies | `const mat&` / `mat&`; `Eigen::Ref<mat>` only for out/inout dummies that receive a slice in a translated call (`array_args = "auto"`; alternatives `"plain"`, `"ref"`) |
+| `optional` | `std::optional<...>` (`intent(in)` scalars) or pointer (arrays, objects) |
 | `a(i)`, `a(i:j, k)`, `a(:, k)`, `a(i, :)` | `a(i - 1)`, `a(Eigen::seq(i - 1, j - 1), k - 1)`, `a.col(k - 1)`, `a.row(i - 1).transpose()` |
 | `matmul`, `transpose`, `dot_product`, `sum`, `maxval`, `abs`, `size`, ... | Eigen equivalents |
 | elementwise `*`, `/`, `**`, array ± scalar, `where (m) a = b` | `cwiseProduct`, `.array()` expressions, `select` |
