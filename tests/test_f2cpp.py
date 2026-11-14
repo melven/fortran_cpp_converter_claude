@@ -244,7 +244,8 @@ def test_custom_macro_names(tmp_path):
         "module m_mod\ncontains\nsubroutine s(block_dim, ierr)\ninteger, intent(in) :: block_dim(:)\n"
         "integer, intent(out) :: ierr\nXY_CHK_ARGUMENT(all(block_dim >= 0), ierr)\n"
         "call log_debug('n = ' // str(size(block_dim)))\n"
-        "if (.not. any(sys%offsets%mask(ub:ue))) call log_debug('none')\nend subroutine\nend module\n")
+        "if (.not. any(sys%offsets%mask(ub:ue))) call log_debug('none')\n"
+        "call log_debug(str(ext_fn(sys%handle, trim(sys%path), sys%a%b)))\nend subroutine\nend module\n")
     (tmp_path / "c.toml").write_text(
         '[macros]\nXY_CHK_ARGUMENT = "call XY_CHK_ARGUMENT({0})"\n'
         "[function_map]\nstr = \"std::to_string\"\nlog_debug = \"xy_log_debug\"\n"
@@ -254,6 +255,7 @@ def test_custom_macro_names(tmp_path):
     assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp
     assert 'xy_log_debug("n = " + std::to_string(block_dim.size()));' in cpp
     assert 'if (!sys.offsets.mask(Eigen::seq(ub - 1, ue - 1)).any()) xy_log_debug("none");' in cpp
+    assert "xy_log_debug(std::to_string(ext_fn(sys.handle, sys.path, sys.a.b)));" in cpp
 
 
 def test_missing_modules(tmp_path):

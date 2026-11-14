@@ -326,8 +326,13 @@ class Translator:
         sep = "->" if obj.raw is not None else "."
         return (obj.raw if obj.raw is not None else par(obj)) + sep + qual + name
 
-    def x_Data_Ref(self, node):
-        parts = list(node.items)
+    def x_Proc_Component_Ref(self, node):
+        """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
+        base, _, last = node.items
+        return self.x_Data_Ref(None, (list(base.items) if cls(base) == "Data_Ref" else [base]) + [last])
+
+    def x_Data_Ref(self, node, parts=None):
+        parts = parts or list(node.items)
         cur = self.expr(parts[0])
         on_this = cur.raw == "this"
         for p in parts[1:]:
