@@ -36,7 +36,7 @@ class ModuleEmitter:
                 else:
                     sizes.append(f"{par(h, 70)} - {par(l, 70, True)} + 1")
         if v.init is not None:
-            if cls(v.init) == "Function_Reference" and lname(v.init.items[0]) == "null" or lname(v.init) == "null()":
+            if lname(v.init).replace(" ", "").endswith("null()"):
                 return code if st == "uptr" else code + " = nullptr"
             x = tr.expr(v.init)
             if v.rank > 0 and x.rank == 0:
