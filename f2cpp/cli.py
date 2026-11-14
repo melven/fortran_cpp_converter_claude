@@ -70,7 +70,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="f2cpp", description="Fortran 2003 -> C++ (Eigen, googletest)")
     ap.add_argument("files", nargs="+", help="Fortran module files (.F90) and pFUnit tests (.pf, .pfunit)")
     ap.add_argument("-o", "--outdir", default="f2cpp_out")
-    ap.add_argument("-c", "--config", help="TOML configuration file")
+    ap.add_argument("-c", "--config", action="append", metavar="TOML",
+                    help="configuration file; may be given several times (later files take precedence)")
     ap.add_argument("-n", "--namespace", help="C++ namespace (overrides config)")
     ap.add_argument("-I", "--interface", action="append", default=[], metavar="FILE",
                     help="parse FILE only for its symbols (used modules), no output")

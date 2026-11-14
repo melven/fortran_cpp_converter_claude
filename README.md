@@ -21,7 +21,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 |---|---|
 | `files` | modules (`.F90`) → `<module>.hpp` + `<module>.cpp`; pFUnit tests (`.pf`, `.pfunit`, or any module that uses `funit` / `pfunit`) → `<module>.cpp` |
 | `-I FILE` | parse only for symbols (types, signatures); no output. For used modules that are translated separately or already exist in C++ |
-| `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults |
+| `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults; may be repeated, later files take precedence (tables and include lists are merged) |
 | `-n NS` | C++ namespace |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
 | `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
@@ -110,6 +110,14 @@ myproj_chk_argument_msg = 'if (!({0})) throw std::invalid_argument({1});'
 `str = "std::to_string"`. `call_templates` covers everything else, e.g. `sort_rank`.
 See `f2cpp.example.toml`; there are no project-specific defaults except the `PROJECT_*`
 placeholders.
+
+A `function_map` entry can also be a template that converts arguments for a C API:
+`{i:cstr}` (std::string → `const char*`), `{i:ptr}` (address of an output argument),
+`{i:data}` (data pointer of an Eigen array).
+
+`examples/tixi.toml` is such a map for the TIXI XML library, generated from its `tixi.h` by
+`tools/make_tixi_config.py` (the Fortran 2003 binding and the C API share names and argument
+order). Several configuration files can be combined: `-c f2cpp.toml -c examples/tixi.toml`.
 
 ## Existing C++ code (partially translated module hierarchy)
 

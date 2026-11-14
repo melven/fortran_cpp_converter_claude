@@ -63,7 +63,9 @@ DEFAULTS = {
         "project_assert_msg": "if (!({0})) throw std::logic_error({1});",
         "project_chk_argument_msg": "if (!({0})) throw std::invalid_argument({1});",
     },
-    # called function / subroutine (lower case) -> C++ function, same arguments
+    # called function / subroutine (lower case) -> C++ function, same arguments; or a template
+    # with argument conversions: "c_fn({0}, {1:cstr}, {2:ptr}, {3:data})"
+    #   {i:cstr} std::string -> const char*, {i:ptr} address (output argument), {i:data} Eigen data pointer
     "function_map": {},
     "test_extensions": [".pf", ".pfunit"],     # pFUnit test files; also: modules using test_modules
     "test_modules": ["funit", "pfunit", "pfunit_mod"],
@@ -78,14 +80,17 @@ DEFAULTS = {
 
 def load(path=None, **overrides):
     cfg = copy.deepcopy(DEFAULTS)
-    if path:
-        with open(path, "rb") as f:
+    for p in ([path] if isinstance(path, str) else path or []):     # later files override earlier ones
+        with open(p, "rb") as f:
             user = tomllib.load(f)
         for key, val in user.items():
             if key not in cfg:
-                raise SystemExit(f"f2cpp: unknown config key '{key}' in {path}")
+                raise SystemExit(f"f2cpp: unknown config key '{key}' in {p}")
             if isinstance(cfg[key], dict):
                 cfg[key].update(val)
+            elif isinstance(cfg[key], list) and key in ("extra_includes", "test_includes", "ignore_modules",
+                                                         "pre_patches", "namespace_map"):
+                cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
             else:
                 cfg[key] = val
     for key in ("call_templates", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names

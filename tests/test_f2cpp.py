@@ -314,3 +314,20 @@ def test_interface_bodies_of_external_procedures(tmp_path):
     assert 'rc = apiAddText(node.handle, node.path, "type");' in cpp     # resolved: keyword arguments ordered
     info = report.files[path]["info"]
     assert not any(c.startswith(("external-function", "unknown-name")) for c in info)
+
+
+def test_tixi_function_map(tmp_path):
+    (tmp_path / "t_mod.F90").write_text(
+        "module t_mod\nuse tixi, only: tixiAddTextAttribute, tixiGetDoubleElement, SUCCESS\ncontains\n"
+        "subroutine s(h, path, v, ierr)\ninteger, intent(in) :: h\ncharacter(len=*), intent(in) :: path\n"
+        "real(kind=8), intent(out) :: v\ninteger, intent(out) :: ierr\ninteger :: rc\n"
+        "rc = tixiAddTextAttribute(h, trim(path), 'type', 'x' // path)\n"
+        "rc = tixiGetDoubleElement(h, path, v)\nend subroutine\nend module\n")
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), os.path.join(HERE, "..", "examples", "tixi.toml")])
+    path = str(tmp_path / "t_mod.F90")
+    report, _ = translate([path], c, str(tmp_path))
+    cpp = (tmp_path / "t_mod.cpp").read_text()
+    assert 'rc = tixiAddTextAttribute(h, std::string(path).c_str(), "type", std::string("x" + path).c_str());' in cpp
+    assert "rc = tixiGetDoubleElement(h, std::string(path).c_str(), &v);" in cpp
+    assert "#include <tixi.h>" in (tmp_path / "t_mod.hpp").read_text()
+    assert not report.files[path]["missing"] and '"project_math.hpp"' in c["extra_includes"]

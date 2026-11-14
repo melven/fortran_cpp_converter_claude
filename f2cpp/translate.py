@@ -290,7 +290,7 @@ class Translator:
             return self.subscript(self.x_Name(name_node), v, items_of(args))
         if n in self.cfg["function_map"]:
             fn = self.cfg["function_map"][n]
-            return X(f"{fn}({', '.join(self.plain_args(items_of(args)))})", 0,
+            return X(self.mapped_call(n, items_of(args)), 0,
                      "character" if fn == "std::to_string" else "unknown")
         p = self.lookup_proc(n)
         if p is not None:
@@ -305,6 +305,28 @@ class Translator:
             return X(f"{self.prog.type_name(n, self.mod)}{{{args_c}}}", 0, "type", tname=n)
         self.report.add("info", "external-function:" + n)
         return self.unknown_ref(cname(str(name_node)), items_of(args))
+
+    def mapped_call(self, n, args):
+        """call of a function from the function_map (plain rename or template with conversions)"""
+        fn = self.cfg["function_map"][n]
+        if "{" not in fn:
+            return f"{fn}({', '.join(self.plain_args(args))})"
+        xs = [self.expr(node) for _, node in map(self.split_arg, args) if not self.is_err(node)]
+
+        def sub(m):
+            i, conv = int(m.group(1)), m.group(2)
+            if i >= len(xs):
+                raise Untranslatable("function-map-arguments:" + n)
+            x = xs[i]
+            code = self.matrix(x)
+            if conv == "cstr":
+                return code if re.fullmatch(r'"([^"\\]|\\.)*"', code) else f"std::string({code}).c_str()"
+            if conv == "ptr":
+                return "&" + par(x, P_UNARY)
+            if conv == "data":
+                return par(x) + ".data()"
+            return code
+        return re.sub(r"\{(\d+)(?::(\w+))?\}", sub, fn)
 
     def unknown_ref(self, base, subs):
         """name(...) of unknown kind: an array section if it has a triplet, else passed through as call"""
@@ -934,7 +956,7 @@ class Translator:
                     self.emit(ind, f"{s_name}.clear();")
                 return
             if n in self.cfg["function_map"]:
-                self.emit(ind, f"{self.cfg['function_map'][n]}({', '.join(self.plain_args(args))});")
+                self.emit(ind, self.mapped_call(n, args) + ";")
                 return
             if n in self.cfg["call_templates"]:
                 codes = self.plain_args(args)
