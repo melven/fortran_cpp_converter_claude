@@ -90,6 +90,16 @@ class ModuleEmitter:
                 tr.fortran_comment(stmt, ind, f"declaration of '{v.cname}' not translated ({e.category})")
         for t, ds in decls:
             tr.emit(ind, f"{t} {', '.join(ds)};")
+        self.warn_lower_bounds(tr, [vars_[n] for n in names if n not in skip], ind)
+
+    def warn_lower_bounds(self, tr, variables, ind):
+        """C++ arrays are 0-based; indices of arrays with a Fortran lower bound /= 1 are shifted"""
+        for v in variables:
+            lbs = [str(lo).replace(" ", "") for lo, _ in v.dims if lo is not None]
+            if any(lb != "1" for lb in lbs):
+                self.report.add("todo", "lower-bound")
+                tr.emit(ind, f"// {TODO}: '{v.cname}' has lower bound(s) {', '.join(lbs)} in Fortran; "
+                             "indices are shifted accordingly, check its uses")
 
     def signature(self, tr, p, decl, qualify=""):
         """-> (return type, name, parameter list, trailing qualifiers)"""
@@ -230,6 +240,7 @@ class ModuleEmitter:
             head = self.proto(tr, p, decl=False, qualify=qualify)
         tr.emit(ind, head)
         tr.emit(ind, "{")
+        self.warn_lower_bounds(tr, [p.vars[a] for a in p.args if a in p.vars], ind + 1)
         skip = set(p.args)
         body_start = len(tr.out)
         has_result_decl = False
