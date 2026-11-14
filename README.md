@@ -55,7 +55,7 @@ with less precise output (calls are passed through unchanged).
 | `do`, `do while`, `if`, `select case`, `exit`, `cycle` | `for`, `while`, `if` / `else if` chains, `break`, `continue` |
 | `allocate` / `deallocate` / `allocated` | `resize` / `make_unique` / `size() > 0` ... |
 | `PROJECT_CHK_IERR(call f(a, ierr), ierr)` | `f(a);` — the `ierr` argument is removed everywhere |
-| `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `PROJECT_ASSERT(c);` ... (C++ macros that throw) |
+| `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `if (!(c)) throw std::logic_error(...);` / `std::invalid_argument` (`call_templates`) |
 | `PROJECT_ALLOCATE(a(n), ierr)` | `a.resize(n);` |
 | other statements using `ierr` | kept as comment (`ierr = 0`, `if (ierr /= 0) return` are dropped) |
 | pFUnit `@test`, `@before`/`@after` | `TEST` / `TEST_F` with fixture |
@@ -65,18 +65,23 @@ with less precise output (calls are passed through unchanged).
 
 ## Macros
 
-The macro names are configuration; the defaults are placeholders (`PROJECT_...`):
+The macro names are configuration; the defaults are placeholders (`PROJECT_...`). No macros
+remain on the C++ side:
 
 ```toml
 [macros]                                   # macro -> Fortran replacement before parsing
-MYPROJ_CHK_IERR = "{0}"                    # disappears: plain call, exceptions propagate
-MYPROJ_ALLOCATE = "allocate({0})"          # disappears: resize / make_unique
-MYPROJ_ASSERT = "call MYPROJ_ASSERT({0})"  # stays: MYPROJ_ASSERT(cond); must exist in C++
-MYPROJ_CHK_ARGUMENT = "call MYPROJ_CHK_ARGUMENT({0})"
-```
+MYPROJ_CHK_IERR = "{0}"                    # plain call, exceptions propagate
+MYPROJ_ALLOCATE = "allocate({0})"          # resize / make_unique
+MYPROJ_ASSERT = "call myproj_assert({0})"
+MYPROJ_CHK_ARGUMENT = "call myproj_chk_argument({0})"
 
-Only the macros of the `call NAME(...)` form are needed on the C++ side (one argument,
-throwing). The C++ name may differ from the Fortran one: `"call my_assert({0})"`.
+[call_templates]                           # call (lower case) -> C++ statement
+myproj_assert = 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");'
+myproj_chk_argument = 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");'
+
+[include_map]
+"myproj_macros.h" = ""                     # drop the Fortran macro header
+```
 
 ## Existing C++ code (partially translated module hierarchy)
 

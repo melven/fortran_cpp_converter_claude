@@ -787,7 +787,12 @@ class Translator:
                 return self.pf_assert(n[len(ASSERT_PREFIX) + 6:], args, ind)
             p = self.lookup_proc(n)
             if n in self.cfg["call_templates"]:
-                self.emit(ind, self.cfg["call_templates"][n].format(*self.plain_args(args)))
+                codes = self.plain_args(args)
+
+                def sub(m):
+                    c = codes[int(m.group(1))]
+                    return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) else c
+                self.emit(ind, re.sub(r"\{(\d+)(:str)?\}", sub, self.cfg["call_templates"][n]))
                 return
             if p is not None:
                 code = self.call_code(p, args)

@@ -38,7 +38,7 @@ DEFAULTS = {
     # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing.
     # Replace the names by the real ones in the config file; a [macros] table there extends
     # these defaults. "{0}" / "allocate({0})": the macro disappears in C++.
-    # "call NAME({0})": NAME({0}); is emitted, i.e. NAME must exist as C++ macro / function.
+    # "call NAME({0})": translated with the call_templates entry of NAME (lower case).
     "macros": {
         "PROJECT_CHK_IERR": "{0}",
         "PROJECT_ALLOCATE": "allocate({0})",
@@ -47,8 +47,12 @@ DEFAULTS = {
     },
     # [[regex, replacement], ...] applied to the Fortran source before anything else
     "pre_patches": [],
-    # called procedure (lower case) -> C++ statement template ({0}, {1}: translated arguments)
-    "call_templates": {},
+    # called procedure (lower case) -> C++ statement template
+    # {0}, {1}: translated arguments; {0:str}: argument as text for use inside a string literal
+    "call_templates": {
+        "project_assert": 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");',
+        "project_chk_argument": 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");',
+    },
     "gtest_assert": "ASSERT",      # pFUnit asserts abort the test -> ASSERT_*; or "EXPECT"
     "keep_original": False,        # emit the Fortran statement as comment above each statement
 }

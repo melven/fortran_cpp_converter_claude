@@ -401,7 +401,7 @@ class ModuleEmitter:
         c = [BANNER.format(src=os.path.basename(self.src)), f'#include "{mod.name}{cfg["header_ext"]}"', ""]
         c += self.std_includes(body, [("algorithm", ["std::max", "std::min"]),
                                       ("cmath", ["std::"]), ("limits", ["numeric_limits"]),
-                                      ("stdexcept", ["std::runtime_error"]), ("typeinfo", ["typeid("])])
+                                      ("stdexcept", ["throw std::"]), ("typeinfo", ["typeid("])])
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \

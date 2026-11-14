@@ -75,7 +75,8 @@ def test_expressions(out):
     assert "P = As * P;" in cpp
     assert "aug(Eigen::seq(0, n - 1), Eigen::seq(n, n + p - 1)) = B;" in cpp
     assert "nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;" in cpp
-    assert "PROJECT_ASSERT(s <= max_squarings);" in cpp
+    assert 'if (!(s <= max_squarings)) throw std::logic_error("assertion failed: s <= max_squarings");' in cpp
+    assert "PROJECT_" not in cpp and "project_macros" not in cpp
     assert "solve_inplace(D, N);" in cpp
     lu = read(out, "block_lu_mod.cpp")
     assert "this->diag[i - 1] = this->diag[i - 1] - this->lower[i - 2] * this->upper[i - 2];" in lu
