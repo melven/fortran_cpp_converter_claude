@@ -85,10 +85,12 @@ MYPROJ_CHK_IERR = "{0}"                    # plain call, exceptions propagate
 MYPROJ_ALLOCATE = "allocate({0})"          # resize / make_unique
 MYPROJ_ASSERT = "call myproj_assert({0})"
 MYPROJ_CHK_ARGUMENT = "call myproj_chk_argument({0})"
+MYPROJ_CHK_ARGUMENT_MSG = "call myproj_chk_argument_msg({0}, {1})"   # with message
 
 [call_templates]                           # call (lower case) -> C++ statement
 myproj_assert = 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");'
 myproj_chk_argument = 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");'
+myproj_chk_argument_msg = 'if (!({0})) throw std::invalid_argument({1});'
 
 [include_map]
 "myproj_macros.h" = ""                     # drop the Fortran macro header

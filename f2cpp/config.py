@@ -48,6 +48,8 @@ DEFAULTS = {
         "PROJECT_ALLOCATE": "allocate({0})",
         "PROJECT_ASSERT": "call PROJECT_ASSERT({0})",
         "PROJECT_CHK_ARGUMENT": "call PROJECT_CHK_ARGUMENT({0})",
+        "PROJECT_ASSERT_MSG": "call PROJECT_ASSERT_MSG({0}, {1})",
+        "PROJECT_CHK_ARGUMENT_MSG": "call PROJECT_CHK_ARGUMENT_MSG({0}, {1})",
     },
     # [[regex, replacement], ...] applied to the Fortran source before anything else
     "pre_patches": [],
@@ -56,6 +58,8 @@ DEFAULTS = {
     "call_templates": {
         "project_assert": 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");',
         "project_chk_argument": 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");',
+        "project_assert_msg": "if (!({0})) throw std::logic_error({1});",
+        "project_chk_argument_msg": "if (!({0})) throw std::invalid_argument({1});",
     },
     # called function / subroutine (lower case) -> C++ function, same arguments
     "function_map": {},

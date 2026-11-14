@@ -134,6 +134,8 @@ def test_features(out):
     assert "for (std::size_t k_ = 0; k_ < h.phi.size(); ++k_) phi[k_] = h.phi[k_].cast<scalar>();" in cpp
     assert "copy = h.phi;" in cpp
     assert "vec grp_tmp;\n  // TODO(f2cpp): Fortran array pointer 'grp_tmp' is translated as an owning array" in hpp
+    assert '    throw std::invalid_argument("Invalid kind");' in cpp
+    assert 'if (!(k < 1000)) throw std::logic_error("kind too large: " + std::to_string(k));' in cpp
     assert "class Grid {" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
     assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder {" in hpp
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp

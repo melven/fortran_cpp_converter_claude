@@ -208,6 +208,8 @@ contains
     integer, intent(in) :: k
     character(len=*), intent(in) :: label
     character(len=64) :: text
+    integer :: ierr
+    ierr = 0
     select case (k)
     case (:0)
       text = 'non-positive'
@@ -217,6 +219,8 @@ contains
       text = 'medium ' // str(k) // '/' // str(max_items)
     case default
       text = 'large'
+      PROJECT_CHK_ARGUMENT_MSG(.false., 'Invalid kind', ierr)
+      PROJECT_ASSERT_MSG(k < 1000, 'kind too large: ' // str(k), ierr)
     end select
   end function describe_kind
 

@@ -903,7 +903,8 @@ class Translator:
                 def sub(m):
                     c = codes[int(m.group(1))]
                     return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) else c
-                self.emit(ind, re.sub(r"\{(\d+)(:str)?\}", sub, self.cfg["call_templates"][n]))
+                text = re.sub(r"\{(\d+)(:str)?\}", sub, self.cfg["call_templates"][n])
+                self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
                 return
             if p is not None:
                 code = self.call_code(p, args)
