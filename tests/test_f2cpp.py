@@ -1,0 +1,161 @@
+"""End-to-end tests: translate the synthetic corpus, compile it and compare with gfortran."""
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from f2cpp import config
+from f2cpp.cli import translate
+from f2cpp.prepass import prepass
+
+HERE = os.path.dirname(__file__)
+CORPUS = os.path.join(HERE, "corpus")
+SUPPORT = os.path.join(HERE, "support")
+EIGEN = "/usr/include/eigen3"
+MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod"]
+
+needs_cxx = pytest.mark.skipif(not (shutil.which("g++") and os.path.isdir(EIGEN)), reason="g++/Eigen missing")
+
+
+def run(cmd, cwd):
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    assert r.returncode == 0, f"{' '.join(cmd)}\n{r.stdout}\n{r.stderr}"
+    return r.stdout
+
+
+def cfg(**kw):
+    return config.load(os.path.join(SUPPORT, "f2cpp.toml"), **kw)
+
+
+@pytest.fixture(scope="module")
+def out(tmp_path_factory):
+    d = str(tmp_path_factory.mktemp("out"))
+    files = [os.path.join(CORPUS, m + ".F90") for m in MODULES] + [os.path.join(CORPUS, "test_expm_mod.pf")]
+    report, _ = translate(files, cfg(), d, interface_only=[os.path.join(CORPUS, "legacy_mod.F90")])
+    return d, report
+
+
+def read(out, name):
+    with open(os.path.join(out[0], name)) as f:
+        return f.read()
+
+
+def cxx(out, name):
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", name + ".cpp"],
+        out[0])
+
+
+def test_prepass_macros():
+    c = config.load()
+    src = "PROJECT_CHK_IERR(call foo(a, &\n   & b, ierr), ierr)\nPROJECT_ALLOCATE(x(n, m), ierr)\n" \
+          "PROJECT_ASSERT(f(a, b) > 0, ierr) ! PROJECT_ASSERT(x, ierr)\n#ifdef X\n@assertEqual(1, n)\n@test\n"
+    res = prepass(src, c).split("\n")
+    assert res[0] == "call foo(a,  b, ierr)"
+    assert res[1] == "allocate(x(n, m))"
+    assert res[2] == "call PROJECT_ASSERT(f(a, b) > 0) ! PROJECT_ASSERT(x, ierr)"
+    assert res[3] == "!F2CPP_CPP #ifdef X"
+    assert res[4] == "call f2cpp_assertEqual(1, n)"
+    assert res[5].startswith("!F2CPP_PF test")
+
+
+def test_report(out):
+    files = out[1].files
+    for name, counters in files.items():
+        if "features" in name:
+            assert set(counters["untranslated"]) == {"error-arg:If_Construct"}
+        else:
+            assert not counters["untranslated"], name
+
+
+def test_expressions(out):
+    cpp = read(out, "expm_mod.cpp")
+    assert "void expm(const Eigen::Ref<const mat>& A, scalar t, Eigen::Ref<mat> E)" in cpp
+    assert "ierr" not in cpp
+    assert "P = As * P;" in cpp
+    assert "aug(Eigen::seq(0, n - 1), Eigen::seq(n, n + p - 1)) = B;" in cpp
+    assert "nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;" in cpp
+    assert "PROJECT_ASSERT(s <= max_squarings);" in cpp
+    assert "solve_inplace(D, N);" in cpp
+    lu = read(out, "block_lu_mod.cpp")
+    assert "this->diag[i - 1] = this->diag[i - 1] - this->lower[i - 2] * this->upper[i - 2];" in lu
+    assert "this->diag.assign(nblocks, mat(bs, bs));" in lu
+    assert "for (i = this->nblocks - 1; i >= 1; --i) {" in lu
+
+
+def test_classes(out):
+    hpp = read(out, "shape_mod.hpp")
+    assert "class circle : public shape {" in hpp
+    assert "virtual scalar area() const = 0;" in hpp
+    assert "scalar area() const override;" in hpp
+    assert "virtual ~shape() = default;" in hpp
+    cpp = read(out, "shape_mod.cpp")
+    assert "this->shape::scale(factor);" in cpp
+    assert "s = std::make_unique<circle>();" in cpp
+    assert "if (typeid(s) == typeid(circle)) {" in cpp
+    lu = read(out, "block_lu_mod.hpp")
+    assert "private:" in lu and "int bs = 0;  ///< block size" in lu
+
+
+def test_features(out):
+    hpp, cpp = read(out, "features_mod.hpp"), read(out, "features_mod.cpp")
+    assert "scalar clamp(scalar x, scalar lo, scalar hi);" in hpp and "int clamp(int x, int lo, int hi);" in hpp
+    assert "std::optional<Eigen::Ref<const vec>> weights = std::nullopt" in hpp
+    assert "wrappers::Legacy legacy;" in hpp and '#include "legacy.hpp"' in hpp
+    assert "double accurate_sum(" in cpp
+    assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
+    assert "m = project::mean(this->samples(Eigen::seq(0, this->n - 1)));" in cpp
+    assert "b = (a.array() > 0.0).select(a, b);" in cpp
+    assert "} else if (k >= 3 && k <= max_items) {" in cpp
+    assert "// F: IF (ierr /= 0) THEN" in cpp
+
+
+def test_pfunit(out):
+    t = read(out, "test_expm_mod.cpp")
+    assert "TEST(test_expm_mod, test_expm_zero)" in t
+    assert "ASSERT_LE((identity(3) - E).cwiseAbs().maxCoeff(), 1.e-14);" in t
+    assert 'ASSERT_NEAR(0.0, E(0, 1), 1.e-14) << "off-diagonal";' in t
+    assert "ASSERT_ANY_THROW(expm(A, 1.0, E));" in t
+    assert "ierr" not in t
+
+
+def test_options(tmp_path):
+    c = cfg(keep_original=True, namespace="abc", array_args="plain", type_case="camel")
+    c["namespace_map"] = [["block_.*", "linalg"]]
+    translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
+    hpp = (tmp_path / "block_lu_mod.hpp").read_text()
+    cpp = (tmp_path / "block_lu_mod.cpp").read_text()
+    assert "namespace abc::linalg {" in hpp and "class BlockLu {" in hpp
+    assert "void solve(vec& x) const;" in hpp
+    assert "// F: bs = this % bs" in cpp
+
+
+@needs_cxx
+@pytest.mark.parametrize("name", MODULES + ["test_expm_mod"])
+def test_compiles(out, name):
+    cxx(out, name)
+
+
+@needs_cxx
+@pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
+def test_same_results_as_fortran(out, tmp_path):
+    d = out[0]
+    srcs = [os.path.join(CORPUS, f) for f in ("expm_mod.F90", "block_lu_mod.F90", "shape_mod.F90", "driver.F90")]
+    run(["gfortran", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-J", str(tmp_path), *srcs,
+         "-llapack", "-o", str(tmp_path / "fdriver")], CORPUS)
+    ref = run([str(tmp_path / "fdriver")], d).split()
+    run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
+         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "-llapack", "-o", "cdriver"], d)
+    res = run(["./cdriver"], d).split()
+    assert len(res) == len(ref) == 26
+    for a, b in zip(res, ref):
+        assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
+
+
+@needs_cxx
+@pytest.mark.skipif(not os.path.exists("/usr/include/gtest/gtest.h"), reason="googletest missing")
+def test_translated_unit_tests_pass(out):
+    d = out[0]
+    run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "test_expm_mod.cpp", "expm_mod.cpp",
+         "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
+    assert "[  PASSED  ] 5 tests." in run(["./gt"], d)

@@ -1,0 +1,11 @@
+namespace = "project"
+extra_includes = ['"project_math.hpp"', '"lapack_compat.hpp"']
+
+[include_map]
+"project_macros.h" = "project_macros.hpp"
+
+[type_map]
+legacy_type = "wrappers::Legacy"
+
+[module_headers]
+legacy_mod = "legacy.hpp"

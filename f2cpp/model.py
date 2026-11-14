@@ -1,0 +1,433 @@
+"""Symbol table built from the fparser2 parse tree."""
+import re
+from dataclasses import dataclass, field
+
+from fparser.two import Fortran2003 as F
+
+CPP_KEYWORDS = set("""alignas alignof and asm auto bool break case catch char class const constexpr
+continue decltype default delete do double else enum explicit export extern false float for friend goto
+if inline int long mutable namespace new noexcept not nullptr operator or private protected public
+register return short signed sizeof static struct switch template this throw true try typedef typeid
+typename union unsigned using virtual void volatile while xor""".split())
+
+
+def cls(n):
+    return type(n).__name__
+
+
+def lname(n):
+    return str(n).strip().lower()
+
+
+def items_of(n):
+    """children of a *_List node; a single node is returned as one-element list"""
+    if n is None:
+        return []
+    if cls(n).endswith("_List") or cls(n) in ("Ac_Value_List",):
+        return list(n.items)
+    return [n]
+
+
+def cname(name):
+    return name + "_" if name in CPP_KEYWORDS else name
+
+
+@dataclass
+class Var:
+    name: str                    # lower case
+    cname: str                   # spelling used in C++
+    base: str = "unknown"        # real integer logical character complex type unknown
+    tname: str = None            # derived type name (lower case)
+    kind: str = None
+    rank: int = 0
+    dims: list = field(default_factory=list)   # [(lower node|None, upper node|None)]
+    attrs: set = field(default_factory=set)    # allocatable pointer optional parameter save target value
+    intent: str = None
+    polymorphic: bool = False
+    init: object = None
+    access: str = None
+    is_dummy: bool = False
+    is_this: bool = False
+    is_const: bool = False
+    force_ptr: bool = False      # select-type alias etc.
+    node: object = None
+    array_ref = True             # class attribute: config array_args == "ref"
+
+    def has(self, a):
+        return a in self.attrs
+
+    @property
+    def opt_kind(self):
+        """representation of an optional dummy: std::optional (by value) or pointer"""
+        if not (self.is_dummy and self.has("optional")):
+            return None
+        if self.rank == 0 and self.base not in ("type", "character") and self.intent == "in":
+            return "optional"
+        if Var.array_ref and 0 < self.rank <= 2 and self.base in ("real", "integer", "logical") \
+                and not (self.has("allocatable") or self.has("pointer")):
+            return "optional"       # std::optional<Eigen::Ref<...>>
+        return "ptr"
+
+    @property
+    def ptr_like(self):
+        if self.is_this or self.force_ptr or self.opt_kind:
+            return True
+        if self.rank == 0 and self.base == "type" and (self.has("allocatable") or self.has("pointer")):
+            return True
+        return self.rank == 0 and self.has("pointer")
+
+
+@dataclass
+class Proc:
+    name: str
+    cname: str
+    module: object
+    kind: str                    # subroutine | function
+    args: list                   # dummy names (lower case)
+    vars: dict
+    result: str = None
+    node: object = None
+    method_of: str = None        # type name if type-bound
+    bind_name: str = None
+    pass_arg: str = None
+    generic: str = None          # generic name this specific is emitted as
+    is_test: str = None          # pFUnit role: test | before | after
+    doc: list = field(default_factory=list)
+
+
+@dataclass
+class Binding:
+    name: str
+    impl: str = None
+    iface: str = None
+    deferred: bool = False
+    nopass: bool = False
+    pass_arg: str = None
+    access: str = None
+    generic: str = None
+
+
+@dataclass
+class TypeDef:
+    name: str
+    module: object
+    parent: str = None
+    abstract: bool = False
+    comps: dict = field(default_factory=dict)
+    bindings: dict = field(default_factory=dict)
+    generics: dict = field(default_factory=dict)
+    finals: list = field(default_factory=list)
+    private_comps: bool = False
+    children: set = field(default_factory=set)
+    node: object = None
+
+
+@dataclass
+class Module:
+    name: str
+    node: object
+    uses: list = field(default_factory=list)
+    vars: dict = field(default_factory=dict)
+    types: dict = field(default_factory=dict)
+    procs: dict = field(default_factory=dict)
+    ifaces: dict = field(default_factory=dict)      # abstract interface bodies
+    generics: dict = field(default_factory=dict)    # generic name -> [specific names]
+    default_access: str = "public"
+    access: dict = field(default_factory=dict)
+    is_test: bool = False
+
+    def is_public(self, name, own=None):
+        return (own or self.access.get(name) or self.default_access) == "public"
+
+
+def parse_type_spec(ts, var):
+    if cls(ts) == "Intrinsic_Type_Spec":
+        t = str(ts.items[0]).upper()
+        var.base = {"REAL": "real", "DOUBLE PRECISION": "real", "INTEGER": "integer",
+                    "LOGICAL": "logical", "CHARACTER": "character",
+                    "DOUBLE COMPLEX": "complex", "COMPLEX": "complex"}.get(t, "unknown")
+        if t.startswith("DOUBLE"):
+            var.kind = "8"
+        elif ts.items[1] is not None and var.base != "character":
+            var.kind = re.sub(r"\s|\(|\)", "", lname(ts.items[1])).replace("kind=", "")
+    elif cls(ts) == "Declaration_Type_Spec":
+        var.base = "type"
+        var.polymorphic = str(ts.items[0]).upper() == "CLASS"
+        var.tname = lname(ts.items[1])
+    return var
+
+
+def parse_array_spec(spec):
+    dims = []
+    for s in items_of(spec):
+        its = getattr(s, "items", None)
+        if cls(s) == "Assumed_Size_Spec":
+            dims.extend(parse_array_spec(s.items[0]))
+            dims.append((s.items[1], None))
+        elif its is not None and len(its) == 2:
+            dims.append((its[0], its[1]))
+        else:
+            dims.append((None, None))
+    return dims
+
+
+def parse_decl(stmt, into, order=None):
+    """Type_Declaration_Stmt / Data_Component_Def_Stmt -> Var objects"""
+    ts, attrs, ents = stmt.items
+    proto = parse_type_spec(ts, Var("", ""))
+    aset, intent, access, dimspec = set(), None, None, None
+    for a in items_of(attrs):
+        s = re.sub(r"\s", "", str(a)).lower()
+        if s.startswith("intent("):
+            intent = s[7:-1]
+        elif s.startswith("dimension"):
+            dimspec = a.items[1]
+        elif s in ("public", "private"):
+            access = s
+        else:
+            aset.add(s)
+    res = []
+    for e in items_of(ents):
+        name, arr, _clen, init = e.items[:4]
+        n = lname(name)
+        v = into.get(n) or Var(n, cname(str(name)))
+        v.base, v.tname, v.kind, v.polymorphic = proto.base, proto.tname, proto.kind, proto.polymorphic
+        v.attrs, v.intent, v.access, v.node = set(aset), intent, access, stmt
+        v.dims = parse_array_spec(arr if arr is not None else dimspec)
+        v.rank = len(v.dims)
+        v.init = init.items[1] if init is not None and cls(init) == "Initialization" else None
+        if init is not None and cls(init) != "Initialization":
+            v.init = init
+        into[n] = v
+        res.append(v)
+    return res
+
+
+def collect_proc(node, module):
+    content = [c for c in node.content if cls(c) != "Comment"]
+    stmt = content[0]
+    kind = "function" if "Function" in cls(stmt) else "subroutine"
+    name = str(stmt.items[1])
+    args = [lname(a) for a in items_of(stmt.items[2])]
+    p = Proc(lname(name), cname(name), module, kind, args, {}, node=node)
+    p.doc = [c for c in node.content[:node.content.index(stmt)] if cls(c) == "Comment"]
+    if kind == "function":
+        suffix = stmt.items[3]
+        p.result = lname(suffix.items[0]) if suffix is not None and suffix.items[0] is not None else p.name
+        for pre in (stmt.items[0].items if stmt.items[0] is not None else []):
+            if cls(pre) in ("Intrinsic_Type_Spec", "Declaration_Type_Spec"):
+                p.vars[p.result] = parse_type_spec(pre, Var(p.result, cname(p.result)))
+    for c in content[1:]:
+        if cls(c) == "Specification_Part":
+            for d in c.content:
+                if cls(d) == "Type_Declaration_Stmt":
+                    parse_decl(d, p.vars)
+    for a in args:
+        v = p.vars.setdefault(a, Var(a, cname(a)))
+        v.is_dummy = True
+        v.is_const = v.intent == "in"
+    return p
+
+
+def collect_type(node, module):
+    stmt = node.content[0]
+    t = TypeDef(lname(stmt.items[1]), module, node=node)
+    for a in items_of(stmt.items[0]):
+        s = lname(a)
+        if s.startswith("extends"):
+            t.parent = lname(a.items[1])
+        elif s == "abstract":
+            t.abstract = True
+    for c in node.content[1:]:
+        k = cls(c)
+        if k == "Private_Components_Stmt":
+            t.private_comps = True
+        elif k == "Component_Part":
+            for d in c.content:
+                if cls(d) == "Data_Component_Def_Stmt":
+                    parse_decl(d, t.comps)
+        elif k == "Type_Bound_Procedure_Part":
+            for b in c.content:
+                if cls(b) == "Specific_Binding":
+                    iface, attrs, _, bname, impl = b.items
+                    bd = Binding(lname(bname), lname(impl) if impl is not None else lname(bname),
+                                 lname(iface) if iface is not None else None)
+                    for a in items_of(attrs):
+                        s = re.sub(r"\s", "", lname(a))
+                        if s == "deferred":
+                            bd.deferred = True
+                        elif s == "nopass":
+                            bd.nopass = True
+                        elif s.startswith("pass("):
+                            bd.pass_arg = s[5:-1]
+                        elif s in ("public", "private"):
+                            bd.access = s
+                    t.bindings[bd.name] = bd
+                elif cls(b) == "Generic_Binding":
+                    t.generics[lname(b.items[1])] = [lname(x) for x in items_of(b.items[2])]
+                elif cls(b) == "Final_Binding":
+                    t.finals += [lname(x) for x in items_of(b.items[1])]
+    return t
+
+
+def collect_module(node):
+    m = Module(lname(node.content[0].items[1]), node)
+    for part in node.content:
+        if cls(part) == "Specification_Part":
+            for s in part.content:
+                k = cls(s)
+                if k == "Use_Stmt":
+                    m.uses.append(lname(s.items[2]))
+                elif k == "Access_Stmt":
+                    acc = str(s.items[0]).lower()
+                    if s.items[1] is None:
+                        m.default_access = acc
+                    for n in items_of(s.items[1]):
+                        m.access[lname(n)] = acc
+                elif k == "Type_Declaration_Stmt":
+                    parse_decl(s, m.vars)
+                elif k == "Derived_Type_Def":
+                    t = collect_type(s, m)
+                    m.types[t.name] = t
+                elif k == "Interface_Block":
+                    head = s.content[0].items[0]
+                    for b in s.content[1:-1]:
+                        if cls(b) in ("Function_Body", "Subroutine_Body"):
+                            p = collect_proc(b, m)
+                            m.ifaces[p.name] = p
+                        elif cls(b) == "Procedure_Stmt" and head is not None and cls(head) == "Name":
+                            m.generics.setdefault(lname(head), []).extend(
+                                lname(x) for x in items_of(b.items[0]))
+        elif cls(part) == "Module_Subprogram_Part":
+            for s in part.content:
+                if cls(s) in ("Subroutine_Subprogram", "Function_Subprogram"):
+                    p = collect_proc(s, m)
+                    m.procs[p.name] = p
+    # generic interfaces -> C++ overloads
+    for g, specifics in m.generics.items():
+        for sname in specifics:
+            if sname in m.procs:
+                m.procs[sname].generic = g
+    # type-bound procedures -> methods
+    for t in m.types.values():
+        for g, specifics in t.generics.items():
+            for b in specifics:
+                if b in t.bindings:
+                    t.bindings[b].generic = g
+        for b in t.bindings.values():
+            if b.deferred:
+                p = m.ifaces.get(b.iface)
+                if p is not None and not b.nopass and p.args and not p.pass_arg:
+                    p.pass_arg = b.pass_arg or p.args[0]
+                    p.vars[p.pass_arg].is_this = True
+                continue
+            p = m.procs.get(b.impl)
+            if p is None or p.method_of:
+                continue
+            p.method_of, p.bind_name = t.name, b.generic or b.name
+            if not b.nopass and p.args:
+                p.pass_arg = b.pass_arg or p.args[0]
+                p.vars[p.pass_arg].is_this = True
+        for f in t.finals:
+            if f in m.procs and m.procs[f].args:
+                p = m.procs[f]
+                p.method_of, p.bind_name, p.pass_arg = t.name, "~", p.args[0]
+                p.vars[p.pass_arg].is_this = True
+    return m
+
+
+class Program:
+    """all parsed modules"""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.modules = {}
+        Var.array_ref = cfg["array_args"] == "ref"
+
+    def add(self, module):
+        self.modules[module.name] = module
+
+    def finish(self):
+        for m in self.modules.values():
+            for t in m.types.values():
+                p = self.find_type(t.parent, m) if t.parent else None
+                if p:
+                    p.children.add(t.name)
+
+    def visible(self, module):
+        seen, todo = [], [module]
+        while todo:
+            m = todo.pop(0)
+            if m in seen:
+                continue
+            seen.append(m)
+            todo += [self.modules[u] for u in m.uses if u in self.modules]
+        return seen
+
+    def find_type(self, tname, module):
+        for m in self.visible(module):
+            if tname in m.types:
+                return m.types[tname]
+        for m in self.modules.values():
+            if tname in m.types:
+                return m.types[tname]
+        return None
+
+    def ancestors(self, t):
+        while t is not None and t.parent:
+            t = self.find_type(t.parent, t.module)
+            if t is not None:
+                yield t
+
+    def polymorphic(self, t):
+        return t.abstract or bool(t.children) or bool(t.parent)
+
+    def find_component(self, t, name):
+        for tt in [t, *self.ancestors(t)]:
+            if name in tt.comps:
+                return tt.comps[name]
+        return None
+
+    def find_binding(self, t, name):
+        for tt in [t, *self.ancestors(t)]:
+            if name in tt.bindings:
+                return tt, tt.bindings[name]
+            if name in tt.generics:
+                return tt, None
+        return None, None
+
+    def binding_proc(self, t, b):
+        """procedure providing the signature of a binding"""
+        if b is None:
+            return None
+        if b.deferred:
+            return t.module.ifaces.get(b.iface)
+        return t.module.procs.get(b.impl)
+
+    def overrides(self, t, bname):
+        return any(bname in a.bindings for a in self.ancestors(t))
+
+    # naming -----------------------------------------------------------
+    def type_name(self, tname, from_module=None):
+        cfg = self.cfg
+        if tname in cfg["type_map"]:
+            return cfg["type_map"][tname]
+        n = tname
+        if cfg["type_suffix"] and n.endswith(cfg["type_suffix"]):
+            n = n[:-len(cfg["type_suffix"])]
+        if cfg["type_case"] == "camel":
+            n = "".join(w.capitalize() for w in n.split("_"))
+        n = cname(n)
+        t = self.find_type(tname, from_module) if from_module else None
+        if t is not None and from_module is not None:
+            ns = self.namespace(t.module.name)
+            if ns != self.namespace(from_module.name):
+                n = f"{ns}::{n}"
+        return n
+
+    def namespace(self, modname):
+        ns = self.cfg["namespace"]
+        for pattern, child in self.cfg["namespace_map"]:
+            if re.fullmatch(pattern, modname):
+                return f"{ns}::{child}" if child else ns
+        return ns

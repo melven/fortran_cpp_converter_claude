@@ -1,0 +1,23 @@
+[project]
+name = "f2cpp"
+version = "0.1.0"
+description = "Rule-based Fortran 2003 -> C++ (Eigen, googletest) source translator"
+requires-python = ">=3.11"
+dependencies = ["fparser>=0.2"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+f2cpp = "f2cpp.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["f2cpp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
