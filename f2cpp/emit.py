@@ -52,10 +52,8 @@ class ModuleEmitter:
         if sizes and not member:
             if st == "eigen":
                 return f"{code}({', '.join(sizes)})"
-            if st == "vec3":
-                return f"{code}({sizes[2]}, {tr.eigen_type(v, 2)}({sizes[0]}, {sizes[1]}))"
-            if st == "stdvec":
-                return f"{code}({sizes[0]})"
+            if st in ("vec3", "stdvec"):
+                return f"{code}({tr.nested_ctor(v, sizes)})"
         elif sizes and member:
             if st == "eigen":
                 fn = f"{t}({', '.join(sizes)})"
@@ -137,8 +135,14 @@ class ModuleEmitter:
         tr.emit(ind, f"class {name}{base} {{")
         tr.emit(ind, "public:")
         mine = [p for p in t.module.procs.values() if p.method_of == t.name]
-        if any(p.is_ctor for p in mine):
+        has_dtor = any(p.bind_name == "~" for p in mine)
+        if any(p.is_ctor for p in mine) or has_dtor:
             tr.emit(ind + 1, f"{name}() = default;")
+        if has_dtor:    # a user-declared destructor suppresses the implicit move operations
+            tr.emit(ind + 1, f"{name}(const {name}&) = default;")
+            tr.emit(ind + 1, f"{name}({name}&&) = default;")
+            tr.emit(ind + 1, f"{name}& operator=(const {name}&) = default;")
+            tr.emit(ind + 1, f"{name}& operator=({name}&&) = default;")
         if poly and not t.parent and not any(p.bind_name == "~" for p in mine):
             tr.emit(ind + 1, f"virtual ~{name}() = default;")
         # flatten: fparser spreads components / comments over several nodes
@@ -239,6 +243,8 @@ class ModuleEmitter:
                         prev = d
                     elif kd in ("Use_Stmt", "Import_Stmt"):
                         pass
+                    elif kd == "Interface_Block":       # explicit interfaces of external procedures
+                        self.report.add("info", "interface-in-procedure")
                     else:
                         self.report.add("untranslated", "specification:" + kd)
                         tr.fortran_comment(d, ind + 1, "not translated")
@@ -413,10 +419,11 @@ class ModuleEmitter:
 
         body = "\n".join(cpp.out + cpp_priv.out)
         c = [BANNER.format(src=os.path.basename(self.src)), f'#include "{mod.name}{cfg["header_ext"]}"', ""]
-        c += self.std_includes(body, [("algorithm", ["std::max", "std::min"]),
+        c += self.std_includes(body, [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort"]),
                                       ("cmath", ["std::"]), ("limits", ["numeric_limits"]),
                                       ("stdexcept", ["throw std::"]),
-                                      ("string", ["std::to_string"]), ("typeinfo", ["typeid("])])
+                                      ("string", ["std::to_string"]), ("numeric", ["std::iota"]),
+                                      ("utility", ["std::move"]), ("typeinfo", ["typeid("])])
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \

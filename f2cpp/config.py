@@ -56,6 +56,10 @@ DEFAULTS = {
     "call_templates": {
         "project_assert": 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");',
         "project_chk_argument": 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");',
+        # sort_rank(x, iperm): iperm = (1-based) permutation that sorts x in ascending order
+        "sort_rank": "{1}.resize({0}.size()); std::iota({1}.begin(), {1}.end(), 1); "
+                     "std::stable_sort({1}.begin(), {1}.end(), "
+                     "[&](int i_, int j_) { return {0}(i_ - 1) < {0}(j_ - 1); });",
     },
     # called function (lower case) -> C++ function, same arguments
     "function_map": {"str": "std::to_string"},

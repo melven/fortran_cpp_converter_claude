@@ -8,7 +8,7 @@ module features_mod
   private
 
   public :: stats_type, clamp, mean, norm_inf, accumulate, describe_kind, fill, apply_scale
-  public :: holder_type, update_holder, setup_solver
+  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -36,7 +36,45 @@ module features_mod
     type(stats_type), pointer :: owned => null()
   end type holder_type
 
+  type :: grid_type
+    real, allocatable :: blocks(:, :, :, :)       !< dense blocks (bs, bs, i, j)
+    type(stats_type), allocatable :: cells(:, :)
+    real, allocatable :: spare(:)
+  end type grid_type
+
 contains
+
+  subroutine grid_demo(g, n, v, iperm, ierr)
+    type(grid_type), intent(inout) :: g
+    integer, intent(in) :: n
+    real, intent(inout) :: v(:)
+    integer, intent(in) :: iperm(:)
+    integer, intent(out) :: ierr
+    real, allocatable :: tmp(:)
+    integer, allocatable :: order(:)
+    integer :: i, j
+    interface
+      subroutine sort_rank(x, perm)
+        real, intent(in) :: x(:)
+        integer, intent(out) :: perm(:)
+      end subroutine sort_rank
+    end interface
+
+    PROJECT_ALLOCATE(g%blocks(2, 2, n, n + 1), ierr)
+    PROJECT_ALLOCATE(g%cells(n, n + 1), ierr)
+    g%blocks = 0.0
+    do j = 1, size(g%blocks, 4)
+      do i = 1, size(g%blocks, 3)
+        g%blocks(:, :, i, j) = real(i + j)
+        g%blocks(1, 2, i, j) = g%blocks(2, 1, i, j) + g%cells(i, j)%total + size(g%blocks, 1)
+      end do
+    end do
+    PROJECT_ALLOCATE(order(size(v)), ierr)
+    call sort_rank(v, order)
+    tmp = v(order)
+    v(iperm) = tmp
+    call move_alloc(tmp, g%spare)
+  end subroutine grid_demo
 
   subroutine setup_solver(lu, n, ierr)
     type(block_lu_type), intent(out) :: lu

@@ -44,7 +44,11 @@ with less precise output (calls are passed through unchanged).
 | `select type` | `typeid` (`type is`) / `dynamic_cast` (`class is`) |
 | generic interface / generic binding | overloads |
 | `real` / `real(kind=8)` | `scalar` / `kind_map` entry (`double`) |
-| `real` array rank 1 / 2 / 3 | `vec` / `mat` / `std::vector<mat>` (last index = vector index) |
+| `real` array rank 1 / 2 | `vec` / `mat` |
+| numeric array rank ≥ 3 | nested `std::vector` of `mat`: `a(:, :, i, j)` → `a[i - 1][j - 1]` |
+| array of objects / strings, rank n | n nested `std::vector`: `c(i, j)` → `c[i - 1][j - 1]` |
+| vector subscript `v(iperm)` | `v((iperm.array() - 1))` |
+| `call move_alloc(a, b)` | `b = std::move(a);` (+ `a.resize(0)`) |
 | array dummies | `const mat&` / `mat&`; `Eigen::Ref<mat>` only for out/inout dummies that receive a slice in a translated call (`array_args = "auto"`; alternatives `"plain"`, `"ref"`) |
 | `pointer` that is allocated somewhere in the module | `std::unique_ptr<T>` |
 | `pointer` dummy | reference |
@@ -86,6 +90,8 @@ myproj_chk_argument = 'if (!({0})) throw std::invalid_argument("invalid argument
 ```
 
 `function_map` renames functions in expressions (default: `str` → `std::to_string`).
+`call_templates` also serves for project helpers; default: `sort_rank(x, iperm)` →
+`std::iota` + `std::stable_sort` (1-based ascending permutation).
 
 ## Existing C++ code (partially translated module hierarchy)
 
@@ -118,7 +124,7 @@ Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
   optional objects, pointers: check by hand.
 - Not translated (kept as comment): I/O, `where`/`forall` constructs, implied-do, named
   `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, internal
-  procedures, rank > 3, vector subscripts, most string intrinsics, `program` units.
+  procedures, slices over the vector indices of nested vectors, most string intrinsics, `program` units.
 - Fortran is case-insensitive: the spelling of the declaration is used. Names differing only
   in case from other C++ names in scope are not detected.
 

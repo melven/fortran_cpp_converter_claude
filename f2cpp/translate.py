@@ -119,8 +119,29 @@ class Translator:
                 return "uptr"
             return "ptr" if v.has("pointer") else "scalar"
         if v.base in ("real", "integer", "logical", "complex"):
-            return "eigen" if v.rank <= 2 else ("vec3" if v.rank == 3 else "unsupported")
-        return "stdvec" if v.rank == 1 else "unsupported"
+            return "eigen" if v.rank <= 2 else "vec3"
+        return "stdvec"
+
+    def nest(self, v):
+        """(depth of the std::vector nesting, rank of the Eigen object stored in it)
+
+        numeric arrays of rank n > 2: (nested) std::vector of matrices, a(:, :, i, j) -> a[i][j]
+        arrays of objects / strings of rank n: n nested std::vector, a(i, j) -> a[i][j]"""
+        st = self.storage(v)
+        return (v.rank - 2, 2) if st == "vec3" else (v.rank, 0) if st == "stdvec" else (0, v.rank)
+
+    def leaf_type(self, v):
+        return self.eigen_type(v, 2) if self.storage(v) == "vec3" else self.elem_type(v)
+
+    def nested_ctor(self, v, dims):
+        """constructor / assign() arguments of a nested std::vector with the sizes dims"""
+        depth, lr = self.nest(v)
+        t = self.leaf_type(v)
+        cur = f"{t}({', '.join(dims[:lr])})" if lr else ""
+        for n in reversed(dims[lr + 1:]):
+            cur = f"std::vector<{t}>({n}{', ' + cur if cur else ''})"
+            t = f"std::vector<{t}>"
+        return f"{dims[lr]}{', ' + cur if cur else ''}"
 
     def eigen_type(self, v, rank):
         cfg, e = self.cfg, self.elem_type(v)
@@ -143,12 +164,10 @@ class Translator:
             return f"{e}*"
         if st == "eigen":
             return self.eigen_type(v, v.rank)
-        if st == "vec3":
-            return f"std::vector<{self.eigen_type(v, 2)}>"
-        if st == "stdvec":
-            return f"std::vector<{e}>"
-        self.report.add("todo", "rank>3")
-        return f"std::vector<{e}> /* {TODO}: rank {v.rank} array */"
+        t = self.leaf_type(v)
+        for _ in range(self.nest(v)[0]):
+            t = f"std::vector<{t}>"
+        return t
 
     def param_type(self, v):
         """type of a dummy argument"""
@@ -159,7 +178,7 @@ class Translator:
                 f"const std::optional<{t}>&"
         if v.opt_kind == "optref":
             return f"std::optional<std::reference_wrapper<{'const ' if const else ''}{t}>>"
-        if v.has("allocatable") or v.has("pointer") or st in ("vec3", "stdvec", "unsupported"):
+        if v.has("allocatable") or v.has("pointer") or st in ("vec3", "stdvec"):
             return f"const {t}&" if const else f"{t}&"
         if st == "eigen":
             if self.cfg["array_args"] == "ref" or (v.needs_ref and self.cfg["array_args"] == "auto"):
@@ -326,6 +345,11 @@ class Translator:
     def sub_code(self, s, lb):
         """-> ('idx'|'all'|'seq', code)"""
         if cls(s) != "Subscript_Triplet":
+            x = self.expr(s)
+            if x.rank == 1 and (lb is None or cls(lb) == "Int_Literal_Constant"):
+                # vector subscript (e.g. permutation); Eigen accepts index arrays
+                off = 1 if lb is None else int(str(lb.items[0]))
+                return "vidx", f"({self.as_array(x)} - {off})" if off else par(x)
             return "idx", self.index0(s, lb)
         lo, hi, step = s.items
         if lo is None and hi is None and step is None:
@@ -342,25 +366,19 @@ class Translator:
         lbs = [d[0] for d in v.dims]
         base = par(x)
         res = X("", 0, v.base, 100, v, v.tname)
-        if st == "stdvec":
-            kind, code = self.sub_code(subs[0], lbs[0])
-            if kind == "all":
+        depth, lr = self.nest(v)
+        if depth:
+            trail = [self.sub_code(s, lb) for s, lb in zip(subs[lr:], lbs[lr:])]
+            full = all(cls(s) == "Subscript_Triplet" and s.items == (None, None, None) for s in subs[:lr])
+            if full and all(k == "all" for k, _ in trail):
                 return x
-            if kind != "idx":
-                raise Untranslatable("stdvector-slice")
-            res.code = f"{base}[{code}]"
-            return res
-        if st == "vec3":
-            kind, code = self.sub_code(subs[2], lbs[2])
-            if kind == "all" and all(cls(s) == "Subscript_Triplet" and s.items == (None, None, None)
-                                     for s in subs[:2]):
-                return x
-            if kind != "idx":
-                raise Untranslatable("rank3-slice")
-            base, subs, lbs = f"{base}[{code}]", subs[:2], lbs[:2]
-            res.obj = True
-        elif st != "eigen":
-            raise Untranslatable("rank>3")
+            if any(k != "idx" for k, _ in trail):
+                raise Untranslatable("slice-of-nested-vector")
+            base += "".join(f"[{c}]" for _, c in trail)
+            if lr == 0:
+                res.code = base
+                return res
+            subs, lbs, res.obj = subs[:lr], lbs[:lr], True
         sc = [self.sub_code(s, lb) for s, lb in zip(subs, lbs)]
         kinds = [k for k, _ in sc]
         res.rank = sum(k != "idx" for k in kinds)
@@ -767,12 +785,16 @@ class Translator:
         lhs = self.expr(lhs_n)
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
-        if lhs.rank == 3 or st == "vec3":
+        if st == "vec3":
             r = self.expr(rhs_n)
             if r.rank != 0:
-                raise Untranslatable("rank3-assignment")
+                raise Untranslatable("nested-vector-assignment")
             fill = ".setZero()" if is_zero(r.code) else f".setConstant({r.code})"
-            self.emit(ind, f"for (auto& blk_ : {lhs.raw or lhs.code}) blk_{fill};")
+            src, loops = lhs.raw or lhs.code, ""
+            for k in range(self.nest(v)[0]):
+                loops += f"for (auto& b{k}_ : {src}) "
+                src = f"b{k}_"
+            self.emit(ind, f"{loops}{src}{fill};")
             return
         if st == "uptr" and v.polymorphic:
             raise Untranslatable("polymorphic-assignment")
@@ -812,6 +834,15 @@ class Translator:
             if n.startswith(ASSERT_PREFIX + "assert"):
                 return self.pf_assert(n[len(ASSERT_PREFIX) + 6:], args, ind)
             p = self.lookup_proc(n)
+            if n == "move_alloc" and len(args) == 2:
+                src, dst = self.expr(args[0]), self.expr(args[1])
+                s_name = src.raw if src.raw is not None else src.code
+                self.emit(ind, f"{dst.raw if dst.raw is not None else dst.code} = std::move({s_name});")
+                if src.var is not None and self.storage(src.var) == "eigen":
+                    self.emit(ind, f"{s_name}.resize({', '.join(['0'] * src.var.rank)});")
+                elif src.var is not None and self.storage(src.var) in ("vec3", "stdvec"):
+                    self.emit(ind, f"{s_name}.clear();")
+                return
             if n in self.cfg["call_templates"]:
                 codes = self.plain_args(args)
 
@@ -939,12 +970,17 @@ class Translator:
                     self.note("pointer", "raw owning pointer")
             elif st == "eigen":
                 self.emit(ind, f"{name}.resize({', '.join(dims)});")
-            elif st == "vec3":
-                self.emit(ind, f"{name}.assign({dims[2]}, {self.eigen_type(v, 2)}({dims[0]}, {dims[1]}));")
-            elif st == "stdvec":
+            elif st == "stdvec" and v.rank == 1:
                 self.emit(ind, f"{name}.resize({dims[0]});")
+            elif st == "stdvec":
+                # resize instead of assign: the elements need not be copyable
+                code, src = f"{name}.clear(); {name}.resize({dims[0]});", name
+                for k, n in enumerate(dims[1:]):
+                    code += f" for (auto& r{k}_ : {src}) {{ r{k}_.resize({n});"
+                    src = f"r{k}_"
+                self.emit(ind, code + " }" * (len(dims) - 1))
             else:
-                raise Untranslatable("allocate-rank>3")
+                self.emit(ind, f"{name}.assign({self.nested_ctor(v, dims)});")
 
     def s_Deallocate_Stmt(self, node, ind):
         for a in items_of(node.items[0]):
@@ -1139,13 +1175,18 @@ def i_size(tr, n, pos, kw):
     dim = pos[1] if len(pos) > 1 else kw.get("dim")
     st = tr.storage(x.var) if x.var is not None and x.whole else None
     b = par(x)
+    depth, lr = tr.nest(x.var) if st else (0, x.rank)
     if dim is None:
-        if st == "vec3":
-            raise Untranslatable("size-rank3")
+        if depth and (depth > 1 or lr):
+            raise Untranslatable("size-of-nested-vector")
+        if depth:       # std::vector::size() is unsigned
+            return X(f"static_cast<{tr.cfg['int']}>({b}.size())", 0, "integer")
         return X(f"{b}.size()", 0, "integer")
     d = tr.expr(dim).code
-    if st == "vec3":
-        return X(f"{b}.size()" if d == "3" else f"{b}[0].{'rows' if d == '1' else 'cols'}()", 0, "integer")
+    if depth and d.isdigit() and 1 <= int(d) <= x.var.rank:
+        if int(d) <= lr:
+            return X(f"{b}{'[0]' * depth}.{'rows' if d == '1' else 'cols'}()", 0, "integer")
+        return X(f"static_cast<{tr.cfg['int']}>({b}{'[0]' * (int(d) - lr - 1)}.size())", 0, "integer")
     if d not in ("1", "2"):
         raise Untranslatable("size-dim")
     return X(f"{b}.size()" if x.rank == 1 else f"{b}.{'rows' if d == '1' else 'cols'}()", 0, "integer")
@@ -1329,9 +1370,7 @@ def i_len(tr, n, pos, kw):
 
 
 def i_identity(tr, n, pos, kw):
-    x = tr.expr(pos[0])
-    tr.note("string", f"{n}: std::string is not blank-padded")
-    return x
+    return tr.expr(pos[0])        # std::string is not blank-padded
 
 
 def i_bound(tr, n, pos, kw):
