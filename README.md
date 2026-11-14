@@ -19,7 +19,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 
 | Option | Meaning |
 |---|---|
-| `files` | modules (`.F90`) → `<module>.hpp` + `<module>.cpp`; pFUnit tests (`.pf`) → `<module>.cpp` |
+| `files` | modules (`.F90`) → `<module>.hpp` + `<module>.cpp`; pFUnit tests (`.pf`, `.pfunit`, or any module that uses `funit` / `pfunit`) → `<module>.cpp` |
 | `-I FILE` | parse only for symbols (types, signatures); no output. For used modules that are translated separately or already exist in C++ |
 | `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults |
 | `-n NS` | C++ namespace |

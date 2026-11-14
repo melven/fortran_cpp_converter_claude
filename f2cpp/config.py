@@ -65,6 +65,8 @@ DEFAULTS = {
     },
     # called function / subroutine (lower case) -> C++ function, same arguments
     "function_map": {},
+    "test_extensions": [".pf", ".pfunit"],     # pFUnit test files; also: modules using test_modules
+    "test_modules": ["funit", "pfunit", "pfunit_mod"],
     "gtest_assert": "ASSERT",      # pFUnit asserts abort the test -> ASSERT_*; "EXPECT" changes the logic
     # the project provides EXPECT_NEAR / ASSERT_NEAR for Eigen types: used for array comparisons;
     # False: EXPECT_LE((expected - actual).cwiseAbs().maxCoeff(), tolerance)

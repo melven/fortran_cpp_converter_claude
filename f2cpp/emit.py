@@ -527,7 +527,7 @@ class ModuleEmitter:
         res = []
         for line in top.out:
             line = re.sub(src, new, line, flags=re.I)
-            line = re.sub(r"(@file:?\s*)\S+\.(f90|f|pf)\b", lambda m: m.group(1) + new, line, flags=re.I)
+            line = re.sub(r"(@file:?\s*)\S+\.(f90|f|pfunit|pf)\b", lambda m: m.group(1) + new, line, flags=re.I)
             res.append(line)
         return res
 

@@ -22,7 +22,9 @@ def parse_file(path, cfg, parser):
     mods = []
     for node in walk(tree, F.Module):
         m = collect_module(node)
-        m.is_test = path.endswith(".pf")
+        # pFUnit test: by file extension or because the module uses the test framework
+        m.is_test = path.lower().endswith(tuple(cfg["test_extensions"])) or \
+            any(u in cfg["test_modules"] for u in m.uses)
         mods.append(m)
     return mods
 
@@ -66,7 +68,7 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="f2cpp", description="Fortran 2003 -> C++ (Eigen, googletest)")
-    ap.add_argument("files", nargs="+", help="Fortran module files (.F90) and pFUnit tests (.pf)")
+    ap.add_argument("files", nargs="+", help="Fortran module files (.F90) and pFUnit tests (.pf, .pfunit)")
     ap.add_argument("-o", "--outdir", default="f2cpp_out")
     ap.add_argument("-c", "--config", help="TOML configuration file")
     ap.add_argument("-n", "--namespace", help="C++ namespace (overrides config)")

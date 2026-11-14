@@ -282,3 +282,13 @@ def test_private_names_of_other_modules_are_not_used(tmp_path):
     assert "pub(x);" in cpp                                 # resolved: keyword arguments reordered
     assert "hidden(/*x=*/ x);" in cpp                       # not resolved: passed through
     assert "external-call:hidden" in report.files[str(tmp_path / "b_mod.F90")]["info"]
+
+
+def test_pfunit_file_extension(tmp_path):
+    src = open(os.path.join(CORPUS, "test_expm_mod.pf")).read()
+    (tmp_path / "test_expm_mod.pfunit").write_text("!> @file test_expm_mod.pfunit\n" + src)
+    translate([str(tmp_path / "test_expm_mod.pfunit")], cfg(), str(tmp_path),
+              [os.path.join(CORPUS, "expm_mod.F90")])
+    t = (tmp_path / "test_expm_mod.cpp").read_text()
+    assert t.startswith("/// @file test_expm_mod.cpp\n") and "TEST(test_expm_mod, test_expm_zero)" in t
+    assert not (tmp_path / "test_expm_mod.hpp").exists()
