@@ -408,6 +408,7 @@ class ModuleEmitter:
         dirs.block(cpp_directives, 0)
 
         types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types]
+        aliases = self.tr()     # std::function aliases: before the classes, which use them as arguments
         # a test module used by other (test) modules provides shared helpers: it gets a header
         shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
         pending, prev = [], None
@@ -453,7 +454,7 @@ class ModuleEmitter:
                     # bindings are only used for the virtual methods)
                     deferred = {b.iface for m in self.prog.modules.values() for t in m.types.values()
                                 for b in t.bindings.values() if b.deferred}
-                    sink = cpp_priv if mod.is_test and not shared else hpp
+                    sink = aliases
                     for b in s.content[1:-1]:
                         if cls(b) not in ("Function_Body", "Subroutine_Body"):
                             continue
@@ -466,6 +467,7 @@ class ModuleEmitter:
                         self.doc(sink, p, 0)
                         ret, _, params, _ = self.signature(ptr, p, False)
                         sink.emit(0, f"using {p.cname} = std::function<{ret}({params})>;")
+                        sink.emit(0, "")
                 pending = []
             else:
                 self.report.add("untranslated", "specification:" + k)
@@ -532,22 +534,25 @@ class ModuleEmitter:
                 using = [f"using namespace {self.ns};"] + self.using_other_ns()
                 h = self.file_header(top, cfg["header_ext"]) + \
                     [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
-                h += self.std_includes("\n".join(hpp.out + protos_pub.out), self.HEADER_INCLUDES)
+                h += self.std_includes("\n".join(hpp.out + protos_pub.out + aliases.out), self.HEADER_INCLUDES)
                 h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + self.includes()
-                h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 else []) + strip_blank(hpp.out)
+                h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 or aliases.out else []) + \
+                    aliases.out + strip_blank(hpp.out)
                 h += ([""] + protos_pub.out if protos_pub.out else []) + [""] + self.guard()[1]
                 h = "\n".join(self.braces(squeeze(h)))
+            if not shared and aliases.out:      # no header: forward declarations and aliases first
+                cpp_priv.out = types_fwd + [""] + aliases.out + cpp_priv.out
             return h, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc, shared)
 
-        guard_text = "\n".join(hpp.out + protos_pub.out)
+        guard_text = "\n".join(hpp.out + protos_pub.out + aliases.out)
         h = self.file_header(top, cfg["header_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
         h += self.std_includes(guard_text, self.HEADER_INCLUDES)
         h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
         h += [""] + mod_doc.out + [self.open_ns(), ""]
-        if len(types_fwd) > 1:
+        if types_fwd and (len(types_fwd) > 1 or aliases.out):
             h += types_fwd + [""]
-        h += strip_blank(hpp.out)
+        h += aliases.out + strip_blank(hpp.out)
         if protos_pub.out:
             h += [""] + protos_pub.out
         h += ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]

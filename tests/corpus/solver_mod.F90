@@ -4,7 +4,15 @@ module solver_mod
   implicit none
   private
 
-  public :: NonLinearFunction, fixed_point_type, fixed_point_solve, residual_norm
+  public :: NonLinearFunction, SolverObserver, fixed_point_type, fixed_point_solve, residual_norm
+
+  type :: fixed_point_type
+    integer :: max_iter = 50
+    real :: tol = 1.e-12
+    procedure(NonLinearFunction), pointer, nopass :: monitor => null()
+  contains
+    procedure :: solve => fixed_point_solve_method
+  end type fixed_point_type
 
   abstract interface
     !> residual of a nonlinear system
@@ -14,15 +22,14 @@ module solver_mod
       real,     intent(out) :: f(:)        !< new residual vector
       integer,  intent(out) :: ierr        !< error flag
     end subroutine NonLinearFunction
-  end interface
 
-  type :: fixed_point_type
-    integer :: max_iter = 50
-    real :: tol = 1.e-12
-    procedure(NonLinearFunction), pointer, nopass :: monitor => null()
-  contains
-    procedure :: solve => fixed_point_solve_method
-  end type fixed_point_type
+    !> called after each solve
+    subroutine SolverObserver(solver, iterations)
+      import :: fixed_point_type
+      class(fixed_point_type), intent(in) :: solver
+      integer, intent(in) :: iterations
+    end subroutine SolverObserver
+  end interface
 
 contains
 

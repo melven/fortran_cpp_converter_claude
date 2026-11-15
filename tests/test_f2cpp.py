@@ -513,6 +513,9 @@ def test_callbacks_with_user_data(out):
            "//! @param[out] f new residual vector\n" \
            "using NonLinearFunction = std::function<void(const vec& x, vec& f)>;" in hpp
     assert "#include <functional>" in hpp and "NonLinearFunction monitor;" in hpp
+    # the aliases precede the classes that use them (after the forward declarations)
+    assert hpp.index("class fixed_point;") < hpp.index("using NonLinearFunction") < hpp.index("class fixed_point final")
+    assert "using SolverObserver = std::function<void(const fixed_point& solver, int iterations)>;" in hpp
     assert "void solve(const NonLinearFunction& fun, vec& x);" in hpp
     assert "void fixed_point_solve(const NonLinearFunction& fun, vec& x, scalar tol, int max_iter);" in hpp
     assert "userData" not in hpp and "userData" not in cpp
