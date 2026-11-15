@@ -379,3 +379,17 @@ def test_int_arrays_eigen_option(tmp_path):
     translate([os.path.join(CORPUS, "features_mod.F90")], c, str(tmp_path),
               [os.path.join(CORPUS, f) for f in ("legacy_mod.F90", "shape_mod.F90", "block_lu_mod.F90")])
     assert "int count_marked(const Eigen::VectorXi& flags);" in (tmp_path / "features_mod.hpp").read_text()
+
+
+def test_module_header_rename(tmp_path):
+    (tmp_path / "project_global_thing.F90").write_text(
+        "!> @file project_global_thing.F90\nmodule project_global_thing\ninteger, parameter :: n = 3\nend module\n")
+    (tmp_path / "user_mod.F90").write_text(
+        "module user_mod\nuse project_global_thing, only: n\ncontains\nfunction f() result(k)\ninteger :: k\n"
+        "k = n\nend function\nend module\n")
+    c = config.load()
+    c["module_headers"] = {"project_global_thing": "project_thing.hpp"}
+    translate([str(tmp_path / "project_global_thing.F90"), str(tmp_path / "user_mod.F90")], c, str(tmp_path))
+    assert '#include "project_thing.hpp"' in (tmp_path / "user_mod.hpp").read_text()
+    assert (tmp_path / "project_thing.hpp").read_text().startswith("/// @file project_thing.hpp")
+    assert '#include "project_thing.hpp"' in (tmp_path / "project_thing.cpp").read_text()

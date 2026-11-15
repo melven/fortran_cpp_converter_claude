@@ -46,7 +46,8 @@ DEFAULTS = {
     "include_map": {},
     # Fortran derived type (lower case) -> existing C++ class, e.g. "foo_type" = "wrappers::Foo"
     "type_map": {},
-    # modules that are not translated because C++ code exists: module -> header ("" = no include)
+    # module -> header: `use module` becomes #include "header" ("" = no include). For modules that
+    # exist in C++ already, and to rename the output files of translated modules
     "module_headers": {},
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],

@@ -485,6 +485,13 @@ class Program:
                 if p:
                     p.children.add(t.name)
 
+    def file_stem(self, modname):
+        """output file name (without extension) of a module: module name, or the name of its
+        header in module_headers"""
+        import os
+        h = self.cfg["module_headers"].get(modname)
+        return os.path.splitext(h)[0] if h else modname
+
     def decide_int_vectors(self, translated):
         """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>"""
         if self.cfg["int_arrays"] != "auto":

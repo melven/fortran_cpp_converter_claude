@@ -143,6 +143,11 @@ legacy_type = "wrappers::Legacy"
 legacy_mod = "legacy.hpp"
 ```
 
+`module_headers` is also the way to rename: `use project_global_thing` becomes
+`#include "project_thing.hpp"`, and if that module is translated in the same call its output
+files are `project_thing.hpp` / `project_thing.cpp`. (`include_map` is only for preprocessor
+`#include "x.h"` lines of the Fortran source.)
+
 Pass the Fortran source of such a module with `-I` so that calls into it get correct
 argument handling. Method names are assumed to be identical to the Fortran binding names.
 

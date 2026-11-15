@@ -480,7 +480,7 @@ class ModuleEmitter:
 
         body = "\n".join(cpp.out + cpp_priv.out)
         c = self.file_header(top, cfg["source_ext"]) + \
-            [BANNER.format(src=os.path.basename(self.src)), f'#include "{mod.name}{cfg["header_ext"]}"', ""]
+            [BANNER.format(src=os.path.basename(self.src)), f'#include "{self.prog.file_stem(mod.name)}{cfg["header_ext"]}"', ""]
         c += self.std_includes(body, self.SOURCE_INCLUDES)
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
@@ -529,7 +529,7 @@ class ModuleEmitter:
     def file_header(self, top, ext):
         """file header comment of the Fortran source with the file name replaced"""
         import re
-        new = self.mod.name + ext
+        new = os.path.basename(self.prog.file_stem(self.mod.name)) + ext
         src = re.escape(os.path.basename(self.src))
         res = []
         for line in top.out:

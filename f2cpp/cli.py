@@ -60,7 +60,8 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
         hpp, cpp = ModuleEmitter(prog, m, report, path).generate()
         for text, ext in ((hpp, cfg["header_ext"]), (cpp, cfg["source_ext"])):
             if text is not None:
-                out = os.path.join(outdir, m.name + ext)
+                out = os.path.join(outdir, prog.file_stem(m.name) + ext)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
                 with open(out, "w") as f:
                     f.write(text)
                 written.append(out)
