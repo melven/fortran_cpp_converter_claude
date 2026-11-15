@@ -304,7 +304,8 @@ class ModuleEmitter:
     def includes(self):
         ext, known = self.cfg["header_ext"], self.cfg["module_headers"]
         res = []
-        replaced = set(self.cfg["function_map"]) | set(self.cfg["call_templates"]) | set(self.cfg["kind_map"])
+        replaced = set(self.cfg["function_map"]) | set(self.cfg["call_templates"]) | \
+            set(self.cfg["kind_map"]) | {s.lower() for s in self.cfg["error_success"]}
         for u in self.mod.uses:
             if u in self.cfg["ignore_modules"]:
                 continue
@@ -516,7 +517,7 @@ class ModuleEmitter:
         """report used modules whose definitions are neither parsed (file or -I) nor mapped"""
         cfg = self.cfg
         mapped = set(cfg["function_map"]) | set(cfg["call_templates"]) | set(cfg["type_map"]) | \
-            set(cfg["kind_map"])
+            set(cfg["kind_map"]) | {s.lower() for s in cfg["error_success"]}
         kinds = ("unknown-name", "external-call", "external-function", "unknown-type")
         unresolved = sorted({c.split(":", 1)[1] for c in self.report.cur["info"]
                              if c.split(":")[0] in kinds} - mapped)

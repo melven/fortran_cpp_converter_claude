@@ -2,6 +2,8 @@
 namespace = "myproj"
 extra_includes = ['"myproj_math.hpp"']        # must provide scalar, vec, mat
 test_includes = ['"myproj_gtest_eigen.hpp"']  # EXPECT_NEAR for Eigen types
+ignore_modules = ["myproj_error_codes"]       # obsolete in C++ (appended to the defaults)
+error_success = ["0", "MYPROJ_SUCCESS"]       # values of ierr that mean success
 constructor_bindings = ["configure"]
 destructor_bindings = ["finalize"]
 

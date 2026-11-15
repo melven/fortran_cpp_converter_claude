@@ -166,7 +166,9 @@ e.g. to flatten kind indirections: `[['real\(kind=real_kind\)', 'real(kind=8)']]
 Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
 
 A `use m, only: a, b` produces no `#include` if all imported names are replaced by
-`function_map`, `call_templates` or `kind_map`.
+`function_map`, `call_templates`, `kind_map` or `error_success`. A module that is obsolete in
+C++ altogether (e.g. the error codes) goes into `ignore_modules`: no include, no
+"missing module" warning.
 
 ## Missing modules
 
