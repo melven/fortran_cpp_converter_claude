@@ -32,7 +32,7 @@ def cname(name):
     return name + "_" if name in CPP_KEYWORDS else name
 
 
-@dataclass
+@dataclass(eq=False)     # identity semantics: never compare parse trees
 class Var:
     name: str                    # lower case
     cname: str                   # spelling used in C++
@@ -79,7 +79,7 @@ class Var:
         return self.rank == 0 and self.has("pointer")
 
 
-@dataclass
+@dataclass(eq=False)     # identity semantics: never compare parse trees
 class Proc:
     name: str
     cname: str
@@ -101,7 +101,7 @@ class Proc:
     doc: list = field(default_factory=list)
 
 
-@dataclass
+@dataclass(eq=False)     # identity semantics: never compare parse trees
 class Binding:
     name: str
     impl: str = None
@@ -115,7 +115,7 @@ class Binding:
     spellings: set = field(default_factory=set)     # spellings of the references that resolve to it
 
 
-@dataclass
+@dataclass(eq=False)     # identity semantics: never compare parse trees
 class TypeDef:
     name: str
     module: object
@@ -132,7 +132,7 @@ class TypeDef:
     node: object = None
 
 
-@dataclass
+@dataclass(eq=False)     # identity semantics: never compare parse trees
 class Module:
     name: str
     node: object

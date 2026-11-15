@@ -2,6 +2,7 @@
 import argparse
 import os
 import sys
+import threading
 
 from fparser.common.readfortran import FortranStringReader
 from fparser.two.parser import ParserFactory
@@ -47,6 +48,10 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
             report.add("untranslated", "parse-error")
             continue
         for m in mods:
+            if m.name in prog.modules:
+                print(f"f2cpp: module {m.name} is defined more than once; ignoring the one in {path}",
+                      file=sys.stderr)
+                continue
             prog.add(m)
             if path in paths:
                 todo.append((path, m))
@@ -82,7 +87,18 @@ def main(argv=None):
     ap.add_argument("--report", metavar="JSON", help="write construct coverage report (no source text)")
     args = ap.parse_args(argv)
     cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original)
-    report, written = translate(args.files, cfg, args.outdir, args.interface)
+    # parsing and translation recurse over the expression trees: very long expressions (hundreds of
+    # operands) need more than the default recursion limit and stack
+    result = []
+    sys.setrecursionlimit(100000)
+    threading.stack_size(512 * 1024 * 1024)
+    worker = threading.Thread(target=lambda: result.append(translate(args.files, cfg, args.outdir,
+                                                                     args.interface)))
+    worker.start()
+    worker.join()
+    if not result:
+        raise SystemExit(1)
+    report, written = result[0]
     for w in written:
         print(w)
     print(report.summary(), file=sys.stderr)

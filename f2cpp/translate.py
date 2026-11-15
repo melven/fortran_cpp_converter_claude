@@ -540,7 +540,11 @@ class Translator:
         if o == "**":
             return self.power(a, b)
         if o == "//":
-            return X(f"{par(a, P_ADD)} + {par(b, P_ADD, True)}", 0, "character", P_ADD)
+            left, right = par(a, P_ADD), par(b, P_ADD, True)
+            lit = r'"([^"\\]|\\.)*"'
+            if re.fullmatch(lit, left) and re.fullmatch(lit, right):    # "a" + "b" would add pointers
+                left = f"std::string({left})"
+            return X(f"{left} + {right}", 0, "character", P_ADD)
         if o in REL_OPS:
             c, p = REL_OPS[o], P_EQ if REL_OPS[o] in ("==", "!=") else P_REL
             if rank > 0:

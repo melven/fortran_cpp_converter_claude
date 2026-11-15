@@ -424,3 +424,16 @@ def test_accessors(tmp_path):
     assert "n = system.models().size() + system.count + system.offsets().first;" in cpp
     assert "system.models()(2).id = n;" in cpp
     assert "obj.value() = 2.0 * obj.value();" in cpp
+
+
+def test_module_given_twice_and_long_expressions(tmp_path):
+    from f2cpp.cli import main
+    terms = " // &\n      ".join("'<line%d>'" % i for i in range(400))
+    (tmp_path / "deep_mod.F90").write_text(
+        "module deep_mod\ncontains\nsubroutine s(text)\ncharacter(len=*), intent(out) :: text\n"
+        f"text = {terms}\nend subroutine\nend module\n")
+    path = str(tmp_path / "deep_mod.F90")
+    main([path, "-I", path, "-o", str(tmp_path / "out")])       # same module also given with -I
+    cpp = (tmp_path / "out" / "deep_mod.cpp").read_text()
+    assert '"<line0>" + "<line1>"' not in cpp and 'std::string("<line0>") + "<line1>" + ' in cpp
+    assert '+ "<line399>";' in cpp
