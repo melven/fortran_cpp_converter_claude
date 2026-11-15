@@ -408,3 +408,19 @@ def test_module_header_rename(tmp_path):
     assert '#include "project_thing.hpp"' in (tmp_path / "user_mod.hpp").read_text()
     assert (tmp_path / "project_thing.hpp").read_text().startswith("/// @file project_thing.hpp")
     assert '#include "project_thing.hpp"' in (tmp_path / "project_thing.cpp").read_text()
+
+
+def test_accessors(tmp_path):
+    (tmp_path / "a_mod.F90").write_text(
+        "module a_mod\nuse sys_mod, only: system_type\nuse legacy_mod, only: legacy_type\ncontains\n"
+        "subroutine s(system, obj, n)\ntype(system_type), intent(inout) :: system\n"
+        "type(legacy_type), intent(inout) :: obj\ninteger :: n\n"
+        "n = size(system%models) + system%count + system%offsets%first\n"
+        "system%models(2)%id = n\nobj%value = 2.0 * obj%value\nend subroutine\nend module\n")
+    c = config.load()
+    c["accessors"] = {"system_type": ["models", "offsets"], "legacy_type": ["*"]}
+    translate([str(tmp_path / "a_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "legacy_mod.F90")])
+    cpp = (tmp_path / "a_mod.cpp").read_text()
+    assert "n = system.models().size() + system.count + system.offsets().first;" in cpp
+    assert "system.models()(2).id = n;" in cpp
+    assert "obj.value() = 2.0 * obj.value();" in cpp

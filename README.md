@@ -144,6 +144,13 @@ legacy_type = "wrappers::Legacy"
 legacy_mod = "legacy.hpp"
 ```
 
+Components that are accessor functions in the C++ class:
+
+```toml
+[accessors]                # Fortran type -> components; ["*"] = all components
+system_type = ["models", "offsets"]     # system%models -> system.models()
+```
+
 `module_headers` is also the way to rename: `use project_global_thing` becomes
 `#include "project_thing.hpp"`, and if that module is translated in the same call its output
 files are `project_thing.hpp` / `project_thing.cpp`. (`include_map` is only for preprocessor

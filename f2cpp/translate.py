@@ -372,6 +372,11 @@ class Translator:
         sep = "->" if obj.raw is not None else "."
         return (obj.raw if obj.raw is not None else par(obj)) + sep + qual + name
 
+    def accessor(self, tname, comp):
+        """"()" if the component is an accessor function of the existing C++ class"""
+        names = self.cfg["accessors"].get(tname, ())
+        return "()" if comp in names or "*" in names else ""
+
     def x_Proc_Component_Ref(self, node):
         """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
         base, _, last = node.items
@@ -396,11 +401,11 @@ class Translator:
                             qual=self.prog.type_name(n, self.mod) + "::")
                     continue
                 self.report.add("info", "unknown-component:" + n)
-                x = X(self.member(cur, cname(str(pname)), cur.qual))
+                x = X(self.member(cur, cname(str(pname)), cur.qual) + self.accessor(cur.tname, n))
                 if subs is not None:
                     x = self.unknown_ref(x.code, subs)
             else:
-                x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
+                x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual) + self.accessor(cur.tname, n))
                 if subs is not None:
                     x = self.subscript(x, comp, subs)
             cur = x

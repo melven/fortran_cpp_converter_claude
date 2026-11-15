@@ -49,6 +49,9 @@ DEFAULTS = {
     # module -> header: `use module` becomes #include "header" ("" = no include). For modules that
     # exist in C++ already, and to rename the output files of translated modules
     "module_headers": {},
+    # components that are accessor functions in the existing C++ class:
+    # Fortran type -> component names (["*"]: all components): obj%models -> obj.models()
+    "accessors": {},
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
     # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing.
@@ -103,6 +106,7 @@ def load(path=None, **overrides):
                 cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
             else:
                 cfg[key] = val
+    cfg["accessors"] = {k.lower(): [n.lower() for n in v] for k, v in cfg["accessors"].items()}
     for key in ("call_templates", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
