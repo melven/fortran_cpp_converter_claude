@@ -65,6 +65,8 @@ def test_report(out):
     files = out[1].files
     todo = [c for name, counters in files.items() if "features" in name for c in counters["todo"]]
     assert "inconsistent-name-case:addValue,addvalue" in todo
+    assert [c for c in todo if c.startswith("inconsistent-name-case")] == ["inconsistent-name-case:addValue,addvalue"]
+    assert "inconsistently" not in read(out, "test_poly_mod.cpp")      # Setup_Solver vs setup_solver: two symbols
     assert "inconsistent-type-case:Holder_Type,holder_type" in todo
     for name, counters in files.items():
         if "features" in name:

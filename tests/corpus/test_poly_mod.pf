@@ -16,6 +16,7 @@ contains
   subroutine setUp()
     integer :: ierr
     cf = [1.0, 2.0, 3.0]
+    call Setup_Solver()
     call pol%set(cf, ierr)
   end subroutine setUp
 
@@ -23,6 +24,10 @@ contains
   subroutine tearDown()
     cf = 0.0
   end subroutine tearDown
+
+  !> same name as a procedure of the translated code, but another symbol: no case warning
+  subroutine Setup_Solver()
+  end subroutine Setup_Solver
 
   function reference(x) result(y)
     real, intent(in) :: x

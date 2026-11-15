@@ -93,6 +93,7 @@ class Proc:
     bind_name: str = None
     pass_arg: str = None
     generic: str = None          # generic name this specific is emitted as
+    spellings: set = field(default_factory=set)     # spellings of the references that resolve to it
     external: bool = False       # declared by an interface body only (no definition to translate)
     is_ctor: bool = False
     is_dtor: bool = False
@@ -111,6 +112,7 @@ class Binding:
     access: str = None
     generic: str = None
     spelling: str = None         # binding name as written in the type definition
+    spellings: set = field(default_factory=set)     # spellings of the references that resolve to it
 
 
 @dataclass
@@ -435,7 +437,6 @@ class Program:
         self.modules = {}
         self.spellings = {}
         self.links = []             # pairs of integer arrays that must have the same C++ type
-        self.proc_spellings = {}
 
     def add(self, module):
         from fparser.two.utils import walk
@@ -447,22 +448,8 @@ class Program:
                 n = n.items[1]
             self.spellings.setdefault(lname(n), set()).add(str(n).strip())
 
-        # spellings of procedure / binding names at definitions and references
-        for n in walk(module.node, (F.Subroutine_Stmt, F.Function_Stmt, F.Specific_Binding, F.Generic_Binding,
-                                    F.Call_Stmt, F.Function_Reference, F.Part_Ref, F.Procedure_Designator)):
-            k = cls(n)
-            name = n.items[1] if k in ("Subroutine_Stmt", "Function_Stmt", "Generic_Binding") else \
-                n.items[3] if k == "Specific_Binding" else n.items[2] if k == "Procedure_Designator" else n.items[0]
-            if cls(name) == "Name":
-                self.proc_spellings.setdefault(lname(name), set()).add(str(name).strip())
-
     def inconsistent_case(self, tname):
         return len(self.spellings.get(tname, ())) > 1
-
-    def inconsistent_proc_case(self, name):
-        """-> sorted spellings if the procedure / binding name is not spelled consistently"""
-        s = self.proc_spellings.get(name.lower(), ())
-        return sorted(s) if len(s) > 1 else None
 
     def finish(self):
         err = self.cfg["error_arg"].lower()

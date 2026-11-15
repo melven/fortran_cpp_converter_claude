@@ -317,6 +317,7 @@ class Translator:
                      "character" if fn == "std::to_string" else "unknown")
         p = self.lookup_proc(n)
         if p is not None:
+            self.spelled(p, name_node)
             return self.result_x(self.call_code(p, items_of(args)), p)
         if n in INTRINSICS or cls(node) == "Intrinsic_Function_Reference":
             return self.intrinsic(n, items_of(args))
@@ -673,6 +674,13 @@ class Translator:
             res.append(code)
         return res
 
+    @staticmethod
+    def spelled(p, name_node):
+        """record how a resolved reference to procedure p is written"""
+        s = str(name_node).strip()
+        if s.lower() == p.name:
+            p.spellings.add(s)
+
     def call_code(self, p, args):
         """call of a known module procedure (free function or method called by implementation name)"""
         name = cname(p.generic or p.cname)
@@ -716,6 +724,8 @@ class Translator:
         td = self.find_type(obj.tname)
         owner, b = self.prog.find_binding(td, n) if td else (None, None)
         p = self.prog.binding_proc(owner, b) if owner else None
+        if b is not None:
+            b.spellings.add(str(bname).strip())
         if p is None and owner is not None and n in owner.generics:
             p0 = owner.generics[n][0]
             p = self.prog.binding_proc(owner, owner.bindings.get(p0))
@@ -1075,6 +1085,7 @@ class Translator:
                 self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
                 return
             if p is not None:
+                self.spelled(p, desig)
                 code = self.call_code(p, args)
             else:
                 v = self.lookup(n)
