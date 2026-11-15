@@ -72,7 +72,7 @@ with less precise output (calls are passed through unchanged).
 | `do`, `do while`, `if`, `select case`, `exit`, `cycle` | `for`, `while`, `if` / `else if` chains, `break`, `continue` |
 | `any([a, b, c])`, `all([a, b])` | `a \|\| b \|\| c`, `a && b` |
 | `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
-| array with lower bound 0 (`c(0:n)`, `c(0:)`, `allocate(c(0:n))`) | 0-based as declared: `c(k)` → `c(k)`; other lower bounds are shifted and get a TODO |
+| array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
 | `allocate` / `deallocate` / `allocated` | `resize` / `make_unique` / `size() > 0` ... |
 | `PROJECT_CHK_IERR(call f(a, ierr), ierr)` | `f(a);` — the `ierr` argument is removed everywhere |

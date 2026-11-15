@@ -151,10 +151,15 @@ def test_features(out):
     assert "has lower bound(s) 0" not in cpp
     assert "std::vector<int> idx(4), shifted(3);" in cpp and "shifted[0] = lo;" in cpp
     assert "std::fill(idx.begin(), idx.end(), 0);" in cpp
-    assert "// TODO(f2cpp): 'shifted' has lower bound(s) -1 in Fortran; indices are shifted accordingly" in cpp
+    assert "'shifted' has" not in cpp and "'idx' has" not in cpp       # constant bounds: exact shift, no warning
+    assert "// TODO(f2cpp): 'v' has the variable lower bound(s) lo in Fortran" in cpp
     assert "dt = t / 16 + t / (n * n) + static_cast<int>(std::pow(2, n));" in cpp
     assert "for (k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
     poly = read(out, "poly_mod.cpp")
+    # lower bound -1 and indirect access through an index array with lower bound 0
+    assert "ghost.resize(n + 2);" in poly and "idx.resize(m + 1);" in poly and "ghost(0) = -10.0;" in poly
+    assert "res = ghost((idx(Eigen::seq(1, Eigen::last)).array() + 1));" in poly
+    assert "ghost((idx(Eigen::seq(1, 2)).array() + 1)) = 1.5 * ghost((idx(Eigen::seq(1, 2)).array() + 1));" in poly
     assert "// TODO(f2cpp):" not in poly
     assert "degree = c.size() - 1;" in poly and "coeff.resize(degree + 1);" in poly
     assert "for (k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
@@ -288,7 +293,7 @@ def test_same_results_as_fortran(out, tmp_path):
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
          "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 45
+    assert len(res) == len(ref) == 49
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 

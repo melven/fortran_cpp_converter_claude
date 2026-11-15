@@ -589,10 +589,16 @@ class Translator:
         """-> ('idx'|'all'|'seq', code)"""
         if cls(s) != "Subscript_Triplet":
             x = self.expr(s)
-            if x.rank == 1 and (lb is None or cls(lb) == "Int_Literal_Constant"):
-                # vector subscript (e.g. permutation); Eigen accepts index arrays
-                off = 1 if lb is None else int(str(lb.items[0]))
-                return "vidx", f"({self.as_array(x)} - {off})" if off else par(x)
+            if x.rank == 1:
+                # vector subscript (e.g. permutation); Eigen accepts index arrays. The Fortran index
+                # values are shifted by the lower bound of the indexed dimension
+                off = 1 if lb is None else int(str(lb).replace(" ", "")) \
+                    if re.fullmatch(r"-?\s*\d+", str(lb)) else None
+                if off is None:
+                    return "vidx", f"({self.as_array(x)} - {par(self.expr(lb), P_ADD, True)})"
+                if off == 0:
+                    return "vidx", par(x)
+                return "vidx", f"({self.as_array(x)} {'-' if off > 0 else '+'} {abs(off)})"
             return "idx", self.index0(s, lb)
         lo, hi, step = s.items
         if lo is None and hi is None and step is None:
@@ -1350,8 +1356,9 @@ class Translator:
             if lo is None or str(lo).strip() == "1":
                 sizes.append(self.expr(hi).code)
                 continue
-            if str(lo).strip() != "0":
-                self.note("lower-bound", "lower bound not 0 or 1: indices are shifted, check uses")
+            if not re.fullmatch(r"-?\s*\d+", str(lo)):
+                self.note("lower-bound", "variable lower bound: the index shift of this array is not known "
+                                         "where it is used")
             if re.fullmatch(r"-?\s*\d+", str(lo)):
                 sizes.append(self.minus(hi, int(str(lo).replace(" ", "")) - 1))
             else:

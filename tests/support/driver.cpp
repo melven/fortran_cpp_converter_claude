@@ -61,6 +61,10 @@ int main()
   print(tab);
   print(hst[0]);
   print(hst[1]);
+  vec gs(4), gx(3);
+  gx << 1.0, 2.0, 3.0;
+  gather_shifted(gx, gs);
+  print(gs);
   // callback with user data: the user data (0.5) is captured by the lambda
   fixed_point fp;
   vec x0(2);

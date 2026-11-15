@@ -104,10 +104,10 @@ class ModuleEmitter:
                 tr.emit(ind, f"// {TODO}: Fortran array pointer '{v.cname}' is translated as an owning array "
                              "(no aliasing of its target)")
             lbs = [str(lo).replace(" ", "") for lo, _ in v.dims if lo is not None]
-            if any(lb not in ("0", "1") for lb in lbs):
+            if any(not lb.lstrip("-").isdigit() for lb in lbs):     # constant bounds are shifted exactly
                 self.report.add("todo", "lower-bound")
-                tr.emit(ind, f"// {TODO}: '{v.cname}' has lower bound(s) {', '.join(lbs)} in Fortran; "
-                             "indices are shifted accordingly, check its uses")
+                tr.emit(ind, f"// {TODO}: '{v.cname}' has the variable lower bound(s) {', '.join(lbs)} in "
+                             "Fortran; indices are shifted accordingly, check its uses")
 
     def signature(self, tr, p, decl, qualify=""):
         """-> (return type, name, parameter list, trailing qualifiers)"""

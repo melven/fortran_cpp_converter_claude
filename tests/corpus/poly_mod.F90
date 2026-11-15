@@ -4,7 +4,7 @@ module poly_mod
   implicit none
   private
 
-  public :: poly_type, poly_eval, poly_derivative, moments_table
+  public :: poly_type, poly_eval, poly_derivative, moments_table, gather_shifted
 
   type :: poly_type
     integer :: degree = -1
@@ -89,5 +89,30 @@ contains
     end do
     hist(1, 2, 0) = sum(c(1:)) + c(0) + maxval(p(0:1, 1)) + size(p, 1)
   end subroutine moments_table
+
+  !> ghost(-1:n): values with two ghost entries in front; picks entries through an index array
+  !> idx(0:m) of Fortran indices (idx(0) is not used)
+  subroutine gather_shifted(x, res)
+    real, intent(in) :: x(:)
+    real, intent(out) :: res(:)
+    real, allocatable :: ghost(:)
+    integer, allocatable :: idx(:)
+    integer :: n, m, k
+
+    n = size(x)
+    m = size(res)
+    allocate(ghost(-1:n), idx(0:m))
+    ghost(-1) = -10.0
+    ghost(0) = -20.0
+    ghost(1:n) = x
+    idx(0) = 0
+    do k = 1, m
+      idx(k) = k - 2
+    end do
+    res = ghost(idx(1:))
+    res(1) = res(1) + ghost(lbound(ghost, 1)) + ubound(ghost, 1) + sum(ghost(-1:0))
+    ghost(idx(1:2)) = 1.5 * ghost(idx(1:2))
+    res(m) = res(m) + ghost(-1) + ghost(idx(2))
+  end subroutine gather_shifted
 
 end module poly_mod

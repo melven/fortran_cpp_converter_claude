@@ -11,7 +11,7 @@ program driver
   integer :: ierr, i
   type(poly_type) :: pol
   type(fixed_point_type) :: fp
-  real :: xs(2)
+  real :: xs(2), gs(4)
   real :: cf(0:3), dd(0:3), tab(3, 0:1), hst(2, 2, 0:1)
   A = reshape([0.1, -0.3, 0.7, 1.2, 0.4, -0.5, 2.0, 0.3, -1.1], [3,3])
   B = reshape([1.0, 0.0, 2.0, -1.0, 0.5, 0.25], [3,2])
@@ -48,6 +48,8 @@ program driver
   print '(3es24.15)', pol%eval(1.3), poly_eval(dd, 0.7), poly_eval(cf(1:), 2.0)
   print '(6es24.15)', tab
   print '(8es24.15)', hst
+  call gather_shifted([1.0, 2.0, 3.0], gs)
+  print '(4es24.15)', gs
   xs = [1.0, 2.0]
   call fp%solve(my_residual, 0.5, xs, ierr)
   print '(2es24.15)', xs
