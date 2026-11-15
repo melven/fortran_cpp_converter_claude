@@ -36,7 +36,9 @@ with less precise output (calls are passed through unchanged).
 |---|---|
 | module `foo_mod` | `foo_mod.hpp` / `foo_mod.cpp`, `namespace <ns>` (`namespace_map`: child namespaces per module) |
 | private module procedures / variables | anonymous namespace in the `.cpp` |
-| `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `virtual` / `override` / `= 0`, destructor |
+| `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `override` / `= 0`, destructor |
+| type without derived type in the run | `class xyz final` (`closed_hierarchy`) |
+| binding that is overridden in a derived type / root of a hierarchy | `virtual` method / virtual destructor; other methods are not virtual |
 | binding `configure` with `intent(out)` passed object (`constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
 | type-bound procedure, `this%x` | member function (const if `intent(in)`), `x`; `this->x` only if a local variable or argument has the same name (`explicit_this = true`: always) |
@@ -155,6 +157,7 @@ Components that are accessor functions in the C++ class:
 ```toml
 [accessors]                # Fortran type -> components; ["*"] = all components
 system_type = ["models", "offsets"]     # system%models -> system.models()
+other_type = ["coupling_manager=couplingManager"]   # renamed: x%coupling_manager -> x.couplingManager()
 ```
 
 An accessor is assumed to return a reference, also if the Fortran component is a pointer:
@@ -198,6 +201,9 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
   shows thin wrappers that keep such calls working until they are replaced by Eigen decompositions.
 - **Eigen aliasing**: only `transpose` of the assigned variable is flagged.
 - **Loop bounds** are re-evaluated in every iteration in C++ (once in Fortran).
+- `closed_hierarchy = true` (default) assumes that the run sees every derived type (files to
+  translate and `-I`). Otherwise a base class wrongly becomes `final` / non-virtual (compile
+  error in the derived class); set it to `false` for partial runs.
 - Module procedures accessing `private` components of a type that are not type-bound need
   `friend` or accessors.
 - Passing a slice to a non-`const` `Eigen::Ref` of a *different* storage layout, array-valued

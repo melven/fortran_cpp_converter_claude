@@ -103,10 +103,14 @@ def test_expressions(out):
 
 def test_classes(out):
     hpp = read(out, "shape_mod.hpp")
-    assert "class circle : public shape\n{\npublic:" in hpp
+    assert "class circle final : public shape\n{\npublic:" in hpp and "class shape\n{\npublic:" in hpp
     assert "virtual scalar area() const = 0;" in hpp
     assert "scalar area() const override;" in hpp
     assert "virtual ~shape() = default;" in hpp
+    # virtual only where needed: scale is overridden, scaled_area is not
+    assert "  virtual void scale(scalar factor);" in hpp
+    assert "\n  scalar scaled_area(std::optional<scalar> factor = std::nullopt) const;" in hpp
+    assert "class block_lu final\n{" in read(out, "block_lu_mod.hpp")
     cpp = read(out, "shape_mod.cpp")
     assert "shape::scale(factor);" in cpp and "a = pi * (radius * radius);" in cpp
     assert "s = std::make_unique<circle>();" in cpp
@@ -203,8 +207,8 @@ def test_features(out):
     assert 'std::cout << "count: " << n << std::endl;' in cpp and "std::cout << lines[1];" in cpp
     assert "// TODO(f2cpp): not translated (write:format-descriptor)" in cpp
     assert "a.payload = std::move(fresh);" in cpp and "b.payload.reset();" in cpp
-    assert "class Grid\n{" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
-    assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder\n{" in hpp
+    assert "class Grid final\n{" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
+    assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder final\n{" in hpp
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp
     assert "g.blocks.resize(2 * 2 * n * (n + 1));" in cpp and "g.cells.resize(n, n + 1);" in cpp
     assert "g.blocks.setZero();" in cpp
@@ -229,12 +233,12 @@ def test_pfunit(out):
     assert "using namespace project;" in t and "namespace project" not in t.replace("using namespace project;", "")
     f = read(out, "test_poly_mod.cpp")          # @before / @after -> fixture, helpers -> static functions
     assert "class test_poly_mod : public ::testing::Test" in f and "void SetUp() override { setUp(); }" in f
-    assert "class sample\n{" in f and "sample s;" in f
+    assert "class sample final\n{" in f and "sample s;" in f
     assert "TEST_F(test_poly_mod, test_eval)" in f
     assert not os.path.exists(os.path.join(out[0], "test_poly_mod.hpp"))
     # a test module used by another test module gets a header for its types, constants and helpers
     h = read(out, "test_helpers_mod.hpp")
-    assert "class poly_fixture\n{" in h and "scalar geometric_sum(scalar x, int n);" in h
+    assert "class poly_fixture final\n{" in h and "scalar geometric_sum(scalar x, int n);" in h
     assert "inline const scalar test_tol = 1.e-13;" in h and "using namespace project;" in h
     hc = read(out, "test_helpers_mod.cpp")
     assert '#include "test_helpers_mod.hpp"' in hc and "void poly_fixture::prepare(int degree)" in hc
@@ -254,10 +258,11 @@ def test_options(tmp_path):
     c["constructor_bindings"] = ["configure"]
     c["brace_style"] = "attached"
     c["include_guard"] = "pragma"
+    c["closed_hierarchy"] = False
     translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
     hpp = (tmp_path / "block_lu_mod.hpp").read_text()
     cpp = (tmp_path / "block_lu_mod.cpp").read_text()
-    assert "namespace abc::linalg {" in hpp and "class BlockLu {" in hpp
+    assert "namespace abc::linalg {" in hpp and "class BlockLu {" in hpp and "final" not in hpp and "void factorize();" in hpp
     assert "#pragma once" in hpp and "#ifndef" not in hpp
     assert "void solve(Eigen::Ref<vec> x) const;" in hpp
     assert "void init(int nblocks, int bs);" in hpp      # "init" is not a constructor name by default
@@ -431,10 +436,14 @@ def test_accessors(tmp_path):
         "subroutine s(system, obj, n)\ntype(system_type), intent(inout) :: system\n"
         "type(legacy_type), intent(inout) :: obj\ninteger :: n\n"
         "n = size(system%models) + system%count + system%offsets%first\n"
-        "system%models(2)%id = n\nobj%value = 2.0 * obj%value\nend subroutine\nend module\n")
+        "system%models(2)%id = n\nobj%value = 2.0 * obj%value\nsystem%coupling_manager%step = n\nend subroutine\nend module\n")
     c = config.load()
-    c["accessors"] = {"system_type": ["models", "offsets"], "legacy_type": ["*"]}
+    (tmp_path / "f2cpp.toml").write_text(
+        '[accessors]\nSystem_type = ["models", "offsets", "coupling_manager=couplingManager"]\n'
+        'legacy_type = ["*"]\n')
+    c = config.load(str(tmp_path / "f2cpp.toml"))
     translate([str(tmp_path / "a_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "legacy_mod.F90")])
+    assert "system.couplingManager().step = n;" in (tmp_path / "a_mod.cpp").read_text()
     cpp = (tmp_path / "a_mod.cpp").read_text()
     assert "n = system.models().size() + system.count + system.offsets().first;" in cpp
     assert "system.models()(2).id = n;" in cpp
@@ -461,7 +470,7 @@ def test_accessors_of_base_class(tmp_path):
         "subroutine work(this, n)\nclass(derived_type), intent(inout) :: this\ninteger, intent(out) :: n\n"
         "n = this%system%count + this%own + this%other\nend subroutine\nend module\n")
     c = config.load()
-    c["accessors"] = {"base_type": ["system"]}
+    c["accessors"] = {"base_type": {"system": None}}
     translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path))
     assert "n = system().count + own + other;" in (tmp_path / "d_mod.cpp").read_text()
 
@@ -477,7 +486,7 @@ def test_accessor_of_pointer_component(tmp_path):
         "subroutine work(this, n)\nclass(derived_type), intent(inout) :: this\ninteger, intent(out) :: n\n"
         "n = this%system%count + this%raw%count\nend subroutine\nend module\n")
     c = config.load()
-    c["accessors"] = {"base_type": ["system"]}
+    c["accessors"] = {"base_type": {"system": None}}
     translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path), [str(tmp_path / "base_mod.F90")])
     assert "n = system().count + raw->count;" in (tmp_path / "d_mod.cpp").read_text()
 

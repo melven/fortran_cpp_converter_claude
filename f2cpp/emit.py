@@ -178,7 +178,9 @@ class ModuleEmitter:
             tr.emit(ind, f"// {TODO}: type name is spelled inconsistently in the Fortran source: "
                          + ", ".join(sorted(prog.spellings[t.name])))
         base = f" : public {prog.type_name(t.parent, self.mod)}" if t.parent else ""
-        tr.emit(ind, f"class {name}{base} {{")
+        closed = self.cfg["closed_hierarchy"]
+        final = " final" if closed and not t.children and not t.abstract else ""
+        tr.emit(ind, f"class {name}{final}{base} {{")
         tr.emit(ind, "public:")
         mine = [p for p in t.module.procs.values() if p.method_of == t.name]
         has_dtor = any(p.bind_name == "~" for p in mine)
@@ -189,7 +191,8 @@ class ModuleEmitter:
             tr.emit(ind + 1, f"{name}({name}&&) = default;")
             tr.emit(ind + 1, f"{name}& operator=(const {name}&) = default;")
             tr.emit(ind + 1, f"{name}& operator=({name}&&) = default;")
-        if poly and not t.parent and not any(p.bind_name == "~" for p in mine):
+        base_class = bool(t.children) or t.abstract if closed else poly     # others may derive from it
+        if base_class and not t.parent and not any(p.bind_name == "~" for p in mine):
             tr.emit(ind + 1, f"virtual ~{name}() = default;")
         # flatten: fparser spreads components / comments over several nodes
         comps, binds = [], []
@@ -235,11 +238,14 @@ class ModuleEmitter:
                 if p.is_ctor:
                     sig = ("explicit " if sig.count(",") == 0 and not sig.endswith("()") else "") + sig
                 elif p.is_dtor:
-                    sig = "virtual " + sig if poly and not t.parent else sig + (" override" if poly else "")
+                    sig = sig + " override" if t.parent else "virtual " + sig if base_class else sig
                 elif bd.nopass:
                     sig = "static " + sig
                 elif poly:
-                    sig = sig + " override" if prog.overrides(t, bd.name) else "virtual " + sig
+                    if prog.overrides(t, bd.name):
+                        sig += " override"
+                    elif not closed or prog.overridden(t, bd.name):
+                        sig = "virtual " + sig
                 tr.emit(ind + 1, sig + ";")
             elif k == "Final_Binding":
                 tr.emit(ind + 1, f"~{name}();")

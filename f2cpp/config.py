@@ -15,6 +15,10 @@ DEFAULTS = {
     "include_guard": "ifndef",    # "ifndef": #ifndef FILE_NAME_HPP ... #endif; "pragma": #pragma once
     "doxygen": "//!",             # prefix of documentation comments ("//!" or "///")
     "brace_style": "allman",      # "allman": { on its own line; "attached": if (...) {
+    # True: the run sees all derived classes (files to translate and -I): classes without derived
+    # class are final, methods are virtual only if they are deferred or overridden.
+    # False: every method of a class hierarchy is virtual, no final
+    "closed_hierarchy": True,
     "explicit_this": False,       # True: always write this->member
     # values of the error flag that mean success (lower case), e.g. ["0", "myproj_success"]
     "error_success": ["0"],
@@ -52,7 +56,8 @@ DEFAULTS = {
     # exist in C++ already, and to rename the output files of translated modules
     "module_headers": {},
     # components that are accessor functions in the existing C++ class:
-    # Fortran type -> component names (["*"]: all components): obj%models -> obj.models()
+    # Fortran type -> component names (["*"]: all components): obj%models -> obj.models();
+    # renamed accessor: "coupling_manager=couplingManager"
     "accessors": {},
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
@@ -111,7 +116,9 @@ def load(path=None, **overrides):
                 cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
             else:
                 cfg[key] = val
-    cfg["accessors"] = {k.lower(): [n.lower() for n in v] for k, v in cfg["accessors"].items()}
+    # accessors: type -> {component: C++ accessor name or None (same name)}
+    cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
+                                    for n in v} for k, v in cfg["accessors"].items()}
     for key in ("call_templates", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]

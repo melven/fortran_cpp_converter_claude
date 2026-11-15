@@ -593,6 +593,17 @@ class Program:
     def overrides(self, t, bname):
         return any(bname in a.bindings for a in self.ancestors(t))
 
+    def descendants(self, t):
+        for c in sorted(t.children):
+            ct = self.find_type(c, t.module)
+            if ct is not None and ct is not t:
+                yield ct
+                yield from self.descendants(ct)
+
+    def overridden(self, t, bname):
+        """is the binding overridden in a (known) derived type?"""
+        return any(bname in d.bindings for d in self.descendants(t))
+
     # naming -----------------------------------------------------------
     def type_name(self, tname, from_module=None):
         cfg = self.cfg

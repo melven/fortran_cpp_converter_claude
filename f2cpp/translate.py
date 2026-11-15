@@ -375,23 +375,23 @@ class Translator:
         sep = "->" if obj.raw is not None else "."
         return (obj.raw if obj.raw is not None else par(obj)) + sep + qual + name
 
-    def accessor(self, tname, comp):
-        """"()" if the component is an accessor function of the existing C++ class"""
+    def accessor(self, tname, comp, spelled):
+        """name of the accessor function if the component is one in the existing C++ class, else None"""
         acc = self.cfg["accessors"]
         if not acc or tname is None:
-            return ""
+            return None
         chain, t = [tname], self.find_type(tname)       # the type and its base types
         while t is not None and t.parent:
             chain.append(t.parent)
             t = self.find_type(t.parent)
         for name in chain:
             t = self.find_type(name)
-            names = acc.get(name, ())
-            if t is not None and comp in t.comps:       # the type that defines the component decides
-                return "()" if comp in names or "*" in names else ""
-            if comp in names or (t is None and "*" in names):
-                return "()"                             # type not parsed: trust the configuration
-        return ""
+            names = acc.get(name, {})
+            listed = comp in names or "*" in names
+            if (t is not None and comp in t.comps) or comp in names or (t is None and "*" in names):
+                # the type that defines the component decides; type not parsed: trust the configuration
+                return (names.get(comp) or spelled) if listed else None
+        return None
 
     def x_Proc_Component_Ref(self, node):
         """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
@@ -417,13 +417,15 @@ class Translator:
                             qual=self.prog.type_name(n, self.mod) + "::")
                     continue
                 self.report.add("info", "unknown-component:" + n)
-                x = X(self.member(cur, cname(str(pname)), cur.qual) + self.accessor(cur.tname, n))
+                acc = self.accessor(cur.tname, n, cname(str(pname)))
+                x = X(self.member(cur, acc, cur.qual) + "()" if acc else
+                      self.member(cur, cname(str(pname)), cur.qual))
                 if subs is not None:
                     x = self.unknown_ref(x.code, subs)
             else:
-                acc = self.accessor(cur.tname, n)
+                acc = self.accessor(cur.tname, n, comp.cname)
                 if acc:     # the accessor returns a reference, also for pointer components
-                    x = X(self.member(cur, comp.cname, cur.qual) + acc, comp.rank, comp.base, 100, comp,
+                    x = X(self.member(cur, acc, cur.qual) + "()", comp.rank, comp.base, 100, comp,
                           comp.tname, whole=True)
                 else:
                     x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
