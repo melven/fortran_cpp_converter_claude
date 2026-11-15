@@ -142,6 +142,15 @@ A `function_map` entry can also be a template that converts arguments for a C AP
 `tools/make_tixi_config.py` (the Fortran 2003 binding and the C API share names and argument
 order). Several configuration files can be combined: `-c f2cpp.toml -c examples/tixi.toml`.
 
+## Classes replaced by library classes with another interface
+
+`method_templates` rewrites calls of type-bound procedures of a type that is mapped with
+`type_map`: `"lu_type%solve" = "{1} = {self}.solve({0});"` turns `call lu%solve(b, x, ierr)`
+into `x = lu.solve(b);`. `{self}` is the object, `{0}`, `{1}` are the arguments (without the
+error flag); a template may contain several statements. `examples/eigen_solvers.toml` shows
+an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
+(`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
+
 ## Callbacks
 
 | Fortran | C++ |

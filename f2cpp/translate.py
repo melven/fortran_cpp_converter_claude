@@ -376,12 +376,21 @@ class Translator:
         fn = self.cfg["function_map"][n]
         if "{" not in fn:
             return f"{fn}({', '.join(self.plain_args(args))})"
-        xs = [self.expr(node) for _, node in map(self.split_arg, args) if not self.is_err(node)]
+        return self.fill_template(fn, args, n)
+
+    def fill_template(self, template, args, what, obj=None):
+        """{0}, {1:cstr}, {2:ptr}, {3:data}: translated arguments; {self}: the object of a method call"""
+        xs = [self.expr(node) for _, node in map(self.split_arg, args)
+              if not self.is_err(node) and not self.is_dropped(node)]
 
         def sub(m):
+            if m.group(0) == "{self}":
+                if obj is None:
+                    raise Untranslatable("template-self:" + what)
+                return par(obj)
             i, conv = int(m.group(1)), m.group(2)
             if i >= len(xs):
-                raise Untranslatable("function-map-arguments:" + n)
+                raise Untranslatable("template-arguments:" + what)
             x = xs[i]
             code = self.matrix(x)
             if conv == "cstr":
@@ -391,7 +400,15 @@ class Translator:
             if conv == "data":
                 return par(x) + ".data()"
             return code
-        return re.sub(r"\{(\d+)(?::(\w+))?\}", sub, fn)
+        return re.sub(r"\{self\}|\{(\d+)(?::(\w+))?\}", sub, template)
+
+    def method_template(self, tname, binding):
+        """template configured for a type-bound procedure of the type or one of its base types"""
+        t = self.find_type(tname)
+        for name in [tname] + ([a.name for a in self.prog.ancestors(t)] if t is not None else []):
+            if f"{name}%{binding}" in self.cfg["method_templates"]:
+                return self.cfg["method_templates"][f"{name}%{binding}"]
+        return None
 
     def unknown_ref(self, base, subs):
         """name(...) of unknown kind: an array section if it has a triplet, else passed through as call"""
@@ -793,6 +810,9 @@ class Translator:
         base_node, _, bname = desig.items
         obj = self.expr(base_node)
         n = lname(bname)
+        template = self.method_template(obj.tname, n) if obj.tname else None
+        if template is not None:        # method of an existing C++ class with another interface
+            return self.fill_template(template, items_of(args), f"{obj.tname}%{n}", obj), None
         td = self.find_type(obj.tname)
         owner, b = self.prog.find_binding(td, n) if td else (None, None)
         p = self.prog.binding_proc(owner, b) if owner else None
@@ -1179,7 +1199,7 @@ class Translator:
                     self.report.add("info", "external-call:" + n)
                     self.note("external-call", "external procedure, no interface known")
                 code = f"{str(desig)}({', '.join(self.plain_args(args))})"
-        self.emit(ind, code if code.startswith("//") else code + ";")
+        self.emit(ind, code if code.startswith("//") or code.rstrip().endswith((";", "}")) else code + ";")
         self.last_err_call = (len(self.out) - 1, code) if had_err else None
 
     def pf_assert(self, name, args, ind):

@@ -1,0 +1,26 @@
+# Example: Fortran solver classes replaced by Eigen decompositions.
+# Adapt the type names, binding names and argument positions to the Fortran classes.
+# {self}: the object the method is called on; {0}, {1}, ...: the arguments (without ierr).
+
+[type_map]
+eigensolver_type = "Eigen::EigenSolver<mat>"
+linearsolver_type = "Eigen::PartialPivLU<mat>"
+leastsquares_type = "Eigen::ColPivHouseholderQR<mat>"
+
+[module_headers]            # no header of the replaced Fortran modules
+eigensolver_mod = ""
+linearsolver_mod = ""
+leastsquares_mod = ""
+
+[method_templates]
+# call es%solveSymmetric(A, lambda, V, ierr): the symmetric case uses another Eigen class than the object
+"eigensolver_type%solvesymmetric" = "{ Eigen::SelfAdjointEigenSolver<mat> es_({0}); {1} = es_.eigenvalues(); {2} = es_.eigenvectors(); }"
+# call es%solveNonsymmetric(A, lambda, V, ierr): eigenvalues / eigenvectors are complex in general
+"eigensolver_type%solvenonsymmetric" = "{self}.compute({0}); {1} = {self}.eigenvalues().real(); {2} = {self}.eigenvectors().real();  // TODO: complex eigenvalues"
+
+# call lu%factorize(A, ierr); call lu%solve(b, x, ierr)
+"linearsolver_type%factorize" = "{self}.compute({0});"
+"linearsolver_type%solve" = "{1} = {self}.solve({0});"
+
+# call ls%solve(A, b, x, ierr)
+"leastsquares_type%solve" = "{2} = {self}.compute({0}).solve({1});"

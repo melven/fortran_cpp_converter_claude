@@ -540,3 +540,29 @@ def test_procedure_map_and_callback_implementation(tmp_path):
     assert "fixed_point_solve(my_res, x, 1.e-8, 10);" in cpp         # user data dropped: wrap by hand in a lambda
     assert "void my_res(const vec& x, vec& f)" in cpp
     assert "// TODO(f2cpp): not translated (dropped-argument)\n  // F: SELECT TYPE(userData)" in cpp
+
+
+@needs_cxx
+def test_method_templates_for_eigen_solvers(tmp_path):
+    (tmp_path / "use_solvers_mod.F90").write_text(
+        "module use_solvers_mod\nuse eigensolver_mod, only: eigensolver_type\n"
+        "use linearsolver_mod, only: linearsolver_type\nuse leastsquares_mod, only: leastsquares_type\n"
+        "implicit none\ncontains\nsubroutine run(A, b, x, lambda, V, ierr)\n"
+        "real, intent(in) :: A(:, :), b(:)\nreal, intent(out) :: x(:), lambda(:), V(:, :)\n"
+        "integer, intent(out) :: ierr\ntype(eigensolver_type) :: es\ntype(linearsolver_type) :: lu\n"
+        "type(leastsquares_type) :: ls\n"
+        "call es%solveSymmetric(A, lambda, V, ierr)\ncall es%solveNonsymmetric(A, lambda, V, ierr)\n"
+        "call lu%factorize(A, ierr)\ncall lu%solve(b, x, ierr)\ncall ls%solve(A, b, x, ierr)\n"
+        "end subroutine\nend module\n")
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), os.path.join(HERE, "..", "examples", "eigen_solvers.toml")])
+    path = str(tmp_path / "use_solvers_mod.F90")
+    report, _ = translate([path], c, str(tmp_path))
+    cpp = (tmp_path / "use_solvers_mod.cpp").read_text()
+    assert "Eigen::EigenSolver<mat> es;" in cpp and "Eigen::PartialPivLU<mat> lu;" in cpp
+    assert "{ Eigen::SelfAdjointEigenSolver<mat> es_(A); lambda = es_.eigenvalues(); V = es_.eigenvectors(); }" in cpp
+    assert "es.compute(A); lambda = es.eigenvalues().real(); V = es.eigenvectors().real();  // TODO" in cpp
+    assert "lu.compute(A);" in cpp and "x = lu.solve(b);" in cpp and "x = ls.compute(A).solve(b);" in cpp
+    assert "#include" not in (tmp_path / "use_solvers_mod.hpp").read_text().split("lapack_compat.hpp")[1]
+    assert not report.files[path]["untranslated"]
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "use_solvers_mod.cpp"],
+        str(tmp_path))

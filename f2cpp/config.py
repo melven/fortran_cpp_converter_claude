@@ -89,6 +89,10 @@ DEFAULTS = {
     "function_map": {},
     "test_extensions": [".pf", ".pfunit"],     # pFUnit test files; also: modules using test_modules
     "test_modules": ["funit", "pfunit", "pfunit_mod"],
+    # "type%binding" (lower case) -> C++ template for calls of that type-bound procedure:
+    # {self}: the object, {0}, {1}: arguments (conversions as in function_map), e.g.
+    # "lu_type%solve" = "{1} = {self}.solve({0});"
+    "method_templates": {},
     # abstract interface (lower case) -> C++ type of procedure arguments / components declared
     # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
     "procedure_map": {},
@@ -126,7 +130,7 @@ def load(path=None, **overrides):
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
-    for key in ("call_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
+    for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     for key, val in overrides.items():
