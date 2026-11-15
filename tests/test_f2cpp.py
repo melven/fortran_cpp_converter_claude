@@ -61,6 +61,9 @@ def test_prepass_macros():
 
 def test_report(out):
     files = out[1].files
+    todo = [c for name, counters in files.items() if "features" in name for c in counters["todo"]]
+    assert "inconsistent-name-case:addValue,addvalue" in todo
+    assert "inconsistent-type-case:Holder_Type,holder_type" in todo
     for name, counters in files.items():
         if "features" in name:
             assert set(counters["untranslated"]) == {"error-arg:If_Construct", "write:format-descriptor"}

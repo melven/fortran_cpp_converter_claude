@@ -144,7 +144,7 @@ class ModuleEmitter:
     def warn_name(self, tr, name, ind):
         spellings = self.prog.inconsistent_proc_case(name)
         if spellings:
-            self.report.add("todo", "inconsistent-name-case")
+            self.report.add("todo", "inconsistent-name-case:" + ",".join(spellings))
             tr.emit(ind, f"// {TODO}: name is spelled inconsistently in the Fortran source: "
                          + ", ".join(spellings))
 
@@ -159,7 +159,7 @@ class ModuleEmitter:
         name = prog.type_name(t.name)
         poly = prog.polymorphic(t)
         if prog.inconsistent_case(t.name):
-            self.report.add("todo", "inconsistent-type-case")
+            self.report.add("todo", "inconsistent-type-case:" + ",".join(sorted(prog.spellings[t.name])))
             tr.emit(ind, f"// {TODO}: type name is spelled inconsistently in the Fortran source: "
                          + ", ".join(sorted(prog.spellings[t.name])))
         base = f" : public {prog.type_name(t.parent, self.mod)}" if t.parent else ""
