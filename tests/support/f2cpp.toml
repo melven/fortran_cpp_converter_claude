@@ -1,4 +1,5 @@
 namespace = "project"
+eigen_placeholders = "Eigen"          # the test environment has Eigen 3.4
 constructor_bindings = ["configure", "init"]
 test_includes = ['"gtest_eigen.hpp"']
 extra_includes = ['"project_math.hpp"', '"lapack_compat.hpp"']

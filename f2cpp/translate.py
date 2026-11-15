@@ -456,9 +456,9 @@ class Translator:
             return "idx", self.index0(s, lb)
         lo, hi, step = s.items
         if lo is None and hi is None and step is None:
-            return "all", "Eigen::all"
+            return "all", self.cfg["eigen_placeholders"] + "::all"
         a = self.index0(lo, lb) if lo is not None else "0"
-        b = self.index0(hi, lb) if hi is not None else "Eigen::last"
+        b = self.index0(hi, lb) if hi is not None else self.cfg["eigen_placeholders"] + "::last"
         c = f", {self.expr(step).code}" if step is not None else ""
         return "seq", f"Eigen::seq({a}, {b}{c})"
 

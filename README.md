@@ -86,6 +86,12 @@ with less precise output (calls are passed through unchanged).
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |
 | type, procedure and binding names | spelling of the definition (`Block_LU_type` → `Block_LU`, `myFunction`); TODO if the source is inconsistent |
 
+## Eigen version
+
+Sections use `Eigen::seq` with `Eigen::placeholders::all` / `last` (Eigen ≥ 3.5 / master). For
+Eigen 3.4, where these are deprecated in favour of `Eigen::all` / `Eigen::last`, set
+`eigen_placeholders = "Eigen"`.
+
 ## Formatting
 
 `brace_style = "allman"` (default, `{` on its own line) or `"attached"`. Indentation is two
