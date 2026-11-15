@@ -304,9 +304,13 @@ class ModuleEmitter:
     def includes(self):
         ext, known = self.cfg["header_ext"], self.cfg["module_headers"]
         res = []
+        replaced = set(self.cfg["function_map"]) | set(self.cfg["call_templates"]) | set(self.cfg["kind_map"])
         for u in self.mod.uses:
             if u in self.cfg["ignore_modules"]:
                 continue
+            only = self.mod.use_only.get(u)
+            if only and all(n in replaced for n in only):
+                continue        # everything imported from this module is replaced by the configuration
             h = known.get(u, u + ext)
             if h and f'#include "{h}"' not in res:
                 res.append(f'#include "{h}"')

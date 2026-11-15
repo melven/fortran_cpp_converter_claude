@@ -323,6 +323,9 @@ def test_missing_modules(tmp_path):
     c = config.load()
     c["function_map"] = {"str": "std::to_string"}
     report, _ = translate([str(tmp_path / "m_mod.F90")], c, str(tmp_path), [str(tmp_path / "d_mod.F90")])
+    hpp = (tmp_path / "m_mod.hpp").read_text()
+    assert '#include "b_mod.hpp"' not in hpp        # only: str, which is in the function_map
+    assert '#include "a_mod.hpp"' in hpp and '#include "c_mod.hpp"' in hpp
     missing = set(report.files[str(tmp_path / "m_mod.F90")]["missing"])
     assert missing == {"a_mod: needed for a_type, helper",
                        "c_mod (no only-list): unresolved names in this file: a_type, helper, other"}

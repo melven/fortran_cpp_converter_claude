@@ -165,6 +165,9 @@ argument handling. Method names are assumed to be identical to the Fortran bindi
 e.g. to flatten kind indirections: `[['real\(kind=real_kind\)', 'real(kind=8)']]`.
 Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
 
+A `use m, only: a, b` produces no `#include` if all imported names are replaced by
+`function_map`, `call_templates` or `kind_map`.
+
 ## Missing modules
 
 The summary and the report list used modules that are neither translated in the same call nor
