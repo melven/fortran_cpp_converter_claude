@@ -823,8 +823,7 @@ class Translator:
         else:
             self.emit(ind, c)
 
-    def block(self, nodes, ind):
-        prev = None
+    def block(self, nodes, ind, prev=None):
         for n in nodes:
             if cls(n) == "Comment":
                 self.comment(n, ind, prev)

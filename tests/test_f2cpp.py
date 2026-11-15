@@ -118,6 +118,7 @@ def test_classes(out):
     assert "//! Horner scheme\n//! @param[in] c coefficients 0..n\n//! @param[in] x evaluation point\n" \
            "//! @return value of the polynomial\nscalar poly_eval(" in read(out, "poly_mod.hpp")
     assert "block row and column" not in read(out, "block_lu_mod.cpp")
+    assert "  int k;  //!< loop index\n" in read(out, "poly_mod.cpp")
     assert "private:" in lu and "int bs = 0;  //!< block size" in lu
 
 

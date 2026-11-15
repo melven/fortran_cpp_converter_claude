@@ -285,7 +285,7 @@ class ModuleEmitter:
                     kd = cls(d)
                     if kd == "Implicit_Part":
                         tr.block([c for c in d.content if cls(c) == "Comment" and id(c) not in p.doc_nodes],
-                                 ind + 1)
+                                 ind + 1, prev)
                     elif kd == "Comment":
                         if id(d) not in p.doc_nodes:        # argument documentation is in the header
                             tr.comment(d, ind + 1, prev)
