@@ -51,6 +51,7 @@ class Var:
     is_const: bool = False
     force_ptr: bool = False      # select-type alias etc.
     alloc_dims: list = None      # shape of an allocate statement for this name (flat arrays)
+    mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
     node: object = None
@@ -367,8 +368,9 @@ def collect_module(node):
 
 def _target_name(node):
     """name of the (last component of the) object designated by node"""
-    while cls(node) in ("Data_Ref", "Part_Ref", "Allocation"):
-        node = node.items[-1] if cls(node) == "Data_Ref" else node.items[0]
+    while cls(node) in ("Data_Ref", "Part_Ref", "Allocation", "Data_Pointer_Object", "Proc_Component_Ref"):
+        node = node.items[-1] if cls(node) in ("Data_Ref", "Data_Pointer_Object", "Proc_Component_Ref") \
+            else node.items[0]
     return lname(node)
 
 
@@ -387,10 +389,18 @@ def classify_pointers(m):
         for v in scope.values():
             if v.name in shapes and len(shapes[v.name]) == v.rank:
                 v.alloc_dims = shapes[v.name]
+    # names that are pointer-associated with a target somewhere (p => x, not p => null())
+    associated = {_target_name(a.items[0]) for a in walk(m.node, F.Pointer_Assignment_Stmt)
+                  if "null" not in lname(a.items[2])}
     for t in m.types.values():
         for v in t.comps.values():
             if v.has("pointer") and v.rank == 0 and v.name in allocated:
                 v.attrs = (v.attrs - {"pointer"}) | {"allocatable"}
+            elif v.has("pointer") and v.rank > 0 and v.name in allocated and v.name not in associated:
+                # array pointer that is only allocated / deallocated: the Fortran idiom for a
+                # member that can be modified through an intent(in) object -> mutable array
+                v.attrs = (v.attrs - {"pointer"}) | {"allocatable"}
+                v.mutable = True
     for p in m.procs.values():
         execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
         body = execs[0] if execs else None

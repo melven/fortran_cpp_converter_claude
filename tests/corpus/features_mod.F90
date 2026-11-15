@@ -23,6 +23,7 @@ module features_mod
     integer :: n = 0
     real :: total = 0.0
     real, allocatable :: samples(:)
+    real, pointer, contiguous, private :: work(:) => null()    !< scratch space
     type(legacy_type) :: legacy
     class(shape_type), allocatable :: owner
   contains
@@ -372,6 +373,7 @@ contains
     if (.not. allocated(this%samples)) then
       PROJECT_ALLOCATE(this%samples(max_items), ierr)
     end if
+    if (.not. associated(this%work)) allocate(this%work(max_items))
     PROJECT_ASSERT(this%n < max_items, ierr)
     this%n = this%n + 1
     this%samples(this%n) = x
@@ -384,6 +386,7 @@ contains
     real :: m
     integer :: ierr
     m = mean(this%samples(1:this%n), ierr=ierr)
+    if (associated(this%work)) this%work(1) = m
   end function stats_mean
 
   function stats_version() result(v)
@@ -394,6 +397,7 @@ contains
   subroutine stats_cleanup(this)
     type(stats_type), intent(inout) :: this
     if (allocated(this%samples)) deallocate(this%samples)
+    if (associated(this%work)) deallocate(this%work)
   end subroutine stats_cleanup
 
 end module features_mod

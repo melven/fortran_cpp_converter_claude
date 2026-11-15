@@ -74,7 +74,9 @@ class ModuleEmitter:
                 continue
             try:
                 pre = prefix
-                if v.has("parameter"):
+                if v.mutable and member:
+                    pre += "mutable "
+                elif v.has("parameter"):
                     pre += "const "
                 elif (v.has("save") or v.init is not None) and tr.proc is not None:
                     pre += "static "

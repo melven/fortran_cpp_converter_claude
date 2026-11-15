@@ -158,7 +158,11 @@ def test_features(out):
            "return (Eigen::VectorXi(2) << r_ + 1, c_ + 1).finished(); }();" in cpp
     assert "if (samples.size() == 0)\n" in cpp and "if (samples.size() > 0) samples.resize(0);" in cpp
     assert "if (h.owned == nullptr)\n" in cpp
-    assert "tmp.setRandom();  // TODO(f2cpp): Eigen setRandom" in cpp and "a.col(0).setRandom();" in cpp
+    assert "tmp = (tmp.setRandom().array() + 1.0) / 2.0;" in cpp
+    assert "a.col(0) = (a.col(0).setRandom().array() + 1.0) / 2.0;" in cpp
+    # array pointer component that is only allocated: mutable array (written in a const method)
+    assert "mutable vec work;  ///< scratch space" in hpp and "'work' is translated as an owning array" not in hpp
+    assert "if (work.size() == 0) work.resize(max_items);" in cpp and "if (work.size() > 0) work(0) = m;" in cpp
     assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
     # output statements, string arrays, owned pointers
     assert 'std::fill(lines.begin(), lines.end(), "");' in cpp

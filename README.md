@@ -49,7 +49,7 @@ with less precise output (calls are passed through unchanged).
 | array of objects, rank 1 / 2 | `std::vector<T>` / `Eigen::Array<T, Dynamic, Dynamic>`: `b(i, j)%m(k, l)` → `b(i - 1, j - 1).m(k - 1, l - 1)` |
 | any array of rank ≥ 4 (objects: ≥ 3) | flat `vec` / `std::vector<T>` with explicit column-major index and a TODO; extents from the declaration or an `allocate` in the module |
 | vector subscript `v(iperm)` | `v((iperm.array() - 1))` |
-| `call random_number(x)` | `x.setRandom();` with a TODO (Eigen: [-1, 1], Fortran: [0, 1)); scalar: `std::rand() / RAND_MAX` |
+| `call random_number(x)` | `x = (x.setRandom().array() + 1.0) / 2.0;` (uniform in [0, 1] as in Fortran); scalar: `std::rand() / RAND_MAX` |
 | `print *, ...`, `write(*, fmt) ...` | `std::cout << ... << std::endl;` (formats with only `a`, `i0`, `g0`, `x`, `/` and literals) |
 | `write(str, fmt) ...` (internal write to a string) | `str = ... + std::to_string(n) + ...;` |
 | `strings = ''` (array of strings / objects = scalar) | `std::fill(v.begin(), v.end(), value);` |
@@ -57,6 +57,7 @@ with less precise output (calls are passed through unchanged).
 | `call move_alloc(a, b)` | `b = std::move(a);` (+ `a.resize(0)`) |
 | array dummies | `const mat&` / `mat&`; `Eigen::Ref<mat>` only for out/inout dummies that receive a slice in a translated call (`array_args = "auto"`; alternatives `"plain"`, `"ref"`) |
 | `pointer` that is allocated somewhere in the module | `std::unique_ptr<T>` |
+| array `pointer` component that is only allocated / deallocated, never `=>` a target | `mutable vec x;` (the Fortran idiom for a member modified through an `intent(in)` object) |
 | `pointer` dummy | reference |
 | local `pointer` associated once (`p => a%b%c`) | `auto&& p = a.b.c;` at the point of association |
 | other `pointer` (non-owning member, re-associated local) | `T*` with `TODO(f2cpp)` — decide by hand |

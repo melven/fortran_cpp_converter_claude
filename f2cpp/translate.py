@@ -975,16 +975,16 @@ class Translator:
                 return self.pf_assert(n[len(ASSERT_PREFIX) + 6:], args, ind)
             p = self.lookup_proc(n)
             if n == "random_number" and len(args) == 1:
+                # Fortran: uniform in [0, 1); Eigen setRandom: [-1, 1]
                 x = self.expr(self.split_arg(args[0])[1])
                 st = self.storage(x.var) if x.var is not None else None
                 if x.rank == 0:
                     self.emit(ind, f"{x.code} = static_cast<{self.cfg['scalar']}>(std::rand()) / RAND_MAX;")
                 elif st == "vec3" and x.whole:
-                    self.emit(ind, f"for (auto& b0_ : {x.raw or x.code}) b0_.setRandom();")
-                    self.note("random", "Eigen setRandom: values in [-1, 1], Fortran random_number: [0, 1)")
+                    self.emit(ind, f"for (auto& b0_ : {x.raw or x.code}) "
+                                   "b0_ = (b0_.setRandom().array() + 1.0) / 2.0;")
                 elif st in ("eigen", "vec3", "flat", None) and x.base not in ("type", "character"):
-                    self.emit(ind, f"{par(x)}.setRandom();")
-                    self.note("random", "Eigen setRandom: values in [-1, 1], Fortran random_number: [0, 1)")
+                    self.emit(ind, f"{par(x)} = ({par(x)}.setRandom().array() + 1.0) / 2.0;")
                 else:
                     raise Untranslatable("random_number")
                 return
