@@ -447,3 +447,15 @@ def test_module_given_twice_and_long_expressions(tmp_path):
     cpp = (tmp_path / "out" / "deep_mod.cpp").read_text()
     assert '"<line0>" + "<line1>"' not in cpp and 'std::string("<line0>") + "<line1>" + ' in cpp
     assert '+ "<line399>";' in cpp
+
+
+def test_accessors_of_base_class(tmp_path):
+    (tmp_path / "d_mod.F90").write_text(
+        "module d_mod\nuse base_mod, only: base_type\ntype, extends(base_type) :: derived_type\n"
+        "integer :: own = 0\ncontains\nprocedure :: work\nend type\ncontains\n"
+        "subroutine work(this, n)\nclass(derived_type), intent(inout) :: this\ninteger, intent(out) :: n\n"
+        "n = this%system%count + this%own + this%other\nend subroutine\nend module\n")
+    c = config.load()
+    c["accessors"] = {"base_type": ["system"]}
+    translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path))
+    assert "n = system().count + own + other;" in (tmp_path / "d_mod.cpp").read_text()

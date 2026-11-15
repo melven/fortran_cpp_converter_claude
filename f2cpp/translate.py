@@ -374,8 +374,21 @@ class Translator:
 
     def accessor(self, tname, comp):
         """"()" if the component is an accessor function of the existing C++ class"""
-        names = self.cfg["accessors"].get(tname, ())
-        return "()" if comp in names or "*" in names else ""
+        acc = self.cfg["accessors"]
+        if not acc or tname is None:
+            return ""
+        chain, t = [tname], self.find_type(tname)       # the type and its base types
+        while t is not None and t.parent:
+            chain.append(t.parent)
+            t = self.find_type(t.parent)
+        for name in chain:
+            t = self.find_type(name)
+            names = acc.get(name, ())
+            if t is not None and comp in t.comps:       # the type that defines the component decides
+                return "()" if comp in names or "*" in names else ""
+            if comp in names or (t is None and "*" in names):
+                return "()"                             # type not parsed: trust the configuration
+        return ""
 
     def x_Proc_Component_Ref(self, node):
         """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
