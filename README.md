@@ -41,6 +41,7 @@ with less precise output (calls are passed through unchanged).
 | binding that is overridden in a derived type / root of a hierarchy | `virtual` method / virtual destructor; other methods are not virtual |
 | binding `configure` with `intent(out)` passed object (`constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
+| components | `private:` by default; `protected:` if used by methods of derived classes; `public:` if used anywhere else in the run (free functions, other classes, tests, structure constructors). `member_access = "fortran"`: as declared in Fortran |
 | type-bound procedure, `this%x` | member function (const if `intent(in)`), `x`; `this->x` only if a local variable or argument has the same name (`explicit_this = true`: always) |
 | `class(t)` dummy / `class(t), allocatable` | `t&` / `std::unique_ptr<t>` |
 | `select type` | `typeid` (`type is`) / `dynamic_cast` (`class is`) |
@@ -230,8 +231,8 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 - `closed_hierarchy = true` (default) assumes that the run sees every derived type (files to
   translate and `-I`). Otherwise a base class wrongly becomes `final` / non-virtual (compile
   error in the derived class); set it to `false` for partial runs.
-- Module procedures accessing `private` components of a type that are not type-bound need
-  `friend` or accessors.
+- `member_access = "auto"` only sees uses in the files of the run: translate a class together with
+  its users and unit tests, otherwise members used elsewhere stay private (compile error there).
 - Passing a slice to a non-`const` `Eigen::Ref` of a *different* storage layout, array-valued
   optional objects, pointers: check by hand.
 - Not translated (kept as comment): I/O to units and with numeric edit descriptors (`f10.3`, `es12.4`), `where`/`forall` constructs, implied-do, named

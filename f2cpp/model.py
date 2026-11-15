@@ -51,6 +51,7 @@ class Var:
     is_const: bool = False
     force_ptr: bool = False      # select-type alias etc.
     alloc_dims: list = None      # shape of an allocate statement for this name (flat arrays)
+    access_need: int = 0         # component: 0 private, 1 used by derived classes, 2 used from outside
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)

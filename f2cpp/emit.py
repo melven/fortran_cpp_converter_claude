@@ -255,23 +255,59 @@ class ModuleEmitter:
         if t.comps:
             if binds or (poly and not t.parent):
                 tr.emit(0, "")
-            if t.private_comps:
-                tr.emit(ind, "private:" if not t.children else "protected:")
-            prev = None
+            # sections: 2 public, 1 protected, 0 private; each entry: comments before, statement,
+            # component name (None: whole statement), comments behind
+            auto = self.cfg["member_access"] == "auto"
+            fixed = (1 if t.children else 0) if t.private_comps else 2
+            sections, lead, last = {2: [], 1: [], 0: []}, [], None
             for d in comps:
                 if cls(d) == "Comment":
-                    tr.comment(d, ind + 1, prev)
+                    if last is not None and d.item is not None and getattr(last[0][1], "item", None) is not None \
+                            and last[0][1].item.span[1] == d.item.span[0]:
+                        for entry in last:
+                            entry[3].append(d)          # trailing comment of the previous statement
+                    else:
+                        lead.append(d)
                     continue
                 if cls(d) == "Data_Component_Def_Stmt":
-                    self.decl_stmt(tr, d, t.comps, ind + 1, member=True)
-                elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
-                    for pd in items_of(d.items[2]):
-                        v = t.comps[lname(pd.items[0] if cls(pd) == "Proc_Decl" else pd)]
-                        tr.emit(ind + 1, f"{tr.cpp_type(v)} {v.cname};")
+                    names = [lname(e.items[0]) for e in items_of(d.items[2])]
+                elif cls(d) == "Proc_Component_Def_Stmt":
+                    names = [lname(pd.items[0] if cls(pd) == "Proc_Decl" else pd) for pd in items_of(d.items[2])]
                 else:
-                    self.report.add("untranslated", "component:" + cls(d))
-                    tr.fortran_comment(d, ind + 1, "component not translated")
-                prev = d
+                    names = [None]
+                last = []
+                for k, n in enumerate(names):
+                    level = (t.comps[n].access_need if auto else fixed) if n is not None else 2
+                    entry = (lead if k == 0 else [], d, n, [])
+                    sections[level].append(entry)
+                    last.append(entry)
+                lead = []
+            if lead:
+                sections[2].append((lead, None, None, []))
+            first = True
+            for level, label in ((2, "public:"), (1, "protected:"), (0, "private:")):
+                if not sections[level]:
+                    continue
+                if not (first and level == 2):          # the class starts with public:
+                    if not first:
+                        tr.emit(0, "")
+                    tr.emit(ind, label)
+                first = False
+                for before, d, n, behind in sections[level]:
+                    for c in before:
+                        tr.comment(c, ind + 1)
+                    if d is None:
+                        continue
+                    if cls(d) == "Data_Component_Def_Stmt":
+                        one = type("S", (), {"items": (d.items[0], d.items[1], _One(d, n))})()
+                        self.decl_stmt(tr, one, t.comps, ind + 1, member=True)
+                    elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
+                        tr.emit(ind + 1, f"{tr.cpp_type(t.comps[n])} {t.comps[n].cname};")
+                    else:
+                        self.report.add("untranslated", "component:" + cls(d))
+                        tr.fortran_comment(d, ind + 1, "component not translated")
+                    for c in behind:
+                        tr.comment(c, ind + 1, d)
         tr.emit(ind, "};")
 
     # ------------------------------------------------------------------ procedures

@@ -577,3 +577,27 @@ def test_generic_bindings(out):
     # calls through the generic name use the signature of the fitting specific procedure
     assert "s.solve(x);\n  s.solve(a, x);\n  s.solve(a, x, 1.e-3);\n  s.solve(a, x);" in cpp
     assert "/*" not in cpp
+
+
+def test_member_access(out, tmp_path):
+    shape, feat, poly = read(out, "shape_mod.hpp"), read(out, "features_mod.hpp"), read(out, "poly_mod.hpp")
+    # used only by the own methods: private; used by free functions / other classes / tests: public
+    assert "  void scale(scalar factor) override;\n\nprivate:\n  scalar width = 1.0;\n  scalar height = 1.0;\n};" in shape
+    assert '\n\n  std::string name = "shape";\n};' in shape                  # set in make_shape
+    assert "  ~stats();\n\n  scalar total = 0.0;\n  vec samples;\n\nprivate:\n  int n = 0;\n" in feat
+    assert "  vec coeff;  //!< coefficients 0..degree\n\nprivate:\n  int degree = -1;\n};" in poly    # coeff: unit test
+    # derived classes: protected; "fortran": as declared
+    (tmp_path / "p_mod.F90").write_text(
+        "module p_mod\ntype :: base_type\ninteger :: a = 0, b = 0, c = 0\ncontains\nprocedure :: get\nend type\n"
+        "type, extends(base_type) :: child_type\ncontains\nprocedure :: twice\nend type\ncontains\n"
+        "function get(this) result(k)\nclass(base_type), intent(in) :: this\ninteger :: k\nk = this%a\nend function\n"
+        "function twice(this) result(k)\nclass(child_type), intent(in) :: this\ninteger :: k\nk = 2 * this%b\n"
+        "end function\nfunction free(x) result(k)\ntype(child_type), intent(in) :: x\ninteger :: k\nk = x%c\n"
+        "end function\nend module\n")
+    translate([str(tmp_path / "p_mod.F90")], config.load(), str(tmp_path))
+    hpp = (tmp_path / "p_mod.hpp").read_text()
+    assert "  int get() const;\n\n  int c = 0;\n\nprotected:\n  int b = 0;\n\nprivate:\n  int a = 0;\n};" in hpp
+    c = config.load()
+    c["member_access"] = "fortran"
+    translate([str(tmp_path / "p_mod.F90")], c, str(tmp_path))
+    assert "  int get() const;\n\n  int a = 0;\n  int b = 0;\n  int c = 0;\n};" in (tmp_path / "p_mod.hpp").read_text()

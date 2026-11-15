@@ -19,6 +19,10 @@ DEFAULTS = {
     # class are final, methods are virtual only if they are deferred or overridden.
     # False: every method of a class hierarchy is virtual, no final
     "closed_hierarchy": True,
+    # "auto": data members are private; protected if used by methods of derived classes, public if
+    #         used anywhere else in the translated files (other classes, free functions, tests)
+    # "fortran": as declared in Fortran (public unless the type has a private statement)
+    "member_access": "auto",
     "explicit_this": False,       # True: always write this->member
     # values of the error flag that mean success (lower case), e.g. ["0", "myproj_success"]
     "error_success": ["0"],

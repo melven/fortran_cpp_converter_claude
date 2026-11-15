@@ -404,6 +404,8 @@ class Translator:
         t = self.find_type(n)
         if t is not None:
             self.note("structure-constructor", "structure constructor: check member order")
+            for comp in t.comps.values():           # aggregate initialisation needs public members
+                comp.access_need = 2
             args_c = ", ".join(self.expr(a.items[1] if cls(a) == "Component_Spec" else a).code
                                for a in items_of(args))
             return X(f"{self.prog.type_name(n, self.mod)}{{{args_c}}}", 0, "type", tname=n)
@@ -487,6 +489,16 @@ class Translator:
                 return (names.get(comp) or spelled) if listed else None
         return None
 
+    def used_member(self, td, name, comp):
+        """record from where a component is used: own methods, methods of derived classes, elsewhere"""
+        ctx = self.find_type(self.proc.method_of) if self.proc is not None and self.proc.method_of else None
+        if ctx is not None and ctx.comps.get(name) is comp:
+            return
+        if ctx is not None and any(a.comps.get(name) is comp for a in self.prog.ancestors(ctx)):
+            comp.access_need = max(comp.access_need, 1)
+        else:
+            comp.access_need = 2
+
     def x_Proc_Component_Ref(self, node):
         """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
         base, _, last = node.items
@@ -517,6 +529,7 @@ class Translator:
                 if subs is not None:
                     x = self.unknown_ref(x.code, subs)
             else:
+                self.used_member(td, n, comp)
                 acc = self.accessor(cur.tname, n, comp.cname)
                 if acc:     # the accessor returns a reference, also for pointer components
                     x = X(self.member(cur, acc, cur.qual) + "()", comp.rank, comp.base, 100, comp,
