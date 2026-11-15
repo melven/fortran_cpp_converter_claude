@@ -31,7 +31,9 @@ def cfg(**kw):
 @pytest.fixture(scope="module")
 def out(tmp_path_factory):
     d = str(tmp_path_factory.mktemp("out"))
-    files = [os.path.join(CORPUS, m + ".F90") for m in MODULES] + [os.path.join(CORPUS, "test_expm_mod.pf"), os.path.join(CORPUS, "test_poly_mod.pf")]
+    files = [os.path.join(CORPUS, m + ".F90") for m in MODULES] + [os.path.join(CORPUS, "test_expm_mod.pf"), os.path.join(CORPUS, "test_poly_mod.pf"),
+                                                                 os.path.join(CORPUS, "test_helpers_mod.pf"),
+                                                                 os.path.join(CORPUS, "test_poly_shared_mod.pf")]
     report, _ = translate(files, cfg(), d, interface_only=[os.path.join(CORPUS, "legacy_mod.F90")])
     return d, report
 
@@ -216,7 +218,17 @@ def test_pfunit(out):
     f = read(out, "test_poly_mod.cpp")          # @before / @after -> fixture, helpers -> static functions
     assert "class test_poly_mod : public ::testing::Test" in f and "void SetUp() override { setUp(); }" in f
     assert "class sample\n{" in f and "sample s;" in f
-    assert "TEST_F(test_poly_mod, test_eval)" in f and "static scalar reference(scalar x);" in f
+    assert "TEST_F(test_poly_mod, test_eval)" in f
+    assert not os.path.exists(os.path.join(out[0], "test_poly_mod.hpp"))
+    # a test module used by another test module gets a header for its types, constants and helpers
+    h = read(out, "test_helpers_mod.hpp")
+    assert "class poly_fixture\n{" in h and "scalar geometric_sum(scalar x, int n);" in h
+    assert "inline const scalar test_tol = 1.e-13;" in h and "using namespace project;" in h
+    hc = read(out, "test_helpers_mod.cpp")
+    assert '#include "test_helpers_mod.hpp"' in hc and "void poly_fixture::prepare(int degree)" in hc
+    assert "static" not in hc
+    u = read(out, "test_poly_shared_mod.cpp")
+    assert '#include "test_helpers_mod.hpp"' in u and "ASSERT_NEAR(geometric_sum(0.5, f.degree), f.pol.eval(0.5), test_tol);" in u and "static scalar reference(scalar x);" in f
     assert "ASSERT_NEAR(reference(0.5), pol.eval(0.5), 1.e-14);" in f
     assert "ASSERT_NEAR(identity(3), E, 1.e-14);" in t and "ASSERT_NEAR(2.0 * B, M, 1.e-13);" in t
     assert 'ASSERT_NEAR(0.0, E(0, 1), 1.e-14) << "off-diagonal";' in t
@@ -239,7 +251,8 @@ def test_options(tmp_path):
 
 
 @needs_cxx
-@pytest.mark.parametrize("name", MODULES + ["test_expm_mod", "test_poly_mod"])
+@pytest.mark.parametrize("name", MODULES + ["test_expm_mod", "test_poly_mod", "test_helpers_mod",
+                                          "test_poly_shared_mod"])
 def test_compiles(out, name):
     cxx(out, name)
 
@@ -266,8 +279,8 @@ def test_same_results_as_fortran(out, tmp_path):
 def test_translated_unit_tests_pass(out):
     d = out[0]
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "test_expm_mod.cpp", "expm_mod.cpp",
-         "test_poly_mod.cpp", "poly_mod.cpp", "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
-    assert "[  PASSED  ] 6 tests." in run(["./gt"], d)
+         "test_poly_mod.cpp", "poly_mod.cpp", "test_helpers_mod.cpp", "test_poly_shared_mod.cpp", "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
+    assert "[  PASSED  ] 7 tests." in run(["./gt"], d)
 
 
 def test_custom_macro_names(tmp_path):

@@ -79,6 +79,7 @@ with less precise output (calls are passed through unchanged).
 | pFUnit `@test` subroutine `test_x` in module `test_foo_mod` | `TEST(test_foo_mod, test_x)`, outside the project namespace (`using namespace`) |
 | `@before` / `@after` | fixture class `test_foo_mod` with `SetUp` / `TearDown`, tests become `TEST_F` |
 | other procedures / variables of a test module | `static` functions / anonymous namespace |
+| test module that is used by another module (shared test helpers) | additionally `<module>.hpp` with its types, constants and helper prototypes; the helpers are then not `static` |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see `gtest_eigen_near`, `test_includes`), `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
 | comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |

@@ -311,6 +311,9 @@ class ModuleEmitter:
                 res.append(f'#include "{h}"')
         return res
 
+    HEADER_INCLUDES = [("functional", ["std::reference_wrapper"]), ("memory", ["std::unique_ptr"]),
+                       ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
+                       ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
     SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),
                        ("cmath", ["std::"]), ("cstdlib", ["std::rand"]), ("iostream", ["std::cout"]), ("limits", ["numeric_limits"]),
                        ("numeric", ["std::iota"]), ("stdexcept", ["throw std::"]),
@@ -366,6 +369,8 @@ class ModuleEmitter:
         dirs.block(cpp_directives, 0)
 
         types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types]
+        # a test module used by other (test) modules provides shared helpers: it gets a header
+        shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
         pending, prev = [], None
         spec = [p for p in mod.node.content if cls(p) == "Specification_Part"]
         for s in (spec[0].content if spec else []):
@@ -384,7 +389,7 @@ class ModuleEmitter:
                 for n in names:
                     v = mod.vars[n]
                     public = mod.is_public(n, v.access) or mod.is_test
-                    sink = hpp if public and not mod.is_test else cpp_priv
+                    sink = hpp if public and (shared or not mod.is_test) else cpp_priv
                     sink.block(pending, 1 if sink is cpp_priv else 0)
                     pending = []
                     if not v.has("parameter"):
@@ -394,7 +399,7 @@ class ModuleEmitter:
                     self.decl_stmt(sink, one, mod.vars, 1 if sink is cpp_priv else 0,
                                    prefix="inline " if sink is hpp else "")
             elif k == "Derived_Type_Def":
-                sink = cpp_priv if mod.is_test else hpp     # test files have no header
+                sink = cpp_priv if mod.is_test and not shared else hpp   # tests have a header only if shared
                 sink.block(pending, 0)
                 pending = []
                 self.emit_type(sink, mod.types[lname(s.content[0].items[1])], 0)
@@ -433,6 +438,12 @@ class ModuleEmitter:
                     self.doc(cpp, p, 0)
                     macro = f"TEST_F({mod.name}, {p.cname})" if fixture else f"TEST({mod.name}, {p.cname})"
                     self.emit_proc(cpp, p, 0, head=macro)
+                elif p.method_of:
+                    self.emit_proc(cpp, p, 0)
+                elif shared:
+                    self.doc(protos_pub, p, 0)
+                    protos_pub.emit(0, self.proto(ptr, p) + ";")
+                    self.emit_proc(cpp, p, 0)
                 else:
                     # helpers: static (internal linkage, test files may define the same names)
                     protos_priv.emit(0, "static " + self.proto(ptr, p) + ";")
@@ -460,15 +471,22 @@ class ModuleEmitter:
 
         self.missing_modules()
         if mod.is_test:
-            return None, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc)
+            h = None
+            if shared:
+                using = [f"using namespace {self.ns};"] + self.using_other_ns()
+                h = self.file_header(top, cfg["header_ext"]) + \
+                    [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
+                h += self.std_includes("\n".join(hpp.out + protos_pub.out), self.HEADER_INCLUDES)
+                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + self.includes()
+                h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 else []) + strip_blank(hpp.out)
+                h += ([""] + protos_pub.out if protos_pub.out else []) + [""]
+                h = "\n".join(self.braces(squeeze(h)))
+            return h, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc, shared)
 
         guard_text = "\n".join(hpp.out + protos_pub.out)
         h = self.file_header(top, cfg["header_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
-        h += self.std_includes(guard_text, [("functional", ["std::reference_wrapper"]),
-                                            ("memory", ["std::unique_ptr"]), ("optional", ["std::optional"]),
-                                            ("string", ["std::string"]), ("vector", ["std::vector"]),
-                                            ("cstdint", ["std::int"]), ("complex", ["std::complex"])])
+        h += self.std_includes(guard_text, self.HEADER_INCLUDES)
         h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
         h += [""] + mod_doc.out + [self.open_ns(), ""]
         if len(types_fwd) > 1:
@@ -538,7 +556,7 @@ class ModuleEmitter:
             res.append(line)
         return res
 
-    def assemble_test(self, top, dirs, cpp_priv, protos, cpp, fixture, mod_doc):
+    def assemble_test(self, top, dirs, cpp_priv, protos, cpp, fixture, mod_doc, shared=False):
         mod = self.mod
         c = self.file_header(top, self.cfg["source_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", ""]
@@ -548,6 +566,8 @@ class ModuleEmitter:
                                                        ("vector", ["std::vector"])])
         c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
             self.includes() + dirs.out
+        if shared:
+            c.append(f'#include "{self.prog.file_stem(mod.name)}{self.cfg["header_ext"]}"')
         # tests are not part of the project namespace
         using = [f"using namespace {self.ns};"] + self.using_other_ns()
         c += [""] + mod_doc.out + using + [""]

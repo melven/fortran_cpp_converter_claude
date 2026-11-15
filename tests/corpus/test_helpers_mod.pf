@@ -1,0 +1,40 @@
+!> Helpers shared by several test modules.
+module test_helpers_mod
+  use funit
+  use poly_mod, only: poly_type
+  implicit none
+
+  real, parameter :: test_tol = 1.e-13
+
+  type :: poly_fixture_type
+    type(poly_type) :: pol
+    integer :: degree = 0
+  contains
+    procedure :: prepare => poly_fixture_prepare
+  end type poly_fixture_type
+
+contains
+
+  subroutine poly_fixture_prepare(this, degree)
+    class(poly_fixture_type), intent(inout) :: this
+    integer, intent(in) :: degree
+    real :: c(0:degree)
+    integer :: ierr
+    c = 1.0
+    this%degree = degree
+    call this%pol%set(c, ierr)
+  end subroutine poly_fixture_prepare
+
+  !> 1 + x + ... + x**n
+  function geometric_sum(x, n) result(s)
+    real, intent(in) :: x
+    integer, intent(in) :: n
+    real :: s
+    integer :: k
+    s = 0.0
+    do k = 0, n
+      s = s + x**k
+    end do
+  end function geometric_sum
+
+end module test_helpers_mod
