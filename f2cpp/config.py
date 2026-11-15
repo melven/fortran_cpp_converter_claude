@@ -12,6 +12,7 @@ DEFAULTS = {
     # object is intent(out)) / destructors (if there are no further arguments)
     "constructor_bindings": ["configure"],
     "destructor_bindings": ["finalize"],
+    "include_guard": "ifndef",    # "ifndef": #ifndef FILE_NAME_HPP ... #endif; "pragma": #pragma once
     "doxygen": "//!",             # prefix of documentation comments ("//!" or "///")
     "brace_style": "allman",      # "allman": { on its own line; "attached": if (...) {
     "explicit_this": False,       # True: always write this->member

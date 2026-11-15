@@ -496,17 +496,17 @@ class ModuleEmitter:
             if shared:
                 using = [f"using namespace {self.ns};"] + self.using_other_ns()
                 h = self.file_header(top, cfg["header_ext"]) + \
-                    [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
+                    [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
                 h += self.std_includes("\n".join(hpp.out + protos_pub.out), self.HEADER_INCLUDES)
                 h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + self.includes()
                 h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 else []) + strip_blank(hpp.out)
-                h += ([""] + protos_pub.out if protos_pub.out else []) + [""]
+                h += ([""] + protos_pub.out if protos_pub.out else []) + [""] + self.guard()[1]
                 h = "\n".join(self.braces(squeeze(h)))
             return h, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc, shared)
 
         guard_text = "\n".join(hpp.out + protos_pub.out)
         h = self.file_header(top, cfg["header_ext"]) + \
-            [BANNER.format(src=os.path.basename(self.src)), "#pragma once", ""]
+            [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
         h += self.std_includes(guard_text, self.HEADER_INCLUDES)
         h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
         h += [""] + mod_doc.out + [self.open_ns(), ""]
@@ -515,7 +515,7 @@ class ModuleEmitter:
         h += strip_blank(hpp.out)
         if protos_pub.out:
             h += [""] + protos_pub.out
-        h += ["", f"}}  // namespace {self.ns}", ""]
+        h += ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]
 
         body = "\n".join(cpp.out + cpp_priv.out)
         c = self.file_header(top, cfg["source_ext"]) + \
@@ -546,6 +546,15 @@ class ModuleEmitter:
             elif unresolved:
                 self.report.add("missing", f"{u} (no only-list): unresolved names in this file: "
                                            f"{', '.join(unresolved)}")
+
+    def guard(self):
+        """-> (opening lines, closing lines) of the include guard"""
+        import re
+        if self.cfg["include_guard"] != "ifndef":
+            return ["#pragma once"], []
+        name = os.path.basename(self.prog.file_stem(self.mod.name)) + self.cfg["header_ext"]
+        macro = re.sub(r"\W", "_", name).upper()
+        return [f"#ifndef {macro}", f"#define {macro}"], [f"#endif // {macro}", ""]
 
     def braces(self, lines):
         """brace style: put the opening brace of blocks on its own line"""

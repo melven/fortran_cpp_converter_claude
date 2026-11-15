@@ -97,7 +97,8 @@ Eigen 3.4, where these are deprecated in favour of `Eigen::all` / `Eigen::last`,
 
 ## Formatting
 
-`brace_style = "allman"` (default, `{` on its own line) or `"attached"`. Indentation is two
+`brace_style = "allman"` (default, `{` on its own line) or `"attached"`.
+`include_guard = "ifndef"` (default, `#ifndef FILE_NAME_HPP`) or `"pragma"` (`#pragma once`). Indentation is two
 spaces; run your formatter (clang-format) over the output for anything else.
 
 ## Macros
