@@ -619,3 +619,12 @@ def test_to_string_of_eigen_types(tmp_path):
     cpp = (tmp_path / "s_mod.cpp").read_text()
     assert "text = std::to_string(n) + std::to_string(v(0)) + to_string(v) + to_string(2.0 * a);" in cpp
     assert 'text = std::to_string(n) + " " + to_string(v);' in cpp
+
+
+def test_vector_subscript_of_components_with_lower_bounds(tmp_path):
+    (tmp_path / "ns_mod.F90").write_text('#include "project_macros.h"\nmodule ns_mod\n  implicit none\n  type :: scal_type\n    integer, allocatable :: norm_scal_grp_idx(:)\n    real, contiguous, pointer :: norm_scal_grp_tmp(:) => null()\n  contains\n    procedure :: setup\n    procedure :: apply\n  end type\ncontains\n  subroutine setup(this, n, m, ierr)\n    class(scal_type), intent(inout) :: this\n    integer, intent(in) :: n, m\n    integer, intent(out) :: ierr\n    PROJECT_ALLOCATE(this%norm_scal_grp_idx(0:m), ierr)\n    PROJECT_ALLOCATE(this%norm_scal_grp_tmp(-1:n), ierr)\n    this%norm_scal_grp_idx = 0\n    this%norm_scal_grp_tmp = 1.0\n  end subroutine\n  subroutine apply(this, norm_scal, ierr)\n    class(scal_type), intent(in) :: this\n    real, intent(out) :: norm_scal(:)\n    integer, intent(out) :: ierr\n    ierr = 0\n    norm_scal = this % norm_scal_grp_tmp(this % norm_scal_grp_idx(1 :))\n  end subroutine\nend module\n')
+    path = str(tmp_path / "ns_mod.F90")
+    report, _ = translate([path], cfg(), str(tmp_path))
+    cpp = (tmp_path / "ns_mod.cpp").read_text()
+    assert "norm_scal = norm_scal_grp_tmp((norm_scal_grp_idx(Eigen::seq(1, Eigen::last)).array() + 1));" in cpp
+    assert not report.files[path]["untranslated"]
