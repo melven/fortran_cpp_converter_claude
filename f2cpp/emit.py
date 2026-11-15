@@ -153,6 +153,20 @@ class ModuleEmitter:
         for c in p.doc:
             if not str(c).startswith((PF_MARK, CPP_MARK, BLANK_MARK)):
                 tr.comment(c, ind)
+        dox, tags = self.cfg["doxygen"], {"in": "[in]", "out": "[out]", "inout": "[in,out]"}
+        order = {a: i for i, a in enumerate(p.args)}
+        for names, lines in sorted(p.param_docs, key=lambda d: order.get(d[0][0], len(order))):
+            names = [n for n in names if n != tr.err and n != p.pass_arg]
+            if not names:
+                continue
+            if names == [p.result]:
+                head = f"{dox} @return"
+            else:
+                v = p.vars[names[0]]
+                head = f"{dox} @param{tags.get(v.intent, '')} {', '.join(p.vars[n].cname for n in names)}"
+            tr.emit(ind, f"{head} {lines[0]}".rstrip())
+            for line in lines[1:]:
+                tr.emit(ind, f"{dox}   {line}".rstrip())
 
     # ------------------------------------------------------------------ class
     def emit_type(self, tr, t, ind):
@@ -270,9 +284,11 @@ class ModuleEmitter:
                 for d in part.content:
                     kd = cls(d)
                     if kd == "Implicit_Part":
-                        tr.block([c for c in d.content if cls(c) == "Comment"], ind + 1)
+                        tr.block([c for c in d.content if cls(c) == "Comment" and id(c) not in p.doc_nodes],
+                                 ind + 1)
                     elif kd == "Comment":
-                        tr.comment(d, ind + 1, prev)
+                        if id(d) not in p.doc_nodes:        # argument documentation is in the header
+                            tr.comment(d, ind + 1, prev)
                     elif kd == "Type_Declaration_Stmt":
                         self.decl_stmt(tr, d, p.vars, ind + 1, skip=skip)
                         has_result_decl |= p.result in [lname(e.items[0]) for e in items_of(d.items[2])]
@@ -459,7 +475,6 @@ class ModuleEmitter:
                 continue
             public = mod.is_public((p.generic or p.name).lower()) or mod.is_public(p.name)
             if p.method_of:
-                self.doc(cpp, p, 0) if not public else None
                 self.emit_proc(cpp, p, 0)
             elif public:
                 self.doc(protos_pub, p, 0)
@@ -606,8 +621,8 @@ _One.__name__ = "Entity_Decl_List"
 def plain_comment(line):
     """doxygen comment line -> ordinary comment line"""
     s = line.lstrip()
-    return line[:len(line) - len(s)] + ("//" + s[4:] if s.startswith("///<") else "//" + s[3:]
-                                        if s.startswith("///") else s)
+    return line[:len(line) - len(s)] + ("//" + s[4:] if s.startswith(("///<", "//!<")) else "//" + s[3:]
+                                        if s.startswith(("///", "//!")) else s)
 
 
 def pf_role(p):

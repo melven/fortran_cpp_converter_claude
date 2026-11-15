@@ -815,7 +815,8 @@ class Translator:
                 self.out.append(d)
             return
         text = s[1:]
-        c = "///" + text[1:] if text[:1] == ">" else "///<" + text[1:] if text[:1] == "<" else "//" + text
+        dox = self.cfg["doxygen"]
+        c = dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]
         if trailing and self.out and self.out[-1].strip() and not self.out[-1].lstrip().startswith("//"):
             self.out[-1] += "  " + c

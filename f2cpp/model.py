@@ -99,6 +99,8 @@ class Proc:
     is_dtor: bool = False
     is_test: str = None          # pFUnit role: test | before | after
     doc: list = field(default_factory=list)
+    param_docs: list = field(default_factory=list)      # [([argument names], [text lines])]
+    doc_nodes: set = field(default_factory=set)         # ids of comments used as argument documentation
 
 
 @dataclass(eq=False)     # identity semantics: never compare parse trees
@@ -215,6 +217,32 @@ def parse_decl(stmt, into, order=None):
     return res
 
 
+def collect_param_docs(p, spec):
+    """documentation of dummy arguments: `!<` comments after the declaration (same or following
+    lines) and `!>` comment lines directly before it"""
+    flat = []
+    for d in spec.content:
+        flat += list(d.content) if cls(d) == "Implicit_Part" else [d]
+    for i, d in enumerate(flat):
+        if cls(d) != "Type_Declaration_Stmt":
+            continue
+        names = [lname(e.items[0]) for e in items_of(d.items[2])]
+        names = [n for n in names if n in p.args or n == p.result]
+        if not names:
+            continue
+        before, after, j = [], [], i - 1
+        while j >= 0 and cls(flat[j]) == "Comment" and str(flat[j]).startswith("!>"):
+            before.insert(0, flat[j])
+            j -= 1
+        j = i + 1
+        while j < len(flat) and cls(flat[j]) == "Comment" and str(flat[j]).startswith("!<"):
+            after.append(flat[j])
+            j += 1
+        if before or after:
+            p.param_docs.append((names, [str(c)[2:].strip() for c in before + after]))
+            p.doc_nodes |= {id(c) for c in before + after}
+
+
 def collect_proc(node, module):
     content = [c for c in node.content if cls(c) != "Comment"]
     stmt = content[0]
@@ -234,6 +262,9 @@ def collect_proc(node, module):
             for d in c.content:
                 if cls(d) == "Type_Declaration_Stmt":
                     parse_decl(d, p.vars)
+    for c in content[1:]:
+        if cls(c) == "Specification_Part":
+            collect_param_docs(p, c)
     for a in args:
         v = p.vars.setdefault(a, Var(a, cname(a)))
         v.is_dummy = True

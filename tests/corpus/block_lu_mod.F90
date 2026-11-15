@@ -63,9 +63,10 @@ contains
   !> set block (i, j) with |i - j| <= 1
   subroutine block_lu_set_block(this, i, j, blk, ierr)
     class(block_lu_type), intent(inout) :: this
-    integer, intent(in) :: i, j
-    real, intent(in) :: blk(:, :)
-    integer, intent(out) :: ierr
+    integer, intent(in) :: i, j      !< block row and column
+    real, intent(in) :: blk(:, :)    !< dense block,
+                                     !< copied
+    integer, intent(out) :: ierr     !< error flag
 
     ierr = 0
     PROJECT_CHK_ARGUMENT(abs(i - j) <= 1, ierr)

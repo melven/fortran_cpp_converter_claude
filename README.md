@@ -82,7 +82,9 @@ with less precise output (calls are passed through unchanged).
 | test module that is used by another module (shared test helpers) | additionally `<module>.hpp` with its types, constants and helper prototypes; the helpers are then not `static` |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see `gtest_eigen_near`, `test_includes`), `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
-| comments, doxygen `!>` `!<`, `#ifdef`, `#include` (`include_map`) | preserved |
+| comments, `#ifdef`, `#include` (`include_map`) | preserved |
+| doxygen `!>` / `!<` | `//!` / `//!<` (`doxygen = "///"` for the other style) |
+| `integer, intent(in) :: arg !< text` (also `!>` lines before the declaration) | `//! @param[in] arg text` in the documentation of the function in the header; result: `@return` |
 | file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |
 | type, procedure and binding names | spelling of the definition (`Block_LU_type` → `Block_LU`, `myFunction`); TODO if the source is inconsistent |

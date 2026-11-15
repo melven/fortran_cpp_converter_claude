@@ -38,10 +38,11 @@ contains
 
   !> Horner scheme
   function poly_eval(c, x) result(y)
+    !> coefficients 0..n
     real, intent(in) :: c(0:)
-    real, intent(in) :: x
-    real :: y
-    integer :: k
+    real, intent(in) :: x     !< evaluation point
+    real :: y                 !< value of the polynomial
+    integer :: k              !< loop index
 
     y = c(ubound(c, 1))
     do k = ubound(c, 1) - 1, lbound(c, 1), -1
