@@ -51,6 +51,8 @@ class Var:
     is_const: bool = False
     force_ptr: bool = False      # select-type alias etc.
     alloc_dims: list = None      # shape of an allocate statement for this name (flat arrays)
+    needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
+    int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
@@ -432,6 +434,7 @@ class Program:
         self.cfg = cfg
         self.modules = {}
         self.spellings = {}
+        self.links = []             # pairs of integer arrays that must have the same C++ type
         self.proc_spellings = {}
 
     def add(self, module):
@@ -481,6 +484,36 @@ class Program:
                 p = self.find_type(t.parent, m) if t.parent else None
                 if p:
                     p.children.add(t.name)
+
+    def decide_int_vectors(self, translated):
+        """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>"""
+        if self.cfg["int_arrays"] != "auto":
+            return
+        for m in self.modules.values():
+            scopes = [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.ifaces.values()]
+            for p in m.procs.values():
+                t = self.find_type(p.method_of, m) if p.method_of else None
+                if m not in translated or p.external or (t is not None and self.polymorphic(t)):
+                    scopes.append({a: p.vars[a] for a in p.args if a in p.vars})   # fixed signatures
+            if m not in translated:             # existing C++ code: keep Eigen vectors
+                scopes += [p.vars for p in m.procs.values()]
+                for scope in scopes:
+                    for v in scope.values():
+                        v.needs_eigen = True
+            else:
+                for scope in scopes[1 + len(m.types):]:
+                    for v in scope.values():
+                        v.needs_eigen = True
+        changed = True
+        while changed:
+            changed = False
+            for a, b in self.links:
+                if a.needs_eigen != b.needs_eigen:
+                    a.needs_eigen = b.needs_eigen = changed = True
+        for m in translated:
+            for scope in [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.procs.values()]:
+                for v in scope.values():
+                    v.int_vec = v.base == "integer" and v.rank == 1 and not v.needs_eigen
 
     def visible(self, module):
         seen, todo = [], [module]

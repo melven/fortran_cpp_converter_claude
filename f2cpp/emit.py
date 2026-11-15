@@ -38,6 +38,8 @@ class ModuleEmitter:
         if v.init is not None:
             if lname(v.init).replace(" ", "").endswith("null()"):
                 return code + " = nullptr" if st == "ptr" else code
+            if st == "stdvec" and cls(v.init) == "Array_Constructor":
+                return f"{code} = {{{', '.join(i.code for i in tr.ac_items(v.init))}}}"
             x = tr.expr(v.init)
             if v.rank > 0 and x.rank == 0:
                 if st != "eigen" or not sizes:

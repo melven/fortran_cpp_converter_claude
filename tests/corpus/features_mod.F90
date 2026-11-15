@@ -8,6 +8,7 @@ module features_mod
   private
 
   public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
+  public :: int_arrays, count_marked
   public :: argmax, text_demo, node_type, relink
   public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
@@ -191,6 +192,39 @@ contains
     b%payload => null()
     if (associated(a%payload)) allocate(b%payload)
   end subroutine relink
+
+  !> number of entries equal to one; flags stays a std::vector<int> (linked with the actual arguments)
+  function count_marked(flags) result(n)
+    integer, intent(in) :: flags(:)
+    integer :: n, i
+    n = 0
+    do i = 1, size(flags)
+      if (flags(i) == 1) n = n + 1
+    end do
+  end function count_marked
+
+  function int_arrays(m, v) result(total)
+    integer, intent(in) :: m
+    real, intent(in) :: v(:)
+    integer :: total
+    integer, allocatable :: marks(:), copy(:), sel(:), shifted(:)
+    integer :: fixed(3), i
+    integer, parameter :: primes(4) = [2, 3, 5, 7]
+
+    allocate(marks(m), sel(2))
+    marks = 0
+    do i = 1, m, 2
+      marks(i) = 1
+    end do
+    copy = marks
+    fixed = [1, 0, 1]
+    total = count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes(4)
+    ! uses that need an Eigen vector: vector subscript, array expression
+    sel = [1, 2]
+    shifted = sel + 1
+    total = total + int(sum(v(sel))) + shifted(1)
+    if (allocated(copy)) deallocate(copy)
+  end function int_arrays
 
   function argmax(x, a) result(k)
     real, intent(in) :: x(:), a(:, :)

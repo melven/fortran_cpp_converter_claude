@@ -45,6 +45,7 @@ with less precise output (calls are passed through unchanged).
 | generic interface / generic binding | overloads |
 | `real` / `real(kind=8)` | `scalar` / `kind_map` entry (`double`) |
 | `real` array rank 1 / 2 | `vec` / `mat` |
+| integer array rank 1 | `std::vector<int>` if it is only indexed, sized, filled, copied or passed on; `Eigen::VectorXi` if it is used in array expressions, sections, as vector subscript, or passed to unknown / untranslated (`-I`) procedures (`int_arrays = "eigen"`: always) |
 | numeric array rank 3 | `std::vector<mat>`: `a(:, :, i)` → `a[i - 1]` |
 | array of objects, rank 1 / 2 | `std::vector<T>` / `Eigen::Array<T, Dynamic, Dynamic>`: `b(i, j)%m(k, l)` → `b(i - 1, j - 1).m(k - 1, l - 1)` |
 | any array of rank ≥ 4 (objects: ≥ 3) | flat `vec` / `std::vector<T>` with explicit column-major index and a TODO; extents from the declaration or an `allocate` in the module |

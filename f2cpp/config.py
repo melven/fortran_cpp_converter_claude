@@ -21,6 +21,10 @@ DEFAULTS = {
     "vec": "vec",
     "mat": "mat",
     "ivec": "Eigen::VectorXi",
+    # "auto": rank-1 integer arrays are std::vector<int> unless they are used in array expressions,
+    #         sections, as vector subscripts or passed to procedures that need an Eigen vector
+    # "eigen": always ivec
+    "int_arrays": "auto",
     "imat": "Eigen::MatrixXi",
     "int": "int",
     # real/integer kind -> C++ type; unknown kinds fall back to scalar / int

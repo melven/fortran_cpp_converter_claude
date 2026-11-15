@@ -29,6 +29,7 @@ class X:
     arr: bool = False        # Eigen Array (not Matrix) expression
     whole: bool = False      # complete variable (no subscripts)
     qual: str = ""           # "Parent::" for explicit parent calls
+    res_var: Var = None      # result variable of the called function
     fwd: str = None          # optional dummy: the std::optional object itself
     neg: object = None       # the negated expression, if it has a simpler form than !(...)
     on_this: bool = False    # member of the object the method is called on
@@ -124,6 +125,8 @@ class Translator:
             if v.base == "type" and v.has("allocatable"):
                 return "uptr"
             return "ptr" if v.has("pointer") else "scalar"
+        if v.int_vec:
+            return "stdvec"
         if v.base in ("real", "integer", "logical", "complex"):
             return "eigen" if v.rank <= 2 else "vec3" if v.rank == 3 else "flat"
         return "stdvec" if v.rank == 1 else "objmat" if v.rank == 2 else "flat"
@@ -213,6 +216,26 @@ class Translator:
 
     # ------------------------------------------------------------------ expressions
     def expr(self, node):
+        """translate an expression; an integer array used here needs to be an Eigen vector"""
+        x = self.ref(node)
+        self.touch(x)
+        return x
+
+    @staticmethod
+    def int_array(v):
+        return v is not None and v.base == "integer" and v.rank == 1
+
+    def touch(self, x):
+        if x.rank > 0:
+            for v in (x.var, x.res_var):
+                if self.int_array(v):
+                    v.needs_eigen = True
+
+    def link(self, a, b):
+        self.prog.links.append((a, b))
+
+    def ref(self, node):
+        """translate an expression that is used in a way a std::vector<int> supports as well"""
         k = cls(node)
         m = getattr(self, "x_" + k, None)
         if m is not None:
@@ -280,7 +303,7 @@ class Translator:
     def result_x(self, code, p):
         if p is not None and p.result and p.result in p.vars:
             r = p.vars[p.result]
-            return X(code, r.rank, r.base, 100, tname=r.tname)
+            return X(code, r.rank, r.base, 100, tname=r.tname, res_var=r)
         return X(code)
 
     def ref_or_call(self, name_node, args, node):
@@ -561,13 +584,17 @@ class Translator:
         """Matrix-world value of an expression (for assignment / function arguments)"""
         return f"({x.code}).matrix()" if x.arr and x.base != "logical" else x.code
 
-    def x_Array_Constructor(self, node):
+    def ac_items(self, node):
         vals = items_of(node.items[1])
         if cls(node.items[1]) == "Ac_Spec":
             vals = items_of(node.items[1].items[1])
         xs = [self.expr(v) for v in vals]
         if not xs or any(x.rank > 0 for x in xs):
             raise Untranslatable("array-constructor")
+        return xs
+
+    def x_Array_Constructor(self, node):
+        xs = self.ac_items(node)
         if all(x.base == "character" for x in xs):
             return X("std::vector<std::string>{" + ", ".join(x.code for x in xs) + "}", 1, "character")
         base = "integer" if all(x.base == "integer" for x in xs) else "real"
@@ -614,7 +641,16 @@ class Translator:
             if d not in given:
                 res.append("std::nullopt" if dv.opt_kind else "nullptr")
                 continue
-            x = self.expr(given[d])
+            if self.int_array(dv):
+                x = self.ref(given[d])
+                other = x.var if x.whole and self.int_array(x.var) else x.res_var
+                if self.int_array(other):
+                    self.link(dv, other)                # actual and dummy must have the same type
+                else:
+                    dv.needs_eigen = True
+                    self.touch(x)
+            else:
+                x = self.expr(given[d])
             code = self.matrix(x)
             passes_handle = dv.ptr_like and not dv.opt_kind       # unique_ptr& / pointer& dummy
             if x.rank > 0 and dv.rank > 0 and dv.intent != "in" and self.storage(dv) == "eigen" and \
@@ -890,9 +926,26 @@ class Translator:
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
-        lhs = self.expr(lhs_n)
+        lhs = self.ref(lhs_n)
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
+        if not lhs.whole:
+            self.touch(lhs)                             # section of an integer array
+        if self.int_array(v) and lhs.whole:
+            # uses a std::vector<int> supports: fill, initialiser list, copy of another integer array
+            if cls(rhs_n) == "Array_Constructor":
+                items = self.ac_items(rhs_n)
+                if st == "stdvec":
+                    self.emit(ind, f"{lhs.raw or lhs.code} = {{{', '.join(i.code for i in items)}}};")
+                    return
+            else:
+                r = self.ref(rhs_n)
+                other = r.var if r.whole and self.int_array(r.var) else r.res_var
+                if r.rank > 0 and self.int_array(other):
+                    self.link(v, other)
+                elif r.rank > 0:
+                    v.needs_eigen = True
+                    self.touch(r)
         if st == "vec3":
             # copy of a whole std::vector<mat>, possibly with type conversion: a = real(b)
             src_n = rhs_n
@@ -921,7 +974,7 @@ class Translator:
         if st == "uptr" and v.polymorphic:
             raise Untranslatable("polymorphic-assignment")
         target = par(lhs) if lhs.code.startswith("*") and lhs.rank > 0 else lhs.code
-        rhs = self.expr(rhs_n)
+        rhs = self.ref(rhs_n) if self.int_array(v) and lhs.whole else self.expr(rhs_n)
         if lhs.rank > 0 and rhs.rank == 0 and (self.storage(v) in ("eigen", "vec3") or
                                                (self.storage(v) == "flat" and v.base not in ("type", "character"))):
             fill = ".setZero()" if is_zero(rhs.code) else f".setConstant({rhs.code})"
@@ -989,7 +1042,12 @@ class Translator:
                     raise Untranslatable("random_number")
                 return
             if n == "move_alloc" and len(args) == 2:
-                src, dst = self.expr(args[0]), self.expr(args[1])
+                src, dst = self.ref(args[0]), self.ref(args[1])
+                if self.int_array(src.var) and self.int_array(dst.var):
+                    self.link(src.var, dst.var)
+                else:
+                    self.touch(src)
+                    self.touch(dst)
                 s_name = src.raw if src.raw is not None else src.code
                 self.emit(ind, f"{dst.raw if dst.raw is not None else dst.code} = std::move({s_name});")
                 if src.var is not None and self.storage(src.var) == "eigen":
@@ -1120,7 +1178,7 @@ class Translator:
                 raise Untranslatable("allocate-option:" + lname(o.items[0]))
         for a in items_of(allocs):
             obj, shape = (a.items[0], items_of(a.items[1])) if cls(a) == "Allocation" else (a, [])
-            x = self.expr(obj)
+            x = self.ref(obj)
             v = x.var
             if v is None:
                 raise Untranslatable("allocate-unknown")
@@ -1151,7 +1209,7 @@ class Translator:
 
     def s_Deallocate_Stmt(self, node, ind):
         for a in items_of(node.items[0]):
-            x = self.expr(a)
+            x = self.ref(a)
             st = self.storage(x.var) if x.var is not None else None
             name = x.raw if x.raw is not None else x.code
             if st == "uptr":
@@ -1412,7 +1470,7 @@ def _args(tr, pos):
 
 
 def i_size(tr, n, pos, kw):
-    x = tr.expr(pos[0])
+    x = tr.ref(pos[0])
     dim = pos[1] if len(pos) > 1 else kw.get("dim")
     st = tr.storage(x.var) if x.var is not None and x.whole else None
     b = par(x)
@@ -1559,7 +1617,7 @@ def i_present(tr, n, pos, kw):
 
 
 def i_allocated(tr, n, pos, kw):
-    x = tr.expr(pos[0])
+    x = tr.ref(pos[0])
     name = x.raw if x.raw is not None else par(x)
     if x.var is None:       # unknown object (type from a module that is not parsed): assume an Eigen array
         tr.note("allocated", f"{n}() of an object of unknown type")
@@ -1620,7 +1678,7 @@ def i_identity(tr, n, pos, kw):
 
 def i_bound(tr, n, pos, kw):
     """lbound / ubound with the Fortran values (indices are shifted where they are used)"""
-    x = tr.expr(pos[0])
+    x = tr.ref(pos[0])
     dim = pos[1] if len(pos) > 1 else kw.get("dim")
     if x.var is None or not x.whole or dim is None or not tr.expr(dim).code.isdigit():
         raise Untranslatable("intrinsic:" + n)

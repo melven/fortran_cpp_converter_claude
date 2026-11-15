@@ -128,7 +128,8 @@ def test_features(out):
     # lower bound 0: shifted without warning; other lower bounds: warning
     assert "h.phi.assign(n + 1, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>(2, 2));\n" in cpp
     assert "has lower bound(s) 0" not in cpp
-    assert "Eigen::VectorXi idx(4), shifted(3);" in cpp and "shifted(0) = lo;" in cpp
+    assert "std::vector<int> idx(4), shifted(3);" in cpp and "shifted[0] = lo;" in cpp
+    assert "std::fill(idx.begin(), idx.end(), 0);" in cpp
     assert "// TODO(f2cpp): 'shifted' has lower bound(s) -1 in Fortran; indices are shifted accordingly" in cpp
     assert "dt = t / 16 + t / (n * n) + static_cast<int>(std::pow(2, n));" in cpp
     assert "for (k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
@@ -164,6 +165,15 @@ def test_features(out):
     assert "mutable vec work;  ///< scratch space" in hpp and "'work' is translated as an owning array" not in hpp
     assert "if (work.size() == 0) work.resize(max_items);" in cpp and "if (work.size() > 0) work(0) = m;" in cpp
     assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
+    # integer arrays: std::vector<int> unless used in array expressions / as vector subscript
+    assert "int count_marked(const std::vector<int>& flags);" in hpp
+    assert "std::vector<int> marks, copy;" in cpp and "Eigen::VectorXi sel, shifted;" in cpp
+    assert "std::vector<int> fixed(3);" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
+    assert "marks.resize(m);" in cpp and "std::fill(marks.begin(), marks.end(), 0);" in cpp
+    assert "marks[i - 1] = 1;" in cpp and "copy = marks;" in cpp and "fixed = {1, 0, 1};" in cpp
+    assert "count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes[3];" in cpp
+    assert "sel = (Eigen::VectorXi(2) << 1, 2).finished();" in cpp and "shifted = (sel.array() + 1).matrix();" in cpp
+    assert "if (!copy.empty()) copy.clear();" in cpp
     # output statements, string arrays, owned pointers
     assert 'std::fill(lines.begin(), lines.end(), "");' in cpp
     assert 'line = std::string("n = ") + std::to_string(n);' in cpp
@@ -345,3 +355,10 @@ def test_tixi_function_map(tmp_path):
     assert "rc = tixiGetDoubleElement(h, std::string(path).c_str(), &v);" in cpp
     assert "#include <tixi.h>" in (tmp_path / "t_mod.hpp").read_text()
     assert not report.files[path]["missing"] and '"project_math.hpp"' in c["extra_includes"]
+
+
+def test_int_arrays_eigen_option(tmp_path):
+    c = cfg(int_arrays="eigen")
+    translate([os.path.join(CORPUS, "features_mod.F90")], c, str(tmp_path),
+              [os.path.join(CORPUS, f) for f in ("legacy_mod.F90", "shape_mod.F90", "block_lu_mod.F90")])
+    assert "int count_marked(const Eigen::VectorXi& flags);" in (tmp_path / "features_mod.hpp").read_text()
