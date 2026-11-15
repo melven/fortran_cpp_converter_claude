@@ -80,17 +80,56 @@ class Translator:
                 return m.vars[n]
         return None
 
-    def lookup_proc(self, n):
+    def lookup_proc(self, n, args=None):
+        """procedure of that name; for a generic name the specific procedure that fits the arguments"""
         for m in self.prog.visible(self.mod):
             if m is not self.mod and not m.is_public(n):
                 continue                    # private names of other modules are not visible
             if n in m.procs:
                 return m.procs[n]
             if n in m.generics:
-                for s in m.generics[n]:
-                    if s in m.procs:
-                        return m.procs[s]
+                cands = [m.procs[s] for s in m.generics[n] if s in m.procs]
+                if cands:
+                    return self.pick_specific(cands, args) if args is not None else cands[0]
         return None
+
+    def pick_specific(self, cands, args):
+        """generic resolution: the first specific procedure whose dummies fit the actual arguments
+        (number, keywords, rank and intrinsic type as far as known)"""
+        actual = [self.split_arg(a) for a in args]
+        actual = [(kw, node) for kw, node in actual if not self.is_err(node) and kw != self.err]
+        for p in cands:
+            dummies = [d for d in p.args if d != self.err and d != p.pass_arg]
+            given, pos, ok = {}, 0, True
+            for kw, node in actual:
+                if kw is None:
+                    if pos >= len(dummies):
+                        ok = False
+                        break
+                    kw, pos = dummies[pos], pos + 1
+                if kw not in dummies or kw in given:
+                    ok = False
+                    break
+                given[kw] = node
+            ok = ok and all(d in given or p.vars[d].has("optional") for d in dummies)
+            notes = list(self.notes)
+            for d, node in given.items() if ok else ():
+                dv = p.vars[d]
+                try:
+                    x = self.ref(node)
+                except Exception:
+                    continue                # unknown: assume it fits
+                if d in self.dropped(p) or dv.base == "procedure":
+                    continue
+                if x.rank != dv.rank or ("unknown" not in (x.base, dv.base) and x.base != dv.base and
+                                         {x.base, dv.base} != {"integer", "real"} or
+                                         (x.base, dv.base) == ("real", "integer")):
+                    ok = False
+                    break
+            self.notes = notes
+            if ok:
+                return p
+        return cands[0]
 
     def find_type(self, tname):
         return self.prog.find_type(tname, self.mod) if tname else None
@@ -356,7 +395,7 @@ class Translator:
             fn = self.cfg["function_map"][n]
             return X(self.mapped_call(n, items_of(args)), 0,
                      "character" if fn == "std::to_string" else "unknown")
-        p = self.lookup_proc(n)
+        p = self.lookup_proc(n, items_of(args))
         if p is not None:
             self.spelled(p, name_node)
             return self.result_x(self.call_code(p, items_of(args)), p)
@@ -819,9 +858,16 @@ class Translator:
         if b is not None:
             b.spellings.add(str(bname).strip())
         if p is None and owner is not None and n in owner.generics:
-            p0 = owner.generics[n][0]
-            p = self.prog.binding_proc(owner, owner.bindings.get(p0))
-            argc = self.plain_args(items_of(args))
+            # generic binding: find the specific procedure that fits the arguments
+            cands = []
+            for tt in [td, *self.prog.ancestors(td)]:
+                for s_name in tt.generics.get(n, ()):
+                    owner_s, b_s = self.prog.find_binding(td, s_name)
+                    ps = self.prog.binding_proc(owner_s, b_s) if owner_s else None
+                    if ps is not None and ps not in cands:
+                        cands.append(ps)
+            p = self.pick_specific(cands, items_of(args)) if cands else None
+            argc = self.bound_args(p, items_of(args)) if p is not None else self.plain_args(items_of(args))
         elif p is not None:
             argc = self.bound_args(p, items_of(args))
         elif td is not None and getattr(self.prog.find_component(td, n), "base", None) == "procedure":
@@ -1142,7 +1188,7 @@ class Translator:
             n = lname(desig)
             if n.startswith(ASSERT_PREFIX + "assert"):
                 return self.pf_assert(n[len(ASSERT_PREFIX) + 6:], args, ind)
-            p = self.lookup_proc(n)
+            p = self.lookup_proc(n, args)
             if n == "random_number" and len(args) == 1:
                 # Fortran: uniform in [0, 1); Eigen setRandom: [-1, 1]
                 x = self.expr(self.split_arg(args[0])[1])

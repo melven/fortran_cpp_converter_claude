@@ -44,7 +44,7 @@ with less precise output (calls are passed through unchanged).
 | type-bound procedure, `this%x` | member function (const if `intent(in)`), `x`; `this->x` only if a local variable or argument has the same name (`explicit_this = true`: always) |
 | `class(t)` dummy / `class(t), allocatable` | `t&` / `std::unique_ptr<t>` |
 | `select type` | `typeid` (`type is`) / `dynamic_cast` (`class is`) |
-| generic interface / generic binding | overloads |
+| generic interface / generic binding (`generic :: solve => solve_a, solve_b`) | overloads named `solve`; a call is matched to the specific procedure by number, keywords, rank and type of the arguments |
 | `real` / `real(kind=8)` | `scalar` / `kind_map` entry (`double`) |
 | `real` array rank 1 / 2 | `vec` / `mat` |
 | integer array rank 1 | `std::vector<int>` if it is only indexed, sized, filled, copied or passed on; `Eigen::VectorXi` if it is used in array expressions, sections, as vector subscript, or passed to unknown / untranslated (`-I`) procedures (`int_arrays = "eigen"`: always) |

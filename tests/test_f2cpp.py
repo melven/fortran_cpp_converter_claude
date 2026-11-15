@@ -13,7 +13,7 @@ HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
 SUPPORT = os.path.join(HERE, "support")
 EIGEN = "/usr/include/eigen3"
-MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod"]
+MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod", "generic_mod"]
 
 needs_cxx = pytest.mark.skipif(not (shutil.which("g++") and os.path.isdir(EIGEN)), reason="g++/Eigen missing")
 
@@ -566,3 +566,12 @@ def test_method_templates_for_eigen_solvers(tmp_path):
     assert not report.files[path]["untranslated"]
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "use_solvers_mod.cpp"],
         str(tmp_path))
+
+
+def test_generic_bindings(out):
+    hpp, cpp = read(out, "generic_mod.hpp"), read(out, "generic_mod.cpp")
+    assert "  void solve(vec& x) const;\n  void solve(const mat& a, vec& x, " \
+           "std::optional<scalar> tol = std::nullopt) const;" in hpp
+    # calls through the generic name use the signature of the fitting specific procedure
+    assert "s.solve(x);\n  s.solve(a, x);\n  s.solve(a, x, 1.e-3);\n  s.solve(a, x);" in cpp
+    assert "/*" not in cpp
