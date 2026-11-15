@@ -129,6 +129,9 @@ myproj_chk_argument_msg = 'if (!({0})) throw std::invalid_argument({1});'
 See `f2cpp.example.toml`; there are no project-specific defaults except the `PROJECT_*`
 placeholders.
 
+`constant_map` replaces named constants: `snapshotmode_read = "SnapshotMode::READ"`
+(a local variable of the same name takes precedence).
+
 A `function_map` entry can also be a template that converts arguments for a C API:
 `{i:cstr}` (std::string → `const char*`), `{i:ptr}` (address of an output argument),
 `{i:data}` (data pointer of an Eigen array).
@@ -172,7 +175,7 @@ e.g. to flatten kind indirections: `[['real\(kind=real_kind\)', 'real(kind=8)']]
 Alternatively add named kinds to `kind_map` (`real_kind = "double"`).
 
 A `use m, only: a, b` produces no `#include` if all imported names are replaced by
-`function_map`, `call_templates`, `kind_map` or `error_success`. A module that is obsolete in
+`function_map`, `call_templates`, `constant_map`, `kind_map` or `error_success`. A module that is obsolete in
 C++ altogether (e.g. the error codes) goes into `ignore_modules`: no include, no
 "missing module" warning.
 

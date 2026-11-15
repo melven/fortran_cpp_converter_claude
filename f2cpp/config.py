@@ -84,6 +84,9 @@ DEFAULTS = {
     "function_map": {},
     "test_extensions": [".pf", ".pfunit"],     # pFUnit test files; also: modules using test_modules
     "test_modules": ["funit", "pfunit", "pfunit_mod"],
+    # named constants / enumerators (lower case) -> C++ expression, e.g.
+    # snapshotmode_read = "SnapshotMode::READ"
+    "constant_map": {},
     "gtest_assert": "ASSERT",      # pFUnit asserts abort the test -> ASSERT_*; "EXPECT" changes the logic
     # the project provides EXPECT_NEAR / ASSERT_NEAR for Eigen types: used for array comparisons;
     # False: EXPECT_LE((expected - actual).cwiseAbs().maxCoeff(), tolerance)
@@ -109,7 +112,7 @@ def load(path=None, **overrides):
             else:
                 cfg[key] = val
     cfg["accessors"] = {k.lower(): [n.lower() for n in v] for k, v in cfg["accessors"].items()}
-    for key in ("call_templates", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
+    for key in ("call_templates", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     for key, val in overrides.items():

@@ -267,6 +267,9 @@ class Translator:
 
     def x_Name(self, node):
         n = lname(node)
+        local = self.overrides.get(n) or (self.proc.vars.get(n) if self.proc is not None else None)
+        if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
+            return X(self.cfg["constant_map"][n])
         v = self.lookup(n)
         if v is None:
             if n == self.err:

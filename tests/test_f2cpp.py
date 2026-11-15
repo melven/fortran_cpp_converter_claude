@@ -480,3 +480,19 @@ def test_accessor_of_pointer_component(tmp_path):
     c["accessors"] = {"base_type": ["system"]}
     translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path), [str(tmp_path / "base_mod.F90")])
     assert "n = system().count + raw->count;" in (tmp_path / "d_mod.cpp").read_text()
+
+
+def test_constant_map(tmp_path):
+    (tmp_path / "c_mod.F90").write_text(
+        "module c_mod\nuse snap_mod, only: SnapshotMode_read, SnapshotMode_write\ncontains\n"
+        "subroutine s(mode, k)\ninteger, intent(in) :: mode\ninteger, intent(out) :: k\n"
+        "k = 0\nif (mode == SnapshotMode_read) k = 1\ncall open_snapshot(SNAPSHOTMODE_WRITE)\n"
+        "end subroutine\nend module\n")
+    c = config.load()
+    c["constant_map"] = {"snapshotmode_read": "SnapshotMode::READ", "snapshotmode_write": "SnapshotMode::WRITE"}
+    path = str(tmp_path / "c_mod.F90")
+    report, _ = translate([path], c, str(tmp_path))
+    cpp = (tmp_path / "c_mod.cpp").read_text()
+    assert "if (mode == SnapshotMode::READ) k = 1;" in cpp and "open_snapshot(SnapshotMode::WRITE);" in cpp
+    assert '#include "snap_mod.hpp"' not in (tmp_path / "c_mod.hpp").read_text()
+    assert not report.files[path]["missing"]
