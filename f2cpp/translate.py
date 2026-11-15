@@ -1245,6 +1245,8 @@ class Translator:
                     self.report.add("info", "external-call:" + n)
                     self.note("external-call", "external procedure, no interface known")
                 code = f"{str(desig)}({', '.join(self.plain_args(args))})"
+        if not code.strip():
+            return                              # empty method template: the call is not needed in C++
         self.emit(ind, code if code.startswith("//") or code.rstrip().endswith((";", "}")) else code + ";")
         self.last_err_call = (len(self.out) - 1, code) if had_err else None
 

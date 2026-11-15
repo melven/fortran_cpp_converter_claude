@@ -18,6 +18,8 @@ leastsquares_mod = ""
 # call es%solveNonsymmetric(A, lambda, V, ierr): eigenvalues / eigenvectors are complex in general
 "eigensolver_type%solvenonsymmetric" = "{self}.compute({0}); {1} = {self}.eigenvalues().real(); {2} = {self}.eigenvectors().real();  // TODO: complex eigenvalues"
 
+# call lu%setup(n, ierr): not needed (the decomposition is sized by compute) -> empty template drops the call
+"linearsolver_type%setup" = ""
 # call lu%factorize(A, ierr); call lu%solve(b, x, ierr)
 "linearsolver_type%factorize" = "{self}.compute({0});"
 "linearsolver_type%solve" = "{1} = {self}.solve({0});"

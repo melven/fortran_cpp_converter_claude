@@ -552,6 +552,7 @@ def test_method_templates_for_eigen_solvers(tmp_path):
         "integer, intent(out) :: ierr\ntype(eigensolver_type) :: es\ntype(linearsolver_type) :: lu\n"
         "type(leastsquares_type) :: ls\n"
         "call es%solveSymmetric(A, lambda, V, ierr)\ncall es%solveNonsymmetric(A, lambda, V, ierr)\n"
+        "call lu%setup(size(b), ierr)\n"
         "call lu%factorize(A, ierr)\ncall lu%solve(b, x, ierr)\ncall ls%solve(A, b, x, ierr)\n"
         "end subroutine\nend module\n")
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), os.path.join(HERE, "..", "examples", "eigen_solvers.toml")])
@@ -562,6 +563,7 @@ def test_method_templates_for_eigen_solvers(tmp_path):
     assert "{ Eigen::SelfAdjointEigenSolver<mat> es_(A); lambda = es_.eigenvalues(); V = es_.eigenvectors(); }" in cpp
     assert "es.compute(A); lambda = es.eigenvalues().real(); V = es.eigenvectors().real();  // TODO" in cpp
     assert "lu.compute(A);" in cpp and "x = lu.solve(b);" in cpp and "x = ls.compute(A).solve(b);" in cpp
+    assert "setup" not in cpp and "\n  ;\n" not in cpp
     assert "#include" not in (tmp_path / "use_solvers_mod.hpp").read_text().split("lapack_compat.hpp")[1]
     assert not report.files[path]["untranslated"]
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "use_solvers_mod.cpp"],
