@@ -198,6 +198,9 @@ contains
     integer, intent(in) :: flags(:)
     integer :: n, i
     n = 0
+    if (any([size(flags) == 2, size(flags) == 4, n > 0 .and. n < 2])) n = 0
+    if (.not. all([n == 0, size(flags) >= 0])) n = 1
+    if (count([n == 0, n == 1] .and. [.true., n > 5]) > 2) n = 2
     do i = 1, size(flags)
       if (flags(i) == 1) n = n + 1
     end do

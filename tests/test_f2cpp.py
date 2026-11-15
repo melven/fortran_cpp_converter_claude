@@ -174,6 +174,10 @@ def test_features(out):
     assert "count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes[3];" in cpp
     assert "sel = (Eigen::VectorXi(2) << 1, 2).finished();" in cpp and "shifted = (sel.array() + 1).matrix();" in cpp
     assert "if (!copy.empty()) copy.clear();" in cpp
+    assert "if (static_cast<int>(flags.size()) == 2 || static_cast<int>(flags.size()) == 4 || " \
+           "(n > 0 && n < 2)) n = 0;" in cpp
+    assert "if (!(n == 0 && static_cast<int>(flags.size()) >= 0)) n = 1;" in cpp
+    assert "(Eigen::Array<bool, Eigen::Dynamic, 1>(2) << (n == 0), (n == 1)).finished()" in cpp
     # output statements, string arrays, owned pointers
     assert 'std::fill(lines.begin(), lines.end(), "");' in cpp
     assert 'line = std::string("n = ") + std::to_string(n);' in cpp

@@ -543,6 +543,8 @@ class Translator:
         if o in (".and.", ".or.", ".eqv.", ".neqv."):
             c, p = {".and.": ("&&", P_AND), ".or.": ("||", P_OR), ".eqv.": ("==", P_EQ),
                     ".neqv.": ("!=", P_EQ)}[o]
+            if o == ".or.":     # a && b || c is correct, but compilers warn: parenthesise &&
+                return X(f"{par(a, P_AND, True)} {c} {par(b, P_AND, True)}", rank, "logical", p, arr=rank > 0)
             return X(f"{par(a, p)} {c} {par(b, p, True)}", rank, "logical", p, arr=rank > 0)
         if o in "+-":
             if rank > 0 and (a.rank == 0 or b.rank == 0 or a.arr or b.arr):
@@ -597,9 +599,14 @@ class Translator:
         xs = self.ac_items(node)
         if all(x.base == "character" for x in xs):
             return X("std::vector<std::string>{" + ", ".join(x.code for x in xs) + "}", 1, "character")
+        # operands of the comma initialiser: << binds stronger than comparisons and logical operators
+        items = ", ".join(par(x, P_ADD) for x in xs)
+        if all(x.base == "logical" for x in xs):
+            t = "Eigen::Array<bool, Eigen::Dynamic, 1>"
+            return X(f"({t}({len(xs)}) << {items}).finished()", 1, "logical", arr=True)
         base = "integer" if all(x.base == "integer" for x in xs) else "real"
         t = self.cfg["ivec"] if base == "integer" else self.cfg["vec"]
-        return X(f"({t}({len(xs)}) << {', '.join(x.code for x in xs)}).finished()", 1, base)
+        return X(f"({t}({len(xs)}) << {items}).finished()", 1, base)
 
     # ------------------------------------------------------------------ calls
     def split_arg(self, a):
@@ -1520,6 +1527,11 @@ def i_transpose(tr, n, pos, kw):
 
 def i_reduce(method):
     def f(tr, n, pos, kw):
+        if method in ("any", "all") and cls(pos[0]) == "Array_Constructor" and len(pos) == 1 and not kw:
+            # any([a, b, c]) -> a || b || c
+            op, p = (" || ", P_OR) if method == "any" else (" && ", P_AND)
+            xs = tr.ac_items(pos[0])
+            return X(op.join(par(x, P_AND, True) for x in xs), 0, "logical", p if len(xs) > 1 else xs[0].prec)
         x = tr.expr(pos[0])
         dim = pos[1] if len(pos) == 2 else kw.get("dim")
         if dim is not None and x.rank == 2 and set(kw) <= {"dim"} and not x.arr and \
