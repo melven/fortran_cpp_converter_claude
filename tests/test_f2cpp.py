@@ -283,6 +283,7 @@ def test_custom_macro_names(tmp_path):
     assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp
     assert 'xy_log_debug("n = " + std::to_string(block_dim.size()));' in cpp
     assert 'if (!sys.offsets.mask(Eigen::seq(ub - 1, ue - 1)).any()) xy_log_debug("none");' in cpp
+    assert "xy_log_debug(std::to_string(ext_fn(sys.handle, sys.path, sys.a.b)));" in cpp
 
 
 def test_eigen_placeholders_default(tmp_path):
@@ -293,7 +294,6 @@ def test_eigen_placeholders_default(tmp_path):
     cpp = (tmp_path / "s_mod.cpp").read_text()
     assert "x(Eigen::seq(1, Eigen::placeholders::last)) = a(Eigen::seq(1, Eigen::placeholders::last), 0);" in cpp
     assert "a(Eigen::placeholders::all, Eigen::seq(0, 1)).setZero();" in cpp
-    assert "xy_log_debug(std::to_string(ext_fn(sys.handle, sys.path, sys.a.b)));" in cpp
 
 
 def test_missing_modules(tmp_path):
