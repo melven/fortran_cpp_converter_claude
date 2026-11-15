@@ -49,6 +49,11 @@ with less precise output (calls are passed through unchanged).
 | array of objects, rank 1 / 2 | `std::vector<T>` / `Eigen::Array<T, Dynamic, Dynamic>`: `b(i, j)%m(k, l)` → `b(i - 1, j - 1).m(k - 1, l - 1)` |
 | any array of rank ≥ 4 (objects: ≥ 3) | flat `vec` / `std::vector<T>` with explicit column-major index and a TODO; extents from the declaration or an `allocate` in the module |
 | vector subscript `v(iperm)` | `v((iperm.array() - 1))` |
+| `call random_number(x)` | `x.setRandom();` with a TODO (Eigen: [-1, 1], Fortran: [0, 1)); scalar: `std::rand() / RAND_MAX` |
+| `print *, ...`, `write(*, fmt) ...` | `std::cout << ... << std::endl;` (formats with only `a`, `i0`, `g0`, `x`, `/` and literals) |
+| `write(str, fmt) ...` (internal write to a string) | `str = ... + std::to_string(n) + ...;` |
+| `strings = ''` (array of strings / objects = scalar) | `std::fill(v.begin(), v.end(), value);` |
+| `p => null()`, `p => q` for owned pointers | `p.reset();`, `p = std::move(q);` with TODO |
 | `call move_alloc(a, b)` | `b = std::move(a);` (+ `a.resize(0)`) |
 | array dummies | `const mat&` / `mat&`; `Eigen::Ref<mat>` only for out/inout dummies that receive a slice in a translated call (`array_args = "auto"`; alternatives `"plain"`, `"ref"`) |
 | `pointer` that is allocated somewhere in the module | `std::unique_ptr<T>` |
@@ -67,7 +72,7 @@ with less precise output (calls are passed through unchanged).
 | `PROJECT_CHK_IERR(call f(a, ierr), ierr)` | `f(a);` — the `ierr` argument is removed everywhere |
 | `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `if (!(c)) throw std::logic_error(...);` / `std::invalid_argument` (`call_templates`) |
 | `PROJECT_ALLOCATE(a(n), ierr)` | `a.resize(n);` |
-| other statements using `ierr` | kept as comment (`ierr = 0`, `if (ierr /= 0) return`, `PROJECT_CHK_IERR(ierr=ierr, ierr)` are dropped) |
+| other statements using `ierr` | kept as comment (`ierr = 0`, `PROJECT_ASSERT(ierr == 0, ierr)`, `if (ierr /= 0) return`, `PROJECT_CHK_IERR(ierr=ierr, ierr)` are dropped) |
 | pFUnit `@test` subroutine `test_x` in module `test_foo_mod` | `TEST(test_foo_mod, test_x)`, outside the project namespace (`using namespace`) |
 | `@before` / `@after` | fixture class `test_foo_mod` with `SetUp` / `TearDown`, tests become `TEST_F` |
 | other procedures / variables of a test module | `static` functions / anonymous namespace |
@@ -161,7 +166,7 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
   `friend` or accessors.
 - Passing a slice to a non-`const` `Eigen::Ref` of a *different* storage layout, array-valued
   optional objects, pointers: check by hand.
-- Not translated (kept as comment): I/O, `where`/`forall` constructs, implied-do, named
+- Not translated (kept as comment): I/O to units and with numeric edit descriptors (`f10.3`, `es12.4`), `where`/`forall` constructs, implied-do, named
   `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, internal
   procedures, slices of flat (rank ≥ 4) arrays and over the vector index of `std::vector<mat>`, most string intrinsics, `program` units.
 - **Name lookup across modules** is simpler than in Fortran: a name is searched in the module

@@ -8,7 +8,7 @@ module features_mod
   private
 
   public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
-  public :: argmax
+  public :: argmax, text_demo, node_type, relink
   public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
@@ -36,6 +36,10 @@ module features_mod
     type(stats_type) :: inner
     type(stats_type), pointer :: owned => null()
   end type holder_type
+
+  type :: node_type
+    type(stats_type), pointer :: payload => null()
+  end type node_type
 
   type :: history_type
     real(kind=8), allocatable :: phi(:, :, :)     !< snapshots 0..n
@@ -158,6 +162,34 @@ contains
       m = sum(x) / real(size(x))
     end if
   end function mean
+
+  subroutine text_demo(n, x, title, ierr)
+    integer, intent(in) :: n
+    real, intent(in) :: x
+    character(len=*), intent(in) :: title
+    integer, intent(out) :: ierr
+    character(len=80) :: line, lines(3)
+
+    lines = ''
+    write(line, '(a, i0)') 'n = ', n
+    write(lines(2), '(a, 1x, a, i0, a)') trim(title), '[', n, ']'
+    write(line, *) n, x
+    print *, 'value', x, trim(line)
+    write(*, '(a, i0)') 'count: ', n
+    write(*, '(a)', advance='no') lines(2)
+    write(*, '(f10.3)') x
+    PROJECT_ASSERT(ierr == 0, ierr)
+  end subroutine text_demo
+
+  subroutine relink(a, b)
+    type(node_type), intent(inout) :: a, b
+    type(stats_type), pointer :: fresh
+
+    allocate(fresh)
+    a%payload => fresh
+    b%payload => null()
+    if (associated(a%payload)) allocate(b%payload)
+  end subroutine relink
 
   function argmax(x, a) result(k)
     real, intent(in) :: x(:), a(:, :)
@@ -298,6 +330,9 @@ contains
     a(:, 1) = 2.0 * a(:, 1)
     a(2:3, 1) = a(1:2, 2)
     a = transpose(a)
+    call random_number(tmp)
+    call random_number(a(:, 1))
+    call random_number(tmp(1))
   end subroutine swap_rows
 
   function shape_ratio(a, b) result(r)

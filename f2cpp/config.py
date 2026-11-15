@@ -14,6 +14,8 @@ DEFAULTS = {
     "destructor_bindings": ["finalize"],
     "brace_style": "allman",      # "allman": { on its own line; "attached": if (...) {
     "explicit_this": False,       # True: always write this->member
+    # values of the error flag that mean success (lower case), e.g. ["0", "myproj_success"]
+    "error_success": ["0"],
     "error_arg": "ierr",           # error flag argument, removed (C++ uses exceptions)
     "scalar": "scalar",
     "vec": "vec",

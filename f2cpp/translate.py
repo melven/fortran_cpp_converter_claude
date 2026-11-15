@@ -353,6 +353,8 @@ class Translator:
         base, _, last = node.items
         return self.x_Data_Ref(None, (list(base.items) if cls(base) == "Data_Ref" else [base]) + [last])
 
+    x_Data_Pointer_Object = x_Proc_Component_Ref        # a % p => target
+
     def x_Data_Ref(self, node, parts=None):
         parts = parts or list(node.items)
         cur = self.expr(parts[0])
@@ -816,6 +818,12 @@ class Translator:
         if k == "Call_Stmt" and lname(node.items[0]).startswith(ASSERT_PREFIX + "assert") and \
                 self.err_assert(node, ind):
             return
+        if k == "Call_Stmt" and lname(node.items[0]) in self.macro_calls and node.items[1] is not None:
+            # PROJECT_ASSERT(ierr == 0, ierr): the error flag is replaced by exceptions
+            cond = str(items_of(node.items[1])[0]).replace(" ", "").lower().replace(".eq.", "==")
+            good = [s.lower() for s in self.cfg["error_success"]]
+            if cond in [f"{self.err}=={s}" for s in good] + [f"{s}=={self.err}" for s in good]:
+                return
         self.report.add("untranslated", "error-arg:" + k)
         self.fortran_comment(node, ind, f"uses error flag '{self.err}' (replace by exception handling)")
 
@@ -825,12 +833,15 @@ class Translator:
         args = [self.split_arg(a) for a in items_of(node.items[1])]
         pos = [str(n).replace(" ", "").lower() for kw, n in args if kw is None]
         e = self.err
-        ok = (name == "equal" and sorted(pos) == ["0", e]) or \
-             (name == "true" and pos in ([f"{e}==0"], [f"0=={e}"])) or \
-             (name == "false" and pos in ([f"{e}/=0"], [f"0/={e}"]))
-        fail = (name == "notequal" and sorted(pos) == ["0", e]) or \
-               (name == "true" and pos in ([f"{e}/=0"], [f"0/={e}"])) or \
-               (name == "false" and pos in ([f"{e}==0"], [f"0=={e}"]))
+        good = [s.lower() for s in self.cfg["error_success"]]
+        pos = [p.replace(".eq.", "==").replace(".ne.", "/=") for p in pos]
+        eq = [f"{e}=={s}" for s in good] + [f"{s}=={e}" for s in good]
+        ne = [f"{e}/={s}" for s in good] + [f"{s}/={e}" for s in good]
+        pair = len(pos) == 2 and e in pos and any(s in pos for s in good)
+        ok = (name == "equal" and pair) or (name == "true" and pos[:1] in [[c] for c in eq]) or \
+             (name == "false" and pos[:1] in [[c] for c in ne])
+        fail = (name == "notequal" and pair) or (name == "true" and pos[:1] in [[c] for c in ne]) or \
+               (name == "false" and pos[:1] in [[c] for c in eq])
         if ok:
             return True
         if fail and self.last_err_call is not None and self.last_err_call[0] == len(self.out) - 1:
@@ -916,8 +927,15 @@ class Translator:
             fill = ".setZero()" if is_zero(rhs.code) else f".setConstant({rhs.code})"
             self.emit(ind, f"{par(lhs)}{fill};")
             return
+        if lhs.rank > 0 and rhs.rank == 0 and v is not None and self.storage(v) == "stdvec" and lhs.whole:
+            name = lhs.raw or lhs.code
+            self.emit(ind, f"std::fill({name}.begin(), {name}.end(), {rhs.code});")
+            return
+        if lhs.rank > 0 and rhs.rank == 0 and v is not None and self.storage(v) == "objmat":
+            self.emit(ind, f"{par(lhs)}.setConstant({rhs.code});")
+            return
         if lhs.rank > 0 and rhs.rank == 0:
-            raise Untranslatable("array=scalar")
+            raise Untranslatable("array=scalar:" + (self.storage(v) if v is not None else "unknown"))
         code = self.matrix(rhs)
         if lhs.rank > 0 and v is not None and self.saw_transpose and \
                 re.search(rf"(?<![\w.>]){re.escape(v.cname)}\b", code.replace("this->", "")):
@@ -929,6 +947,16 @@ class Translator:
         if lhs.var is not None and lhs.var.alias:
             self.emit(ind, f"auto&& {lhs.var.cname} = {rhs.code};")
             return
+        if lhs.var is not None and self.storage(lhs.var) == "uptr":
+            name = lhs.raw or lhs.code
+            if rhs.code == "nullptr":
+                self.emit(ind, f"{name}.reset();")
+                return
+            if rhs.var is not None and rhs.whole and self.storage(rhs.var) == "uptr":
+                self.note("pointer", "ownership is transferred (Fortran: both pointers refer to the object)")
+                self.emit(ind, f"{name} = std::move({rhs.raw});")
+                return
+            raise Untranslatable("pointer-assignment:owned=>target")
         if lhs.var is not None and self.storage(lhs.var) != "ptr":
             raise Untranslatable("pointer-assignment:" + self.storage(lhs.var))
         self.note("pointer", "non-owning raw pointer: replace by a reference / check lifetime")
@@ -946,6 +974,20 @@ class Translator:
             if n.startswith(ASSERT_PREFIX + "assert"):
                 return self.pf_assert(n[len(ASSERT_PREFIX) + 6:], args, ind)
             p = self.lookup_proc(n)
+            if n == "random_number" and len(args) == 1:
+                x = self.expr(self.split_arg(args[0])[1])
+                st = self.storage(x.var) if x.var is not None else None
+                if x.rank == 0:
+                    self.emit(ind, f"{x.code} = static_cast<{self.cfg['scalar']}>(std::rand()) / RAND_MAX;")
+                elif st == "vec3" and x.whole:
+                    self.emit(ind, f"for (auto& b0_ : {x.raw or x.code}) b0_.setRandom();")
+                    self.note("random", "Eigen setRandom: values in [-1, 1], Fortran random_number: [0, 1)")
+                elif st in ("eigen", "vec3", "flat", None) and x.base not in ("type", "character"):
+                    self.emit(ind, f"{par(x)}.setRandom();")
+                    self.note("random", "Eigen setRandom: values in [-1, 1], Fortran random_number: [0, 1)")
+                else:
+                    raise Untranslatable("random_number")
+                return
             if n == "move_alloc" and len(args) == 2:
                 src, dst = self.expr(args[0]), self.expr(args[1])
                 s_name = src.raw if src.raw is not None else src.code
@@ -1140,6 +1182,79 @@ class Translator:
             for line in sub.out:
                 self.emit(ind + 1, line)
             self.emit(ind, "}")
+
+    def io_pieces(self, fmt, items):
+        """output items in the order of a (simple) format -> list of X; string literals of the format
+        become character X"""
+        xs = [self.expr(i) for i in items]
+        if any(x.rank > 0 and x.base == "character" for x in xs):
+            raise Untranslatable("write:string-array")
+        fmt = (fmt or "*").strip()
+        if fmt == "*":
+            out = []
+            for x in xs:
+                out += [X('" "', 0, "character"), x] if out else [x]
+            return out
+        if not re.fullmatch(r"""['"]\(.*\)['"]""", fmt):
+            raise Untranslatable("write:format-variable")
+        out, rest = [], list(xs)
+        for tok in re.findall(r"""'(?:[^']|'')*'|"[^"]*"|[^,'"]+""", fmt[2:-2]):
+            t = tok.strip().lower()
+            if not t:
+                continue
+            if tok.strip()[0] in "'\"":
+                out.append(X(cstring(tok.strip()), 0, "character"))
+            elif re.fullmatch(r"\d*x", t):
+                out.append(X('"' + " " * int(t[:-1] or 1) + '"', 0, "character"))
+            elif t == "/":
+                out.append(X('"\\n"', 0, "character"))
+            elif re.fullmatch(r"a\d*|i0|g0", t) and rest:
+                out.append(rest.pop(0))
+            else:
+                raise Untranslatable("write:format-descriptor")
+        if rest:
+            raise Untranslatable("write:format-items")
+        return out
+
+    def io_emit(self, unit, pieces, newline, ind):
+        if unit is None:                                    # standard output
+            code = "std::cout" + "".join(f" << {par(p, P_ADD, True)}" for p in pieces)
+            self.emit(ind, code + (" << std::endl;" if newline else ";"))
+            return
+        parts = []                                          # internal write: build a std::string
+        for p in pieces:
+            if p.rank > 0 or p.base not in ("character", "integer", "real", "logical"):
+                raise Untranslatable("write:internal-item")
+            parts.append(par(p, P_ADD, True) if p.base == "character" else f"std::to_string({p.code})")
+            if p.base == "real":
+                self.note("format", "std::to_string formats floating point numbers differently")
+        if not parts or parts[0].startswith('"'):
+            parts[:1] = [f"std::string({parts[0] if parts else ''})"]
+        self.emit(ind, f"{unit.raw or unit.code} = {' + '.join(parts)};")
+
+    def s_Print_Stmt(self, node, ind):
+        self.io_emit(None, self.io_pieces(str(node.items[0]), items_of(node.items[1])), True, ind)
+
+    def s_Write_Stmt(self, node, ind):
+        unit = fmt = None
+        newline = True
+        for i, spec in enumerate(items_of(node.items[0])):
+            kw = lname(spec.items[0]) if spec.items[0] is not None else ("unit", "fmt")[min(i, 1)]
+            val = spec.items[1]
+            if kw == "unit":
+                unit = val
+            elif kw == "fmt":
+                fmt = str(val)
+            elif kw == "advance" and str(val).strip("'\" ").lower() == "no":
+                newline = False
+            elif kw != "advance":
+                raise Untranslatable("write:" + kw)
+        target = None
+        if str(unit).strip() != "*":
+            target = self.expr(unit)
+            if target.base != "character" or target.rank > 0:
+                raise Untranslatable("write:unit" if target.base != "character" else "write:string-array")
+        self.io_emit(target, self.io_pieces(fmt, items_of(node.items[1])), newline, ind)
 
     def s_Where_Stmt(self, node, ind):
         mask, assign = self.expr(node.items[0]), node.items[1]

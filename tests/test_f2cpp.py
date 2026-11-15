@@ -63,7 +63,7 @@ def test_report(out):
     files = out[1].files
     for name, counters in files.items():
         if "features" in name:
-            assert set(counters["untranslated"]) == {"error-arg:If_Construct"}
+            assert set(counters["untranslated"]) == {"error-arg:If_Construct", "write:format-descriptor"}
         else:
             assert not counters["untranslated"], name
 
@@ -158,6 +158,16 @@ def test_features(out):
            "return (Eigen::VectorXi(2) << r_ + 1, c_ + 1).finished(); }();" in cpp
     assert "if (samples.size() == 0)\n" in cpp and "if (samples.size() > 0) samples.resize(0);" in cpp
     assert "if (h.owned == nullptr)\n" in cpp
+    assert "tmp.setRandom();  // TODO(f2cpp): Eigen setRandom" in cpp and "a.col(0).setRandom();" in cpp
+    assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
+    # output statements, string arrays, owned pointers
+    assert 'std::fill(lines.begin(), lines.end(), "");' in cpp
+    assert 'line = std::string("n = ") + std::to_string(n);' in cpp
+    assert 'lines[1] = title + " " + "[" + std::to_string(n) + "]";' in cpp
+    assert 'std::cout << "value" << " " << x << " " << line << std::endl;' in cpp
+    assert 'std::cout << "count: " << n << std::endl;' in cpp and "std::cout << lines[1];" in cpp
+    assert "// TODO(f2cpp): not translated (write:format-descriptor)" in cpp
+    assert "a.payload = std::move(fresh);" in cpp and "b.payload.reset();" in cpp
     assert "class Grid\n{" in hpp and "void grid_demo(Grid& g," in hpp     # spelling of the definition
     assert "inconsistently in the Fortran source: Holder_Type, holder_type\nclass holder\n{" in hpp
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp

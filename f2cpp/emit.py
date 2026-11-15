@@ -307,6 +307,12 @@ class ModuleEmitter:
                 res.append(f'#include "{h}"')
         return res
 
+    SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),
+                       ("cmath", ["std::"]), ("cstdlib", ["std::rand"]), ("iostream", ["std::cout"]), ("limits", ["numeric_limits"]),
+                       ("numeric", ["std::iota"]), ("stdexcept", ["throw std::"]),
+                       ("string", ["std::to_string", "std::string"]), ("typeinfo", ["typeid("]),
+                       ("utility", ["std::move"])]
+
     def std_includes(self, text, names):
         return [f"#include <{h}>" for h, keys in names if any(k in text for k in keys)]
 
@@ -471,11 +477,7 @@ class ModuleEmitter:
         body = "\n".join(cpp.out + cpp_priv.out)
         c = self.file_header(top, cfg["source_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src)), f'#include "{mod.name}{cfg["header_ext"]}"', ""]
-        c += self.std_includes(body, [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort"]),
-                                      ("cmath", ["std::"]), ("limits", ["numeric_limits"]),
-                                      ("stdexcept", ["throw std::"]),
-                                      ("string", ["std::to_string"]), ("numeric", ["std::iota"]),
-                                      ("utility", ["std::move"]), ("typeinfo", ["typeid("])])
+        c += self.std_includes(body, self.SOURCE_INCLUDES)
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \
@@ -535,7 +537,11 @@ class ModuleEmitter:
     def assemble_test(self, top, dirs, cpp_priv, protos, cpp, fixture, mod_doc):
         mod = self.mod
         c = self.file_header(top, self.cfg["source_ext"]) + \
-            [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", "", "#include <cmath>"]
+            [BANNER.format(src=os.path.basename(self.src)), "#include <gtest/gtest.h>", ""]
+        c += self.std_includes("\n".join(cpp.out + cpp_priv.out),
+                               self.SOURCE_INCLUDES + [("memory", ["std::unique_ptr", "std::make_unique"]),
+                                                       ("optional", ["std::optional"]),
+                                                       ("vector", ["std::vector"])])
         c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
             self.includes() + dirs.out
         # tests are not part of the project namespace
