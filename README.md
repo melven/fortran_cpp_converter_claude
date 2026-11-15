@@ -142,6 +142,23 @@ A `function_map` entry can also be a template that converts arguments for a C AP
 `tools/make_tixi_config.py` (the Fortran 2003 binding and the C API share names and argument
 order). Several configuration files can be combined: `-c f2cpp.toml -c examples/tixi.toml`.
 
+## Callbacks
+
+| Fortran | C++ |
+|---|---|
+| `abstract interface` body `NonLinearFunction` (not used by a deferred binding) | `using NonLinearFunction = std::function<void(const vec& x, vec& f)>;` |
+| `procedure(NonLinearFunction) :: fun` dummy / `procedure(...), pointer, nopass :: f` component | `const NonLinearFunction& fun` / member `NonLinearFunction f;` |
+| `call fun(userData, x, f, ierr)`, `associated(this%f)` | `fun(x, f);`, `f` |
+
+`procedure_map` replaces the generated alias by an existing type
+(`nonlinearfunction = "std::function<void(const vec&, vec&)>"`).
+
+`drop_args = ["userData"]` removes dummies of that name that are declared `class(*)` from all
+signatures and calls, like the error flag: the user data is captured by the lambda in C++.
+By hand: the call sites (`solve(my_residual, x)` → `solve([&](const vec& x, vec& f) { my_residual(*this, x, f); }, x)`)
+and the callback implementations (statements using the dropped argument, e.g. its
+`select type`, are kept as commented Fortran).
+
 ## Existing C++ code (partially translated module hierarchy)
 
 ```toml

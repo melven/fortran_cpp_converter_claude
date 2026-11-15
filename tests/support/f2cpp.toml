@@ -1,4 +1,5 @@
 namespace = "project"
+drop_args = ["userData"]              # class(*) user data of callbacks
 eigen_placeholders = "Eigen"          # the test environment has Eigen 3.4
 constructor_bindings = ["configure", "init"]
 test_includes = ['"gtest_eigen.hpp"']

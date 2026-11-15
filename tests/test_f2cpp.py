@@ -13,7 +13,7 @@ HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
 SUPPORT = os.path.join(HERE, "support")
 EIGEN = "/usr/include/eigen3"
-MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod"]
+MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod"]
 
 needs_cxx = pytest.mark.skipif(not (shutil.which("g++") and os.path.isdir(EIGEN)), reason="g++/Eigen missing")
 
@@ -281,14 +281,14 @@ def test_compiles(out, name):
 def test_same_results_as_fortran(out, tmp_path):
     d = out[0]
     srcs = [os.path.join(CORPUS, f) for f in ("expm_mod.F90", "block_lu_mod.F90", "shape_mod.F90", "poly_mod.F90",
-                                               "driver.F90")]
+                                               "solver_mod.F90", "driver.F90")]
     run(["gfortran", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-J", str(tmp_path), *srcs,
          "-llapack", "-o", str(tmp_path / "fdriver")], CORPUS)
     ref = run([str(tmp_path / "fdriver")], d).split()
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
-         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "-llapack", "-o", "cdriver"], d)
+         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 43
+    assert len(res) == len(ref) == 45
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
@@ -505,3 +505,35 @@ def test_constant_map(tmp_path):
     assert "if (mode == SnapshotMode::READ) k = 1;" in cpp and "open_snapshot(SnapshotMode::WRITE);" in cpp
     assert '#include "snap_mod.hpp"' not in (tmp_path / "c_mod.hpp").read_text()
     assert not report.files[path]["missing"]
+
+
+def test_callbacks_with_user_data(out):
+    hpp, cpp = read(out, "solver_mod.hpp"), read(out, "solver_mod.cpp")
+    assert "//! residual of a nonlinear system\n//! @param[in] x current approximate solution vector\n" \
+           "//! @param[out] f new residual vector\n" \
+           "using NonLinearFunction = std::function<void(const vec& x, vec& f)>;" in hpp
+    assert "#include <functional>" in hpp and "NonLinearFunction monitor;" in hpp
+    assert "void solve(const NonLinearFunction& fun, vec& x);" in hpp
+    assert "void fixed_point_solve(const NonLinearFunction& fun, vec& x, scalar tol, int max_iter);" in hpp
+    assert "userData" not in hpp and "userData" not in cpp
+    assert "fun(x, f);" in cpp and "if (residual_norm(fun, x) < tol) break;" in cpp
+    assert "fixed_point_solve(fun, x, tol, max_iter);" in cpp
+    assert "if (monitor)\n" in cpp and "monitor(x, f);" in cpp
+    assert not out[1].files[os.path.join(CORPUS, "solver_mod.F90")]["info"]
+
+
+def test_procedure_map_and_callback_implementation(tmp_path):
+    (tmp_path / "impl_mod.F90").write_text(
+        "module impl_mod\nuse solver_mod, only: NonLinearFunction, fixed_point_solve\ncontains\n"
+        "subroutine run(obj, x, ierr)\ntype(thing_type), intent(in) :: obj\nreal :: x(:)\ninteger :: ierr\n"
+        "call fixed_point_solve(my_res, obj, x, 1.e-8, 10, ierr)\nend subroutine\n"
+        "subroutine my_res(userData, x, f, ierr)\nclass(*), intent(in) :: userData\nreal, intent(in) :: x(:)\n"
+        "real, intent(out) :: f(:)\ninteger, intent(out) :: ierr\nf = x\n"
+        "select type (userData)\ntype is (thing_type)\nf = userData%a * x\nend select\nend subroutine\nend module\n")
+    c = cfg()
+    c["procedure_map"] = {"nonlinearfunction": "my::Callback"}
+    translate([str(tmp_path / "impl_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "solver_mod.F90")])
+    cpp = (tmp_path / "impl_mod.cpp").read_text()
+    assert "fixed_point_solve(my_res, x, 1.e-8, 10);" in cpp         # user data dropped: wrap by hand in a lambda
+    assert "void my_res(const vec& x, vec& f)" in cpp
+    assert "// TODO(f2cpp): not translated (dropped-argument)\n  // F: SELECT TYPE(userData)" in cpp

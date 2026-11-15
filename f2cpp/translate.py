@@ -113,15 +113,44 @@ class Translator:
             return "std::string"
         if v.base == "complex":
             return f"std::complex<{cfg['scalar']}>"
+        if v.base == "procedure":
+            return self.proc_type(v.tname)
         if v.base == "type":
             if v.tname not in self.cfg["type_map"] and self.find_type(v.tname) is None:
                 self.report.add("info", "unknown-type:" + v.tname)
             return self.prog.type_name(v.tname, self.mod)
         return "auto"
 
+    def find_iface(self, name):
+        """abstract interface (signature of procedure arguments)"""
+        for m in [*self.prog.visible(self.mod), *self.prog.modules.values()]:
+            if name in m.ifaces:
+                return m.ifaces[name]
+        return None
+
+    def proc_type(self, name):
+        if name in self.cfg["procedure_map"]:
+            return self.cfg["procedure_map"][name]
+        p = self.find_iface(name)
+        if p is None:
+            self.report.add("info", "unknown-interface:" + str(name))
+        return p.cname if p is not None else cname(str(name))
+
+    def dropped(self, p):
+        """dummies that are removed: class(*) user data arguments named in drop_args"""
+        if p is None or not self.cfg["drop_args"]:
+            return set()
+        return {a for a in p.args if a in self.cfg["drop_args"] and a in p.vars
+                and p.vars[a].polymorphic and p.vars[a].tname == "*"}
+
+    def is_dropped(self, node):
+        return cls(node) == "Name" and lname(node) in self.dropped(self.proc) and lname(node) not in self.overrides
+
     def storage(self, v):
         """kind of container: scalar eigen vec3 stdvec uptr ptr"""
         if v.rank == 0:
+            if v.base == "procedure":
+                return "scalar"
             if v.base == "type" and v.has("allocatable"):
                 return "uptr"
             return "ptr" if v.has("pointer") else "scalar"
@@ -199,6 +228,8 @@ class Translator:
         """type of a dummy argument"""
         t, st = self.cpp_type(v), self.storage(v)
         const = v.intent == "in"
+        if v.base == "procedure":
+            return f"const std::optional<{t}>&" if v.opt_kind else f"const {t}&"
         if v.opt_kind == "optional":
             return f"std::optional<{t}>" if st == "scalar" and v.base != "character" else \
                 f"const std::optional<{t}>&"
@@ -267,6 +298,8 @@ class Translator:
 
     def x_Name(self, node):
         n = lname(node)
+        if self.is_dropped(node):
+            raise Untranslatable("dropped-argument")
         local = self.overrides.get(n) or (self.proc.vars.get(n) if self.proc is not None else None)
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
@@ -312,6 +345,11 @@ class Translator:
     def ref_or_call(self, name_node, args, node):
         n = lname(name_node)
         v = self.lookup(n)
+        if v is not None and v.base == "procedure":             # function passed as argument
+            iface = self.find_iface(v.tname)
+            argc = self.bound_args(iface, items_of(args), False) if iface is not None else \
+                self.plain_args(items_of(args))
+            return self.result_x(f"{v.cname}({', '.join(argc)})", iface)
         if v is not None and cls(node) != "Intrinsic_Function_Reference" or (v is not None and v.rank > 0):
             return self.subscript(self.x_Name(name_node), v, items_of(args))
         if n in self.cfg["function_map"]:
@@ -654,7 +692,7 @@ class Translator:
         res = []
         for a in args:
             kw, node = self.split_arg(a)
-            if self.is_err(node):
+            if self.is_err(node) or self.is_dropped(node):
                 continue
             x = self.expr(node)
             res.append((f"/*{kw}=*/ " if kw else "") + self.matrix(x))
@@ -674,6 +712,8 @@ class Translator:
                 kw = dummies[pos]
                 pos += 1
             given[kw] = node
+        gone = self.dropped(p)              # user data arguments: neither dummy nor actual in C++
+        dummies = [d for d in dummies if d not in gone]
         res = []
         last = max([i for i, d in enumerate(dummies) if d in given], default=-1)
         for d in dummies[:last + 1]:
@@ -764,6 +804,10 @@ class Translator:
             argc = self.plain_args(items_of(args))
         elif p is not None:
             argc = self.bound_args(p, items_of(args))
+        elif td is not None and getattr(self.prog.find_component(td, n), "base", None) == "procedure":
+            iface = self.find_iface(self.prog.find_component(td, n).tname)      # procedure pointer component
+            argc = self.bound_args(iface, items_of(args), False) if iface is not None else \
+                self.plain_args(items_of(args))
         else:
             self.report.add("info", "unknown-binding:" + n)
             argc = self.plain_args(items_of(args))
@@ -1046,6 +1090,9 @@ class Translator:
 
     def s_Pointer_Assignment_Stmt(self, node, ind):
         lhs, rhs = self.expr(node.items[0]), self.expr(node.items[2])
+        if lhs.var is not None and lhs.var.base == "procedure":
+            self.emit(ind, f"{lhs.code} = {rhs.code};")
+            return
         if lhs.var is not None and lhs.var.alias:
             self.emit(ind, f"auto&& {lhs.var.cname} = {rhs.code};")
             return
@@ -1121,6 +1168,11 @@ class Translator:
                 code = self.call_code(p, args)
             else:
                 v = self.lookup(n)
+                if v is not None and v.base == "procedure":         # call of a procedure argument
+                    iface = self.find_iface(v.tname)
+                    argc = self.bound_args(iface, args, False) if iface is not None else self.plain_args(args)
+                    self.emit(ind, f"{v.cname}({', '.join(argc)});")
+                    return
                 if v is not None:
                     raise Untranslatable("procedure-pointer-call")
                 if n not in self.macro_calls:
@@ -1674,6 +1726,8 @@ def i_present(tr, n, pos, kw):
 def i_allocated(tr, n, pos, kw):
     x = tr.ref(pos[0])
     name = x.raw if x.raw is not None else par(x)
+    if x.var is not None and x.var.base == "procedure":
+        return X(name, 0, "logical", neg=X(f"!{name}", 0, "logical", P_UNARY))
     if x.var is None:       # unknown object (type from a module that is not parsed): assume an Eigen array
         tr.note("allocated", f"{n}() of an object of unknown type")
         st = "eigen"

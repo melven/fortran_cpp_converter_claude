@@ -74,6 +74,8 @@ class Var:
     def ptr_like(self):
         if self.is_this or self.force_ptr or self.opt_kind == "optional":
             return True
+        if self.base == "procedure":
+            return False
         if self.rank == 0 and self.base == "type" and (self.has("allocatable") or self.has("pointer")):
             return True
         return self.rank == 0 and self.has("pointer")
@@ -217,6 +219,20 @@ def parse_decl(stmt, into, order=None):
     return res
 
 
+def parse_proc_decl(stmt, into):
+    """procedure(interface) :: name  (dummy procedure or procedure pointer component)"""
+    iface, attrs, decls = stmt.items
+    aset = {re.sub(r"\s", "", str(a)).lower() for a in items_of(attrs)}
+    for d in items_of(decls):
+        name = d.items[0] if cls(d) == "Proc_Decl" else d
+        n = lname(name)
+        v = into.get(n) or Var(n, cname(str(name)))
+        v.base, v.tname, v.node = "procedure", lname(iface) if iface is not None else None, stmt
+        v.attrs = {a for a in aset if a in ("optional", "pointer")}
+        v.intent = "in"
+        into[n] = v
+
+
 def collect_param_docs(p, spec):
     """documentation of dummy arguments: `!<` comments after the declaration (same or following
     lines) and `!>` comment lines directly before it"""
@@ -262,6 +278,8 @@ def collect_proc(node, module):
             for d in c.content:
                 if cls(d) == "Type_Declaration_Stmt":
                     parse_decl(d, p.vars)
+                elif cls(d) == "Procedure_Declaration_Stmt":
+                    parse_proc_decl(d, p.vars)
     for c in content[1:]:
         if cls(c) == "Specification_Part":
             collect_param_docs(p, c)
@@ -290,6 +308,8 @@ def collect_type(node, module):
             for d in c.content:
                 if cls(d) == "Data_Component_Def_Stmt":
                     parse_decl(d, t.comps)
+                elif cls(d) == "Proc_Component_Def_Stmt":
+                    parse_proc_decl(d, t.comps)
         elif k == "Type_Bound_Procedure_Part":
             for b in c.content:
                 if cls(b) == "Specific_Binding":

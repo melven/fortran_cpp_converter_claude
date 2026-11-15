@@ -3,12 +3,15 @@ program driver
   use block_lu_mod
   use shape_mod
   use poly_mod
+  use solver_mod
   implicit none
   real :: A(3,3), B(3,2), E(3,3), M(3,2), x(6), blk(2,2)
   type(block_lu_type) :: lu
   class(shape_type), allocatable :: s1, s2
   integer :: ierr, i
   type(poly_type) :: pol
+  type(fixed_point_type) :: fp
+  real :: xs(2)
   real :: cf(0:3), dd(0:3), tab(3, 0:1), hst(2, 2, 0:1)
   A = reshape([0.1, -0.3, 0.7, 1.2, 0.4, -0.5, 2.0, 0.3, -1.1], [3,3])
   B = reshape([1.0, 0.0, 2.0, -1.0, 0.5, 0.25], [3,2])
@@ -45,4 +48,19 @@ program driver
   print '(3es24.15)', pol%eval(1.3), poly_eval(dd, 0.7), poly_eval(cf(1:), 2.0)
   print '(6es24.15)', tab
   print '(8es24.15)', hst
+  xs = [1.0, 2.0]
+  call fp%solve(my_residual, 0.5, xs, ierr)
+  print '(2es24.15)', xs
+contains
+  subroutine my_residual(userData, x, f, ierr)
+    class(*), intent(in) :: userData
+    real, intent(in) :: x(:)
+    real, intent(out) :: f(:)
+    integer, intent(out) :: ierr
+    ierr = 0
+    select type (userData)
+    type is (real)
+      f = userData * (x - 3.0)
+    end select
+  end subroutine my_residual
 end program driver

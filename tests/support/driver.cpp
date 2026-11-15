@@ -6,6 +6,7 @@
 #include "expm_mod.hpp"
 #include "poly_mod.hpp"
 #include "shape_mod.hpp"
+#include "solver_mod.hpp"
 
 using namespace project;
 
@@ -60,5 +61,12 @@ int main()
   print(tab);
   print(hst[0]);
   print(hst[1]);
+  // callback with user data: the user data (0.5) is captured by the lambda
+  fixed_point fp;
+  vec x0(2);
+  x0 << 1.0, 2.0;
+  const scalar factor = 0.5;
+  fp.solve([&](const vec& x, vec& f) { f = factor * (x.array() - 3.0).matrix(); }, x0);
+  print(x0);
   return 0;
 }

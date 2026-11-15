@@ -89,6 +89,12 @@ DEFAULTS = {
     "function_map": {},
     "test_extensions": [".pf", ".pfunit"],     # pFUnit test files; also: modules using test_modules
     "test_modules": ["funit", "pfunit", "pfunit_mod"],
+    # abstract interface (lower case) -> C++ type of procedure arguments / components declared
+    # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
+    "procedure_map": {},
+    # dummy arguments declared class(*) with one of these names are removed from all signatures and
+    # calls (user data of callbacks: captured by the lambda in C++)
+    "drop_args": [],
     # named constants / enumerators (lower case) -> C++ expression, e.g.
     # snapshotmode_read = "SnapshotMode::READ"
     "constant_map": {},
@@ -119,7 +125,8 @@ def load(path=None, **overrides):
     # accessors: type -> {component: C++ accessor name or None (same name)}
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
-    for key in ("call_templates", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
+    cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
+    for key in ("call_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     for key, val in overrides.items():

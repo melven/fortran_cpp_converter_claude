@@ -112,7 +112,8 @@ class ModuleEmitter:
     def signature(self, tr, p, decl, qualify=""):
         """-> (return type, name, parameter list, trailing qualifiers)"""
         params = []
-        dummies = [a for a in p.args if a != tr.err and a != p.pass_arg]
+        gone = tr.dropped(p)
+        dummies = [a for a in p.args if a != tr.err and a != p.pass_arg and a not in gone]
         n_opt = 0
         for a in reversed(dummies):
             if p.vars[a].opt_kind:
@@ -156,7 +157,7 @@ class ModuleEmitter:
         dox, tags = self.cfg["doxygen"], {"in": "[in]", "out": "[out]", "inout": "[in,out]"}
         order = {a: i for i, a in enumerate(p.args)}
         for names, lines in sorted(p.param_docs, key=lambda d: order.get(d[0][0], len(order))):
-            names = [n for n in names if n != tr.err and n != p.pass_arg]
+            names = [n for n in names if n != tr.err and n != p.pass_arg and n not in tr.dropped(p)]
             if not names:
                 continue
             if names == [p.result]:
@@ -263,6 +264,10 @@ class ModuleEmitter:
                     continue
                 if cls(d) == "Data_Component_Def_Stmt":
                     self.decl_stmt(tr, d, t.comps, ind + 1, member=True)
+                elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
+                    for pd in items_of(d.items[2]):
+                        v = t.comps[lname(pd.items[0] if cls(pd) == "Proc_Decl" else pd)]
+                        tr.emit(ind + 1, f"{tr.cpp_type(v)} {v.cname};")
                 else:
                     self.report.add("untranslated", "component:" + cls(d))
                     tr.fortran_comment(d, ind + 1, "component not translated")
@@ -301,6 +306,11 @@ class ModuleEmitter:
                         prev = d
                     elif kd in ("Use_Stmt", "Import_Stmt"):
                         pass
+                    elif kd == "Procedure_Declaration_Stmt":
+                        for pd in items_of(d.items[2]):
+                            n = lname(pd.items[0] if cls(pd) == "Proc_Decl" else pd)
+                            if n not in skip:
+                                tr.emit(ind + 1, f"{tr.cpp_type(p.vars[n])} {p.vars[n].cname};")
                     elif kd == "Interface_Block":       # explicit interfaces of external procedures
                         self.report.add("info", "interface-in-procedure")
                     else:
@@ -340,7 +350,7 @@ class ModuleEmitter:
                 res.append(f'#include "{h}"')
         return res
 
-    HEADER_INCLUDES = [("functional", ["std::reference_wrapper"]), ("memory", ["std::unique_ptr"]),
+    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
                        ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
     SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),
@@ -438,6 +448,24 @@ class ModuleEmitter:
                     self.report.add("untranslated", "interface:" + str(head).split("(")[0].lower())
                     hpp.block(pending, 0)
                     hpp.fortran_comment(s, 0, "interface block not translated")
+                elif str(head).upper() == "ABSTRACT":
+                    # signatures of procedure arguments -> std::function aliases (interfaces of deferred
+                    # bindings are only used for the virtual methods)
+                    deferred = {b.iface for m in self.prog.modules.values() for t in m.types.values()
+                                for b in t.bindings.values() if b.deferred}
+                    sink = cpp_priv if mod.is_test and not shared else hpp
+                    for b in s.content[1:-1]:
+                        if cls(b) not in ("Function_Body", "Subroutine_Body"):
+                            continue
+                        p = mod.ifaces[lname([c for c in b.content if cls(c) != "Comment"][0].items[1])]
+                        if p.name in deferred or p.name in cfg["procedure_map"]:
+                            continue
+                        ptr = self.tr(p)
+                        sink.block([c for c in pending if not str(c).startswith(BLANK_MARK)], 0)
+                        pending = []
+                        self.doc(sink, p, 0)
+                        ret, _, params, _ = self.signature(ptr, p, False)
+                        sink.emit(0, f"using {p.cname} = std::function<{ret}({params})>;")
                 pending = []
             else:
                 self.report.add("untranslated", "specification:" + k)
