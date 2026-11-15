@@ -416,7 +416,11 @@ class Translator:
         """call of a function from the function_map (plain rename or template with conversions)"""
         fn = self.cfg["function_map"][n]
         if "{" not in fn:
-            return f"{fn}({', '.join(self.plain_args(args))})"
+            xs = [self.expr(node) for _, node in map(self.split_arg, args)
+                  if not self.is_err(node) and not self.is_dropped(node)]
+            if fn.startswith("std::") and any(x.rank > 0 for x in xs):
+                fn = fn[5:]         # Eigen argument: the project's overload, not the std function
+            return f"{fn}({', '.join(self.matrix(x) for x in xs)})"
         return self.fill_template(fn, args, n)
 
     def fill_template(self, template, args, what, obj=None):
@@ -1464,9 +1468,10 @@ class Translator:
             return
         parts = []                                          # internal write: build a std::string
         for p in pieces:
-            if p.rank > 0 or p.base not in ("character", "integer", "real", "logical"):
+            if p.base not in ("character", "integer", "real", "logical") or (p.rank > 0 and p.base == "character"):
                 raise Untranslatable("write:internal-item")
-            parts.append(par(p, P_ADD, True) if p.base == "character" else f"std::to_string({p.code})")
+            parts.append(par(p, P_ADD, True) if p.base == "character" else
+                         f"to_string({self.matrix(p)})" if p.rank > 0 else f"std::to_string({p.code})")
             if p.base == "real":
                 self.note("format", "std::to_string formats floating point numbers differently")
         if not parts or parts[0].startswith('"'):

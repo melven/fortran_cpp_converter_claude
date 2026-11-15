@@ -601,3 +601,16 @@ def test_member_access(out, tmp_path):
     c["member_access"] = "fortran"
     translate([str(tmp_path / "p_mod.F90")], c, str(tmp_path))
     assert "  int get() const;\n\n  int a = 0;\n  int b = 0;\n  int c = 0;\n};" in (tmp_path / "p_mod.hpp").read_text()
+
+
+def test_to_string_of_eigen_types(tmp_path):
+    (tmp_path / "s_mod.F90").write_text(
+        "module s_mod\nuse util_mod, only: str\ncontains\nsubroutine s(n, v, a, text)\ninteger :: n\n"
+        "real :: v(:), a(:, :)\ncharacter(len=200) :: text\n"
+        "text = str(n) // str(v(1)) // str(v) // str(2.0 * a)\nwrite(text, *) n, v\nend subroutine\nend module\n")
+    c = config.load()
+    c["function_map"] = {"str": "std::to_string"}
+    translate([str(tmp_path / "s_mod.F90")], c, str(tmp_path))
+    cpp = (tmp_path / "s_mod.cpp").read_text()
+    assert "text = std::to_string(n) + std::to_string(v(0)) + to_string(v) + to_string(2.0 * a);" in cpp
+    assert 'text = std::to_string(n) + " " + to_string(v);' in cpp

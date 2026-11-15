@@ -132,6 +132,10 @@ myproj_chk_argument_msg = 'if (!({0})) throw std::invalid_argument({1});'
 See `f2cpp.example.toml`; there are no project-specific defaults except the `PROJECT_*`
 placeholders.
 
+A function mapped to a `std::` function is emitted without `std::` if an argument is an
+Eigen array, so that an overload of the project is found: `str(v)` → `to_string(v)`,
+`str(n)` → `std::to_string(n)`.
+
 `constant_map` replaces named constants: `snapshotmode_read = "SnapshotMode::READ"`
 (a local variable of the same name takes precedence).
 
