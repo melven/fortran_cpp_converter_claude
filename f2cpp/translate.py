@@ -418,7 +418,12 @@ class Translator:
                 if subs is not None:
                     x = self.unknown_ref(x.code, subs)
             else:
-                x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual) + self.accessor(cur.tname, n))
+                acc = self.accessor(cur.tname, n)
+                if acc:     # the accessor returns a reference, also for pointer components
+                    x = X(self.member(cur, comp.cname, cur.qual) + acc, comp.rank, comp.base, 100, comp,
+                          comp.tname, whole=True)
+                else:
+                    x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
                 if subs is not None:
                     x = self.subscript(x, comp, subs)
             cur = x

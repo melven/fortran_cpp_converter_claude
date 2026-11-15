@@ -464,3 +464,19 @@ def test_accessors_of_base_class(tmp_path):
     c["accessors"] = {"base_type": ["system"]}
     translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path))
     assert "n = system().count + own + other;" in (tmp_path / "d_mod.cpp").read_text()
+
+
+def test_accessor_of_pointer_component(tmp_path):
+    (tmp_path / "base_mod.F90").write_text(
+        "module base_mod\ntype :: sys_type\ninteger :: count = 0\nend type\n"
+        "type :: base_type\nclass(sys_type), pointer :: system => null()\n"
+        "class(sys_type), pointer :: raw => null()\nend type\nend module\n")
+    (tmp_path / "d_mod.F90").write_text(
+        "module d_mod\nuse base_mod, only: base_type\ntype, extends(base_type) :: derived_type\n"
+        "contains\nprocedure :: work\nend type\ncontains\n"
+        "subroutine work(this, n)\nclass(derived_type), intent(inout) :: this\ninteger, intent(out) :: n\n"
+        "n = this%system%count + this%raw%count\nend subroutine\nend module\n")
+    c = config.load()
+    c["accessors"] = {"base_type": ["system"]}
+    translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path), [str(tmp_path / "base_mod.F90")])
+    assert "n = system().count + raw->count;" in (tmp_path / "d_mod.cpp").read_text()

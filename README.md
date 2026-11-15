@@ -154,6 +154,9 @@ Components that are accessor functions in the C++ class:
 system_type = ["models", "offsets"]     # system%models -> system.models()
 ```
 
+An accessor is assumed to return a reference, also if the Fortran component is a pointer:
+`this%system%count` → `system().count`. Accessors of a base type apply in derived classes.
+
 `module_headers` is also the way to rename: `use project_global_thing` becomes
 `#include "project_thing.hpp"`, and if that module is translated in the same call its output
 files are `project_thing.hpp` / `project_thing.cpp`. (`include_map` is only for preprocessor
