@@ -70,7 +70,8 @@ def test_report(out):
     assert "inconsistent-type-case:Holder_Type,holder_type" in todo
     for name, counters in files.items():
         if "features" in name:
-            assert set(counters["untranslated"]) == {"error-arg:If_Construct", "write:format-descriptor"}
+            assert set(counters["untranslated"]) == {"condition:error-arg", "write:format-descriptor",
+                                                     "condition:intrinsic:verify"}
         else:
             assert not counters["untranslated"], name
 
@@ -227,12 +228,16 @@ def test_features(out):
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp
     assert "double accurate_sum(" in cpp
-    assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  // TODO(f2cpp): uses error flag" in cpp
+    # condition on the error flag: TODO, but the body is translated
+    assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  if (false /* TODO(f2cpp): error flag, replace by " \
+           "try/catch: ierr /= 0 */)\n  {\n    std::cout << \"accumulate failed\" << std::endl;\n    return;\n  }" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(samples(Eigen::seq(0, n - 1)));" in cpp
     assert "b = (a.array() > 0.0).select(a, b);" in cpp
     assert "  }\n  else if (k >= 3 && k <= max_items)\n  {\n" in cpp
-    assert "// F: IF (ierr /= 0) THEN" in cpp
+    # other untranslatable condition
+    assert 'if (false /* TODO(f2cpp): not translated (intrinsic:verify): VERIFY(label, \'abc\') > 0 */) ' \
+           'text = "x";' in cpp
 
 
 def test_pfunit(out):

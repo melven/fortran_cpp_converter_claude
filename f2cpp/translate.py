@@ -1118,6 +1118,10 @@ class Translator:
         if k == "Call_Stmt" and lname(node.items[0]).startswith(ASSERT_PREFIX + "assert") and \
                 self.err_assert(node, ind):
             return
+        if k == "If_Construct":
+            return self.s_If_Construct(node, ind)     # condition as TODO, the body is translated
+        if k == "If_Stmt":
+            return self.s_If_Stmt(node, ind)
         if k == "Call_Stmt" and lname(node.items[0]) in self.macro_calls and node.items[1] is not None:
             # PROJECT_ASSERT(ierr == 0, ierr): the error flag is replaced by exceptions
             cond = str(items_of(node.items[1])[0]).replace(" ", "").lower().replace(".eq.", "==")
@@ -1585,7 +1589,7 @@ class Translator:
             self.emit(ind, f"{x.raw or x.code} = nullptr;")
 
     def s_If_Stmt(self, node, ind):
-        cond = self.expr(node.items[0])
+        cond = X(self.condition(node.items[0]))
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
@@ -1681,13 +1685,26 @@ class Translator:
         self.emit(ind, f"{lhs.code} = ({mask.code}).select({self.matrix(rhs)}, {lhs.code});")
 
     # constructs
+    def condition(self, node):
+        """condition of an if; if it cannot be translated (e.g. it tests the error flag), the body is
+        still translated and the condition becomes `false` with the Fortran text as TODO"""
+        try:
+            if self.err_uses(node):
+                raise Untranslatable("error-arg")
+            return self.expr(node).code
+        except Untranslatable as e:
+            self.report.add("untranslated", "condition:" + e.category)
+            why = "error flag, replace by try/catch" if e.category == "error-arg" else \
+                f"not translated ({e.category})"
+            return f"false /* {TODO}: {why}: {str(node).replace('*/', '* /')} */"
+
     def s_If_Construct(self, node, ind):
         for c in node.content:
             k = cls(c)
             if k == "If_Then_Stmt":
-                self.emit(ind, f"if ({self.expr(c.items[0]).code}) {{")
+                self.emit(ind, f"if ({self.condition(c.items[0])}) {{")
             elif k == "Else_If_Stmt":
-                self.emit(ind, f"}} else if ({self.expr(c.items[0]).code}) {{")
+                self.emit(ind, f"}} else if ({self.condition(c.items[0])}) {{")
             elif k == "Else_Stmt":
                 self.emit(ind, "} else {")
             elif k == "End_If_Stmt":

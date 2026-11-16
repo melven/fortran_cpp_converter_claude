@@ -303,6 +303,7 @@ contains
       text = 'medium ' // str(k) // '/' // str(max_items)
     case default
       text = 'large'
+      if (verify(label, 'abc') > 0) text = 'x'
       PROJECT_CHK_ARGUMENT_MSG(.false., 'Invalid kind', ierr)
       PROJECT_ASSERT_MSG(k < 1000, 'kind too large: ' // str(k), ierr)
     end select
