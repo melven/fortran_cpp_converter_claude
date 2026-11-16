@@ -237,7 +237,10 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 
 - **LAPACK / external calls** are passed through with a TODO. `tests/support/lapack_compat.hpp`
   shows thin wrappers that keep such calls working until they are replaced by Eigen decompositions.
-- **Eigen aliasing**: only `transpose` of the assigned variable is flagged.
+- **Eigen aliasing**: an assignment whose right-hand side reads the assigned array in another
+  section or rearranged (`transpose`, `reshape`, ...) gets `.eval()`, `a = transpose(a)` becomes
+  `a.transposeInPlace()`; products, reductions and function results count as new objects. Not
+  detected: aliasing through different names (pointers, two arguments referring to the same array).
 - **Loop bounds** are re-evaluated in every iteration in C++ (once in Fortran).
 - `closed_hierarchy = true` (default) assumes that the run sees every derived type (files to
   translate and `-I`). Otherwise a base class wrongly becomes `final` / non-virtual (compile

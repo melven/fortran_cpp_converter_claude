@@ -1254,10 +1254,89 @@ class Translator:
         if lhs.rank > 0 and rhs.rank == 0:
             raise Untranslatable("array=scalar:" + (self.storage(v) if v is not None else "unknown"))
         code = self.matrix(rhs)
-        if lhs.rank > 0 and v is not None and self.saw_transpose and \
-                re.search(rf"(?<![\w.>]){re.escape(v.cname)}\b", code.replace("this->", "")):
-            self.note("aliasing", "check aliasing (transpose of the assigned variable)")
+        if lhs.rank > 0 and v is not None and self.storage(v) in ("eigen", "vec3", "flat") and \
+                v.base != "character":
+            alias = self.aliasing(lhs_n, rhs_n)
+            if alias == "transpose":
+                self.emit(ind, f"{par(lhs)}.transposeInPlace();")
+                return
+            if alias:           # Fortran evaluates the right-hand side completely before assigning
+                code = f"{code}.eval()" if postfix_only(code) else f"({code}).eval()"
         self.emit(ind, f"{target} = {code};")
+
+    # intrinsics whose result is a new object (products, reductions): no aliasing with their arguments
+    NO_ALIAS = {"matmul", "dot_product", "sum", "product", "maxval", "minval", "norm2", "size", "any", "all",
+                "count", "maxloc", "minloc", "lbound", "ubound", "allocated", "shape"}
+    # intrinsics that rearrange elements: aliasing if the assigned array is an argument
+    REARRANGE = {"transpose", "reshape", "cshift", "eoshift", "spread", "pack", "unpack"}
+
+    @staticmethod
+    def designator(node):
+        """(path of the variable / component, subscript text of the last part or None)"""
+        k = cls(node)
+        if k == "Name":
+            return lname(node), None
+        if k == "Part_Ref":
+            return lname(node.items[0]), str(node.items[1]).replace(" ", "").lower()
+        if k == "Data_Ref":
+            parts = [Translator.designator(p) for p in node.items]
+            return "%".join(p for p, _ in parts), parts[-1][1]
+        return None, None
+
+    def aliasing(self, lhs_n, rhs_n):
+        """does the right-hand side read the assigned array in a way that Eigen's lazy evaluation could
+        overwrite before it is read? -> False | True | "transpose" (a = transpose(a))"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        path, subs = self.designator(lhs_n)
+        if path is None:
+            return True
+        if cls(rhs_n) == "Intrinsic_Function_Reference" and lname(rhs_n.items[0]) == "transpose" and \
+                subs is None and self.designator(items_of(rhs_n.items[1])[0]) == (path, None):
+            return "transpose"
+        for node in walk(rhs_n, (F.Name, F.Part_Ref, F.Data_Ref)):
+            up = node.parent
+            if (cls(up) == "Part_Ref" and up.items[0] is node) or cls(up) == "Data_Ref":
+                continue                            # part of a larger designator
+            p, s = self.designator(node)
+            if p != path:
+                continue
+            safe, rearranged, up = False, False, node.parent
+            while up is not None and up is not rhs_n.parent:
+                if cls(up) == "Intrinsic_Function_Reference":
+                    fn = lname(up.items[0])
+                    safe |= fn in self.NO_ALIAS
+                    rearranged |= fn in self.REARRANGE
+                elif cls(up) in ("Function_Reference", "Structure_Constructor"):
+                    safe = True                     # result of a procedure: a new object
+                elif cls(up) == "Part_Ref" and self.lookup(lname(up.items[0])) is None and \
+                        self.lookup_proc(lname(up.items[0])) is not None:
+                    safe = True
+                up = up.parent
+            if safe:
+                continue
+            if rearranged or (s != subs and not self.disjoint(subs, s)):
+                return True
+        return False
+
+    @staticmethod
+    def disjoint(a, b):
+        """sections that cannot overlap partially: a dimension indexed by two different integer
+        literals, or by two scalars with all other dimensions equal (a(i, :) = a(j, :): the same or
+        disjoint rows)"""
+        if a is None or b is None:
+            return False
+        da, db = a.split(","), b.split(",")
+        if len(da) != len(db):
+            return False
+        for k, (x, y) in enumerate(zip(da, db)):
+            if ":" in x or ":" in y:
+                continue
+            if x != y and x.lstrip("-").isdigit() and y.lstrip("-").isdigit():
+                return True
+            if all(u == w for m, (u, w) in enumerate(zip(da, db)) if m != k):
+                return True
+        return False
 
     def s_Pointer_Assignment_Stmt(self, node, ind):
         lhs, rhs = self.expr(node.items[0]), self.expr(node.items[2])
@@ -1815,6 +1894,19 @@ class _Trimmed:
 
     def __str__(self):
         return "\n".join(str(c) for c in self.content)
+
+
+def postfix_only(code):
+    """no operator outside of parentheses / brackets: a member call can be appended directly"""
+    depth = 0
+    for ch in code:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0 and ch in " +-*/!&|?":
+            return False
+    return True
 
 
 def is_zero(code):

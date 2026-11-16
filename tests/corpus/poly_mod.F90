@@ -4,7 +4,7 @@ module poly_mod
   implicit none
   private
 
-  public :: poly_type, poly_eval, poly_derivative, moments_table, gather_shifted, weighted_norm
+  public :: poly_type, poly_eval, poly_derivative, moments_table, gather_shifted, weighted_norm, overlap_demo
 
   type :: poly_type
     integer :: degree = -1
@@ -147,5 +147,19 @@ contains
       s = 1.0e-3 * v
     end function scaled
   end function weighted_norm
+
+  !> assignments whose right-hand side reads the assigned array (Fortran evaluates it first)
+  subroutine overlap_demo(x, a)
+    real, intent(inout) :: x(:), a(:, :)
+    integer :: n
+    n = size(x)
+    x(2:n) = x(1:n - 1)
+    x = x(n:1:-1)
+    a = a + transpose(a)
+    a = transpose(a)
+    a(:, 1) = matmul(a, a(:, 2))
+    a(2, :) = a(1, :) * 2.0
+    a(1:2, 3) = a(2:3, 3) + a(1:2, 1)
+  end subroutine overlap_demo
 
 end module poly_mod

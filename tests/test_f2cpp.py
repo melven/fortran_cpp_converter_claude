@@ -296,7 +296,7 @@ def test_same_results_as_fortran(out, tmp_path):
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
          "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 56
+    assert len(res) == len(ref) == 69
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
@@ -713,3 +713,14 @@ end module lam_mod
     assert "if (v > 0) total = total + v;" in cpp
     assert "    other();" in cpp                                    # the host's dropped user data
     assert "private:\n  scalar total = 0.0;\n  scalar scale = 2.0;" in hpp   # used only by its own method
+
+
+def test_aliasing(out):
+    poly = read(out, "poly_mod.cpp")
+    assert "x(Eigen::seq(1, n - 1)) = x(Eigen::seq(0, n - 2)).eval();" in poly           # overlapping
+    assert "x = x(Eigen::seq(n - 1, 0, -1)).eval();" in poly
+    assert "a = (a + a.transpose()).eval();" in poly and "a.transposeInPlace();" in poly
+    assert "a.col(0) = a * a.col(1);" in poly                     # products are evaluated by Eigen
+    assert "a.row(1).transpose() = a.row(0).transpose() * 2.0;" in poly   # same or disjoint rows
+    assert "a(Eigen::seq(0, 1), 2) = (a(Eigen::seq(1, 2), 2) + a(Eigen::seq(0, 1), 0)).eval();" in poly
+    assert "eval()" not in read(out, "block_lu_mod.cpp")
