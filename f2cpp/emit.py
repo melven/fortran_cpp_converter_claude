@@ -316,7 +316,45 @@ class ModuleEmitter:
         tr.emit(ind, "};")
 
     # ------------------------------------------------------------------ procedures
-    def emit_proc(self, tr_out, p, ind, head=None):
+    def internal_order(self, p):
+        """internal procedures in an order in which each lambda is defined before its use; the
+        procedures that call themselves (directly or through others) cannot become lambdas"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        deps = {}
+        for q in p.internal.values():
+            names = {lname(n.items[0]) for n in walk(q.node, (F.Call_Stmt, F.Function_Reference, F.Part_Ref,
+                                                              F.Structure_Constructor))
+                     if cls(n.items[0]) == "Name"}
+            names |= {lname(n) for n in walk(q.node, F.Name)}       # also passed as actual argument
+            deps[q.name] = {d for d in names if d in p.internal and d != q.name}
+            if q.name in {lname(n.items[0]) for n in walk(q.node, (F.Call_Stmt, F.Function_Reference))
+                          if cls(n.items[0]) == "Name"}:
+                deps[q.name].add(q.name)                            # recursive
+        order, done = [], set()
+        while True:                         # source order as far as the dependencies allow
+            ready = [n for n in deps if n not in done and deps[n] <= done]
+            if not ready:
+                break
+            order.append(p.internal[ready[0]])
+            done.add(ready[0])
+        return order, [p.internal[n] for n in deps if n not in done]
+
+    def emit_lambdas(self, tr, p, ind):
+        """internal procedures -> lambdas capturing the host variables by reference"""
+        order, rest = self.internal_order(p)
+        for q in order:
+            ptr = self.tr(q)
+            ret, _, params, _ = self.signature(ptr, q, True)
+            self.doc(tr, q, ind)
+            head = f"auto {q.cname} = [&]({params})" + (f" -> {ret}" if q.kind == "function" else "")
+            self.emit_proc(tr, q, ind, head=head, close="};")
+            tr.emit(0, "")
+        for q in rest:
+            self.report.add("untranslated", "recursive-internal-procedure")
+            tr.fortran_comment(q.node, ind, "recursive internal procedure (a lambda cannot call itself)")
+
+    def emit_proc(self, tr_out, p, ind, head=None, close="}"):
         """definition of a procedure appended to tr_out.out"""
         tr = self.tr(p)
         tr.out = tr_out.out
@@ -361,17 +399,17 @@ class ModuleEmitter:
                 if p.kind == "function" and not has_result_decl and p.result in p.vars:
                     tr.emit(ind + 1, f"{tr.cpp_type(p.vars[p.result])} {p.vars[p.result].cname};")
                     has_result_decl = True
+                if p.internal:
+                    tr.emit(0, "")
+                    self.emit_lambdas(tr, p, ind + 1)
                 tr.block(part.content, ind + 1)
-            elif k == "Internal_Subprogram_Part":
-                self.report.add("untranslated", "internal-subprogram")
-                tr.fortran_comment(part, ind + 1, "internal procedures not translated")
         while len(tr.out) > body_start and tr.out[-1] == "":
             tr.out.pop()
         while len(tr.out) > body_start + 1 and tr.out[body_start] == "":
             del tr.out[body_start]
         if p.kind == "function" and not tr.out[-1].strip().startswith("return "):
             tr.emit(ind + 1, tr.return_code())
-        tr.emit(ind, "}")
+        tr.emit(ind, close)
 
     # ------------------------------------------------------------------ module
     def includes(self):

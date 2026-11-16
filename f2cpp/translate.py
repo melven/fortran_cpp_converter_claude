@@ -73,8 +73,11 @@ class Translator:
     def lookup(self, n):
         if n in self.overrides:
             return self.overrides[n]
-        if self.proc is not None and n in self.proc.vars:
-            return self.proc.vars[n]
+        p = self.proc
+        while p is not None:                # own variables, then those of the host (host association)
+            if n in p.vars:
+                return p.vars[n]
+            p = p.host
         for m in self.prog.visible(self.mod):
             if n in m.vars and (m is self.mod or m.is_public(n, m.vars[n].access)):
                 return m.vars[n]
@@ -82,6 +85,11 @@ class Translator:
 
     def lookup_proc(self, n, args=None):
         """procedure of that name; for a generic name the specific procedure that fits the arguments"""
+        p = self.proc
+        while p is not None:                # internal procedures of the procedure and of its host
+            if n in p.internal:
+                return p.internal[n]
+            p = p.host
         for m in self.prog.visible(self.mod):
             if m is not self.mod and not m.is_public(n):
                 continue                    # private names of other modules are not visible

@@ -293,7 +293,7 @@ def test_same_results_as_fortran(out, tmp_path):
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
          "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 53
+    assert len(res) == len(ref) == 56
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
@@ -638,3 +638,18 @@ def test_callback_implementations_become_methods(out):
     assert "fixed_point_solve([&](const vec& x, vec& f) { problem_residual(x, f); }, x, 1.e-12, 100);" in cpp
     assert "fp.solve([&](const vec& x, vec& f) { prob.problem_residual(x, f); }, x);" in cpp
     assert "userData" not in cpp and "TODO" not in cpp.split("markers.")[1]
+
+
+def test_internal_procedures_become_lambdas(out):
+    poly, prob = read(out, "poly_mod.cpp"), read(out, "problem_mod.cpp")
+    # defined before use (sq before accumulate), capturing the host variables by reference
+    assert "  auto sq = [&](scalar v) -> scalar\n  {" in poly
+    assert poly.index("auto sq = ") < poly.index("auto accumulate = ") < poly.index("auto scaled = ")
+    assert "  //! adds the weighted square of v\n  auto accumulate = [&](scalar v)\n  {\n" \
+           "    r = r + w * sq(v);\n    calls = calls + 1;\n  };" in poly
+    assert "accumulate(x(k - 1));" in poly and "r = std::sqrt(r) + scaled(static_cast<scalar>(calls));" in poly
+    # an internal procedure as callback (its user data argument is dropped)
+    assert "  auto shifted_residual = [&](const vec& x, vec& f)\n  {\n" \
+           "    f = (prob.a * (x.array() - prob.target - shift)).matrix();\n  };" in prob
+    assert "fixed_point_solve(shifted_residual, x, 1.e-12, 100);" in prob
+    assert "internal" not in str(out[1].files)

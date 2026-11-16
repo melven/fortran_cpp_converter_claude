@@ -80,5 +80,9 @@ int main()
   x0 << -1.0, 5.0;
   solve_problem(prob, x0);
   print(x0);
+  solve_shifted(prob, 0.25, x0);
+  vec wn(3);
+  wn << 1.0, -2.0, 0.5;
+  std::printf("%24.15E%24.15E%24.15E\n", x0(0), x0(1), weighted_norm(wn, 0.3));
   return 0;
 }

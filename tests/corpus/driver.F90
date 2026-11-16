@@ -61,6 +61,8 @@ program driver
   xs = [-1.0, 5.0]
   call solve_problem(prob, xs, ierr)
   print '(2es24.15)', xs
+  call solve_shifted(prob, 0.25, xs, ierr)
+  print '(3es24.15)', xs, weighted_norm([1.0, -2.0, 0.5], 0.3)
 contains
   subroutine my_residual(userData, x, f, ierr)
     class(*), intent(in) :: userData

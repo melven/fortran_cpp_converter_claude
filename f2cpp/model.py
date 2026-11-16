@@ -100,6 +100,8 @@ class Proc:
     external: bool = False       # declared by an interface body only (no definition to translate)
     is_ctor: bool = False
     is_dtor: bool = False
+    host: object = None          # host procedure of an internal procedure
+    internal: dict = field(default_factory=dict)    # internal procedures (contains inside a procedure)
     cb_arg: str = None           # callback implementation: class(*) user data dummy cast by select type
     cb_select: object = None     #   ... the select type construct
     cb_method: bool = False      #   ... translated as method of the user data type
@@ -287,6 +289,12 @@ def collect_proc(node, module):
     for c in content[1:]:
         if cls(c) == "Specification_Part":
             collect_param_docs(p, c)
+        elif cls(c) == "Internal_Subprogram_Part":
+            for s in c.content:
+                if cls(s) in ("Subroutine_Subprogram", "Function_Subprogram"):
+                    q = collect_proc(s, module)
+                    q.host = p
+                    p.internal[q.name] = q
     for a in args:
         v = p.vars.setdefault(a, Var(a, cname(a)))
         v.is_dummy = True

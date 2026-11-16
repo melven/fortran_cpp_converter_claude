@@ -74,6 +74,7 @@ with less precise output (calls are passed through unchanged).
 | `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
 | array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
+| internal procedures (`contains` inside a procedure) | lambdas `auto f = [&](...) -> T { ... };` at the start of the host body (host association by reference capture), ordered by their dependencies; recursive ones stay Fortran comments |
 | `allocate` / `deallocate` / `allocated` | `resize` / `make_unique` / `size() > 0` ... |
 | `PROJECT_CHK_IERR(call f(a, ierr), ierr)` | `f(a);` — the `ierr` argument is removed everywhere |
 | `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `if (!(c)) throw std::logic_error(...);` / `std::invalid_argument` (`call_templates`) |
@@ -244,7 +245,7 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 - Passing a slice to a non-`const` `Eigen::Ref` of a *different* storage layout, array-valued
   optional objects, pointers: check by hand.
 - Not translated (kept as comment): I/O to units and with numeric edit descriptors (`f10.3`, `es12.4`), `where`/`forall` constructs, implied-do, named
-  `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, internal
+  `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, recursive internal
   procedures, slices of flat (rank ≥ 4) arrays and over the vector index of `std::vector<mat>`, most string intrinsics, `program` units.
 - **Name lookup across modules** is simpler than in Fortran: a name is searched in the module
   itself and then in all (transitively) used modules, public names only. `only:` lists and

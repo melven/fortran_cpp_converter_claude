@@ -5,7 +5,7 @@ module problem_mod
   implicit none
   private
 
-  public :: problem_type, solve_problem
+  public :: problem_type, solve_problem, solve_shifted
 
   type :: problem_type
     real :: a = 0.5         !< damping
@@ -46,5 +46,23 @@ contains
     type(fixed_point_type) :: fp
     PROJECT_CHK_IERR(call fp%solve(problem_residual, prob, x, ierr), ierr)
   end subroutine solve_problem
+
+  !> an internal procedure as callback, with the data from the host
+  subroutine solve_shifted(prob, shift, x, ierr)
+    type(problem_type), intent(in) :: prob
+    real, intent(in) :: shift
+    real, intent(inout) :: x(:)
+    integer, intent(out) :: ierr
+    PROJECT_CHK_IERR(call fixed_point_solve(shifted_residual, prob, x, 1.e-12, 100, ierr), ierr)
+  contains
+    subroutine shifted_residual(userData, x, f, ierr)
+      class(*), intent(in) :: userData
+      real, intent(in) :: x(:)
+      real, intent(out) :: f(:)
+      integer, intent(out) :: ierr
+      ierr = 0
+      f = prob%a * (x - prob%target - shift)
+    end subroutine shifted_residual
+  end subroutine solve_shifted
 
 end module problem_mod
