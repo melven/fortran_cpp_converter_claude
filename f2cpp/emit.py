@@ -210,9 +210,19 @@ class ModuleEmitter:
                 comps += part.content[:n]
                 binds += part.content[n + 1:]
         prev = None
+        documented = set()          # bindings whose procedure has its own documentation
+        for b in binds:
+            if cls(b) == "Specific_Binding" and lname(b.items[3]) in t.bindings:
+                q = prog.binding_proc(t, t.bindings[lname(b.items[3])])
+                if q is not None and any(not str(c).startswith((PF_MARK, CPP_MARK, BLANK_MARK))
+                                         for c in q.doc):
+                    documented.add(id(b))
         for b in binds:
             k = cls(b)
             if k == "Comment":
+                if prev is not None and id(prev) in documented and b.item is not None and \
+                        last_line(prev) == b.item.span[0]:
+                    continue        # short comment at the binding: the detailed one of the procedure is used
                 tr.comment(b, ind + 1, prev)
                 continue
             prev = b

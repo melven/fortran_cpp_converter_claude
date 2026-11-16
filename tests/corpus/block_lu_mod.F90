@@ -17,8 +17,8 @@ module block_lu_mod
     integer, allocatable :: ipiv(:, :)
   contains
     procedure :: init => block_lu_init
-    procedure :: set_block => block_lu_set_block
-    procedure :: factorize => block_lu_factorize
+    procedure :: set_block => block_lu_set_block   !< short description (replaced by the detailed one)
+    procedure :: factorize => block_lu_factorize   !< LU decomposition of all blocks
     procedure :: solve => block_lu_solve
     procedure :: get_size => block_lu_get_size
     procedure :: finalize => block_lu_finalize
