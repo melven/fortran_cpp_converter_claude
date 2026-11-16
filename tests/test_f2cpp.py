@@ -222,6 +222,7 @@ def test_features(out):
     assert "for (int j = 0; j < (n + 1); ++j)\n" in cpp
     assert "g.blocks(0 + 2 * (1 + 2 * (i + n * (j)))) = " in cpp
     assert "+ g.cells(i, j).total + 2;" in cpp
+    assert "if (g.cells(i, j).samples.size() > 0) g.cells(i, j).samples.resize(0);" in cpp    # one-line if
     assert "tmp = v((order.array() - 1));" in cpp and "v((iperm.array() - 1)) = tmp;" in cpp
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp

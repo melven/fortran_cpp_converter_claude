@@ -1488,7 +1488,9 @@ class Translator:
     def s_If_Stmt(self, node, ind):
         cond = self.expr(node.items[0])
         sub = Translator(self.prog, self.mod, self.proc, self.report)
-        sub.overrides = self.overrides
+        # same translation state: overrides, shifted loop variables, loop declarations
+        sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
+            self.overrides, self.shift, self.loop_local, self.loop_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):
             self.emit(ind, f"if ({cond.code}) {sub.out[0]}")

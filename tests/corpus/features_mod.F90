@@ -80,6 +80,7 @@ contains
       do i = 1, size(g%blocks, 3)
         g%blocks(1, 1, i, j) = real(i + j)
         g%blocks(1, 2, i, j) = g%blocks(2, 1, i, j) + g%cells(i, j)%total + size(g%blocks, 1)
+        if (allocated(g%cells(i, j)%samples)) deallocate(g%cells(i, j)%samples)
       end do
     end do
     PROJECT_ALLOCATE(order(size(v)), ierr)
