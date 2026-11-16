@@ -1,0 +1,15 @@
+module test_poly_shared_mod
+  use funit
+  use test_helpers_mod, only: poly_fixture_type, geometric_sum, test_tol
+  implicit none
+
+contains
+
+  @test
+  subroutine test_geometric()
+    type(poly_fixture_type) :: f
+    call f%prepare(4)
+    @assertEqual(geometric_sum(0.5, f%degree), f%pol%eval(0.5), tolerance=test_tol)
+  end subroutine test_geometric
+
+end module test_poly_shared_mod

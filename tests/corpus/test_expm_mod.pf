@@ -1,0 +1,72 @@
+#include "project_macros.h"
+module test_expm_mod
+  use funit
+  use expm_mod
+  implicit none
+
+contains
+
+  @test
+  subroutine test_expm_zero()
+    real :: A(3, 3), E(3, 3)
+    integer :: ierr
+
+    A = 0.0
+    call expm(A, 1.0, E, ierr)
+    @assertEqual(0, ierr)
+    @assertEqual(identity(3), E, tolerance=1.e-14)
+  end subroutine test_expm_zero
+
+  @test
+  subroutine test_expm_diagonal()
+    real :: A(2, 2), E(2, 2)
+    integer :: ierr
+
+    A = 0.0
+    A(1, 1) = 1.0
+    A(2, 2) = -2.0
+    call expm(A, 0.5, E, ierr)
+    @assertEqual(0, ierr)
+    @assertEqual(exp(0.5), E(1, 1), tolerance=1.e-12)
+    @assertEqual(exp(-1.0), E(2, 2), tolerance=1.e-12)
+    @assertEqual(0.0, E(1, 2), tolerance=1.e-14, message='off-diagonal')
+    @assertTrue(E(2, 1) == 0.0)
+  end subroutine test_expm_diagonal
+
+  @test
+  subroutine test_expm_rotation()
+    real :: A(2, 2), E(2, 2), t
+    integer :: ierr
+
+    t = 3.0
+    A(1, :) = [0.0, -1.0]
+    A(2, :) = [1.0, 0.0]
+    call expm(A, t, E, ierr)
+    @assertEqual(0, ierr)
+    @assertEqual(cos(t), E(1, 1), tolerance=1.e-12)
+    @assertEqual(-sin(t), E(1, 2), tolerance=1.e-12)
+  end subroutine test_expm_rotation
+
+  @test
+  subroutine test_moment_zero_matrix()
+    real :: A(2, 2), B(2, 1), M(2, 1)
+    integer :: ierr
+
+    A = 0.0
+    B(:, 1) = [1.0, 2.0]
+    call expm_moment(A, B, 2.0, M, ierr)
+    @assertEqual(0, ierr)
+    @assertEqual(2.0 * B, M, tolerance=1.e-13)
+  end subroutine test_moment_zero_matrix
+
+  @test
+  subroutine test_expm_bad_argument()
+    real :: A(2, 3), E(2, 2)
+    integer :: ierr
+
+    A = 0.0
+    call expm(A, 1.0, E, ierr)
+    @assertTrue(ierr /= 0)
+  end subroutine test_expm_bad_argument
+
+end module test_expm_mod

@@ -1,0 +1,23 @@
+namespace = "project"
+drop_args = ["userData"]              # class(*) user data of callbacks
+eigen_placeholders = "Eigen"          # the test environment has Eigen 3.4
+constructor_bindings = ["configure", "init"]
+test_includes = ['"gtest_eigen.hpp"']
+extra_includes = ['"project_math.hpp"', '"lapack_compat.hpp"']
+
+[include_map]
+"project_macros.h" = ""
+
+[type_map]
+legacy_type = "wrappers::Legacy"
+
+[module_headers]
+legacy_mod = "legacy.hpp"
+
+# project helper functions / subroutines with a direct C++ counterpart (same arguments)
+[function_map]
+str = "std::to_string"
+
+[call_templates]
+# sort_rank(x, iperm): iperm = (1-based) permutation that sorts x in ascending order
+sort_rank = "{1}.resize({0}.size()); std::iota({1}.begin(), {1}.end(), 1); std::stable_sort({1}.begin(), {1}.end(), [&](int i_, int j_) { return {0}(i_ - 1) < {0}(j_ - 1); });"
