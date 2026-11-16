@@ -7,6 +7,7 @@
 #include "poly_mod.hpp"
 #include "shape_mod.hpp"
 #include "solver_mod.hpp"
+#include "problem_mod.hpp"
 
 using namespace project;
 
@@ -71,6 +72,13 @@ int main()
   x0 << 1.0, 2.0;
   const scalar factor = 0.5;
   fp.solve([&](const vec& x, vec& f) { f = factor * (x.array() - 3.0).matrix(); }, x0);
+  print(x0);
+  problem prob;
+  x0 << 1.0, 2.0;
+  prob.solve(x0);
+  print(x0);
+  x0 << -1.0, 5.0;
+  solve_problem(prob, x0);
   print(x0);
   return 0;
 }

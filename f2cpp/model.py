@@ -100,6 +100,9 @@ class Proc:
     external: bool = False       # declared by an interface body only (no definition to translate)
     is_ctor: bool = False
     is_dtor: bool = False
+    cb_arg: str = None           # callback implementation: class(*) user data dummy cast by select type
+    cb_select: object = None     #   ... the select type construct
+    cb_method: bool = False      #   ... translated as method of the user data type
     is_test: str = None          # pFUnit role: test | before | after
     doc: list = field(default_factory=list)
     param_docs: list = field(default_factory=list)      # [([argument names], [text lines])]
@@ -503,8 +506,39 @@ class Program:
     def inconsistent_case(self, tname):
         return len(self.spellings.get(tname, ())) > 1
 
+    def classify_callbacks(self, m):
+        """callback implementations: proc(userData, ...) with a class(*) user data dummy (drop_args)
+        that is cast with `select type` to exactly one derived type T -> method of T (or, if T is
+        an existing C++ class, a free function with a `T` parameter)"""
+        from fparser.two.utils import walk
+        for p in m.procs.values():
+            if p.method_of or p.external:
+                continue
+            ud = [a for a in p.args if a in self.cfg["drop_args"] and a in p.vars
+                  and p.vars[a].polymorphic and p.vars[a].tname == "*"]
+            execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
+            if len(ud) != 1 or not execs:
+                continue
+            sts = [c for c in execs[0].content if cls(c) == "Select_Type_Construct"
+                   and lname([h for h in c.content if cls(h) == "Select_Type_Stmt"][0].items[1]) == ud[0]]
+            if len(sts) != 1:
+                continue
+            guards = [g for g in walk(sts[0], F.Type_Guard_Stmt) if g.items[1] is not None]
+            if len(guards) != 1 or cls(guards[0].items[1]) == "Intrinsic_Type_Spec":
+                continue
+            tname = lname(guards[0].items[1])
+            t = self.find_type(tname, m)
+            v = p.vars[ud[0]]
+            v.tname, v.polymorphic, v.base = tname, False, "type"
+            p.cb_arg, p.cb_select = ud[0], sts[0]
+            if t is not None and tname not in self.cfg["type_map"]:
+                p.method_of, p.bind_name, p.pass_arg, p.cb_method = t.name, p.cname, ud[0], True
+                v.is_this = True
+
     def finish(self):
         err = self.cfg["error_arg"].lower()
+        for m in self.modules.values():
+            self.classify_callbacks(m)
         for m in self.modules.values():
             classify_pointers(m)
             for t in m.types.values():

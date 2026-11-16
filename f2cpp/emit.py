@@ -184,6 +184,8 @@ class ModuleEmitter:
         tr.emit(ind, f"class {name}{final}{base} {{")
         tr.emit(ind, "public:")
         mine = [p for p in t.module.procs.values() if p.method_of == t.name]
+        callbacks = [q for m in prog.modules.values() for q in m.procs.values()
+                     if q.cb_method and prog.find_type(q.method_of, q.module) is t]
         has_dtor = any(p.bind_name == "~" for p in mine)
         if any(p.is_ctor for p in mine) or has_dtor:
             tr.emit(ind + 1, f"{name}() = default;")
@@ -252,8 +254,11 @@ class ModuleEmitter:
                 tr.emit(ind + 1, f"~{name}();")
             elif k == "Generic_Binding":
                 tr.emit(ind + 1, f"// generic '{lname(b.items[1])}': specific procedures are C++ overloads")
+        for q in callbacks:             # former callback implementations with user data of this type
+            self.doc(tr, q, ind + 1)
+            tr.emit(ind + 1, self.proto(self.tr(q), q) + ";")
         if t.comps:
-            if binds or (poly and not t.parent):
+            if binds or callbacks or (poly and not t.parent):
                 tr.emit(0, "")
             # sections: 2 public, 1 protected, 0 private; each entry: comments before, statement,
             # component name (None: whole statement), comments behind

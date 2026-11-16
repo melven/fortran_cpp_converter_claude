@@ -808,6 +808,13 @@ class Translator:
                 else:
                     dv.needs_eigen = True
                     self.touch(x)
+            elif dv.base == "procedure" and gone & set(given) and cls(given[d]) == "Name" and \
+                    self.lookup(lname(given[d])) is None and \
+                    getattr(self.lookup_proc(lname(given[d])), "cb_arg", None):
+                # callback implementation with user data: bind the user data in a lambda
+                res.append(self.callback_lambda(self.lookup_proc(lname(given[d])), dv,
+                                                given[sorted(gone & set(given))[0]]))
+                continue
             else:
                 x = self.expr(given[d])
             code = self.matrix(x)
@@ -831,6 +838,30 @@ class Translator:
         s = str(name_node).strip()
         if s.lower() == p.name:
             p.spellings.add(s)
+
+    def callback_lambda(self, q, dummy, user_data):
+        """callback q(userData, x, f) passed together with its user data -> [&](x, f) { obj.q(x, f); }"""
+        iface = self.find_iface(dummy.tname)
+        if iface is None:
+            raise Untranslatable("callback-interface")
+        gone = self.dropped(iface)
+        i_dummies = [a for a in iface.args if a != self.err]
+        q_dummies = [a for a in q.args if a != self.err]
+        if len(i_dummies) != len(q_dummies):
+            raise Untranslatable("callback-signature")
+        params = [iface.vars[a] for a in i_dummies if a not in gone]
+        obj = self.expr(user_data)
+        args = []
+        for ia, qa in zip(i_dummies, q_dummies):
+            if ia in gone:
+                if not q.cb_method:
+                    args.append(obj.code)
+            else:
+                args.append(iface.vars[ia].cname)
+        callee = self.member(obj, q.cname) if q.cb_method else q.cname
+        plist = ", ".join(f"{self.param_type(v)} {v.cname}" for v in params)
+        ret = "return " if iface.kind == "function" else ""
+        return f"[&]({plist}) {{ {ret}{callee}({', '.join(args)}); }}"
 
     def call_code(self, p, args):
         """call of a known module procedure (free function or method called by implementation name)"""
@@ -1587,7 +1618,36 @@ class Translator:
             else:
                 self.block([c], ind + 1)
 
+    def callback_cast(self, node, ind):
+        """select type of the user data in a callback implementation: only the body of the guard"""
+        p = self.proc
+        assoc = node.content[0].items[0]
+        saved = dict(self.overrides)
+        self.overrides[lname(assoc) if assoc is not None else p.cb_arg] = p.vars[p.cb_arg]
+        guard, default = None, []
+        for c in node.content[1:]:
+            k = cls(c)
+            if k == "Type_Guard_Stmt":
+                guard = c.items[1] is not None
+            elif k == "End_Select_Type_Stmt":
+                break
+            elif guard:
+                self.block([c], ind)
+            elif guard is False and cls(c) != "Comment":
+                default.append(c)
+        self.overrides = saved
+        # class default: usually an assertion that cannot fail any more (the type is static in C++)
+        trivial = ("Return_Stmt", "Stop_Stmt", "Error_Stop_Stmt", "Continue_Stmt")
+        if any(cls(c) not in trivial and not (cls(c) == "Call_Stmt" and lname(c.items[0]) in self.macro_calls)
+               and not (cls(c) == "Assignment_Stmt" and self.is_err(c.items[0])) for c in default):
+            self.report.add("todo", "callback-default")
+            for c in default:
+                self.fortran_comment(c, ind, "class default of the user data cast (dropped)")
+
     def s_Select_Type_Construct(self, node, ind):
+        if self.proc is not None and self.proc.cb_select is not None and \
+                (node.node if cls(node) == "_Trimmed" else node) is self.proc.cb_select:
+            return self.callback_cast(node, ind)
         head = node.content[0]
         assoc, sel_node = head.items
         sel = self.expr(sel_node)

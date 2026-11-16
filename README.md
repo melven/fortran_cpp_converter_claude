@@ -169,9 +169,13 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 
 `drop_args = ["userData"]` removes dummies of that name that are declared `class(*)` from all
 signatures and calls, like the error flag: the user data is captured by the lambda in C++.
-By hand: the call sites (`solve(my_residual, x)` → `solve([&](const vec& x, vec& f) { my_residual(*this, x, f); }, x)`)
-and the callback implementations (statements using the dropped argument, e.g. its
-`select type`, are kept as commented Fortran).
+Callback implementations of the form `subroutine cb(userData, x, f, ierr)` whose user data
+is cast with `select type (userData)` to exactly one derived type `T` become methods of `T`
+(`void T::cb(const vec& x, vec& f) const`); the cast and its `class default` disappear.
+Where such a callback is passed together with its user data, a lambda binds it:
+`call solve(cb, this, x, ierr)` → `solve([&](const vec& x, vec& f) { cb(x, f); }, x);`.
+If `T` is an existing C++ class (`type_map`), `cb` stays a free function with a `const T&`
+parameter. Other uses of the dropped argument are kept as commented Fortran.
 
 ## Existing C++ code (partially translated module hierarchy)
 

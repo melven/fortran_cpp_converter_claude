@@ -4,6 +4,7 @@ program driver
   use shape_mod
   use poly_mod
   use solver_mod
+  use problem_mod
   implicit none
   real :: A(3,3), B(3,2), E(3,3), M(3,2), x(6), blk(2,2)
   type(block_lu_type) :: lu
@@ -11,6 +12,7 @@ program driver
   integer :: ierr, i
   type(poly_type) :: pol
   type(fixed_point_type) :: fp
+  type(problem_type) :: prob
   real :: xs(2), gs(4)
   real :: cf(0:3), dd(0:3), tab(3, 0:1), hst(2, 2, 0:1)
   A = reshape([0.1, -0.3, 0.7, 1.2, 0.4, -0.5, 2.0, 0.3, -1.1], [3,3])
@@ -52,6 +54,12 @@ program driver
   print '(4es24.15)', gs
   xs = [1.0, 2.0]
   call fp%solve(my_residual, 0.5, xs, ierr)
+  print '(2es24.15)', xs
+  xs = [1.0, 2.0]
+  call prob%solve(xs, ierr)
+  print '(2es24.15)', xs
+  xs = [-1.0, 5.0]
+  call solve_problem(prob, xs, ierr)
   print '(2es24.15)', xs
 contains
   subroutine my_residual(userData, x, f, ierr)

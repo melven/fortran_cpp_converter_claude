@@ -13,7 +13,7 @@ HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
 SUPPORT = os.path.join(HERE, "support")
 EIGEN = "/usr/include/eigen3"
-MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod", "generic_mod"]
+MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod", "generic_mod", "problem_mod"]
 
 needs_cxx = pytest.mark.skipif(not (shutil.which("g++") and os.path.isdir(EIGEN)), reason="g++/Eigen missing")
 
@@ -286,14 +286,14 @@ def test_compiles(out, name):
 def test_same_results_as_fortran(out, tmp_path):
     d = out[0]
     srcs = [os.path.join(CORPUS, f) for f in ("expm_mod.F90", "block_lu_mod.F90", "shape_mod.F90", "poly_mod.F90",
-                                               "solver_mod.F90", "driver.F90")]
+                                               "solver_mod.F90", "problem_mod.F90", "driver.F90")]
     run(["gfortran", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-J", str(tmp_path), *srcs,
          "-llapack", "-o", str(tmp_path / "fdriver")], CORPUS)
     ref = run([str(tmp_path / "fdriver")], d).split()
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
-         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "-llapack", "-o", "cdriver"], d)
+         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 49
+    assert len(res) == len(ref) == 53
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
@@ -542,9 +542,9 @@ def test_procedure_map_and_callback_implementation(tmp_path):
     c["procedure_map"] = {"nonlinearfunction": "my::Callback"}
     translate([str(tmp_path / "impl_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "solver_mod.F90")])
     cpp = (tmp_path / "impl_mod.cpp").read_text()
-    assert "fixed_point_solve(my_res, x, 1.e-8, 10);" in cpp         # user data dropped: wrap by hand in a lambda
-    assert "void my_res(const vec& x, vec& f)" in cpp
-    assert "// TODO(f2cpp): not translated (dropped-argument)\n  // F: SELECT TYPE(userData)" in cpp
+    # user data type is not parsed (existing C++ class): free function with a typed parameter
+    assert "fixed_point_solve([&](const vec& x, vec& f) { my_res(obj, x, f); }, x, 1.e-8, 10);" in cpp
+    assert "void my_res(const thing& userData, const vec& x, vec& f)\n{\n  f = x;\n  f = userData.a * x;\n}" in cpp
 
 
 @needs_cxx
@@ -628,3 +628,13 @@ def test_vector_subscript_of_components_with_lower_bounds(tmp_path):
     cpp = (tmp_path / "ns_mod.cpp").read_text()
     assert "norm_scal = norm_scal_grp_tmp((norm_scal_grp_idx(Eigen::seq(1, Eigen::last)).array() + 1));" in cpp
     assert not report.files[path]["untranslated"]
+
+
+def test_callback_implementations_become_methods(out):
+    hpp, cpp = read(out, "problem_mod.hpp"), read(out, "problem_mod.cpp")
+    assert "  //! residual f = a * (x - target)\n  void problem_residual(const vec& x, vec& f) const;" in hpp
+    assert "void problem::problem_residual(const vec& x, vec& f) const\n{\n" \
+           "  f = (a * (x.array() - target)).matrix();\n}" in cpp
+    assert "fixed_point_solve([&](const vec& x, vec& f) { problem_residual(x, f); }, x, 1.e-12, 100);" in cpp
+    assert "fp.solve([&](const vec& x, vec& f) { prob.problem_residual(x, f); }, x);" in cpp
+    assert "userData" not in cpp and "TODO" not in cpp.split("markers.")[1]
