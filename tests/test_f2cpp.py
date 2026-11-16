@@ -95,10 +95,10 @@ def test_expressions(out):
     assert "PROJECT_" not in cpp and "project_macros" not in cpp
     assert "solve_inplace(D, N);" in cpp
     lu = read(out, "block_lu_mod.cpp")
-    assert "diag[i - 1] = diag[i - 1] - lower[i - 2] * upper[i - 2];" in lu
+    assert "diag[i] = diag[i] - lower[i - 1] * upper[i - 1];" in lu
     assert "diag.assign(nblocks, mat(bs, bs));" in lu
     assert "this->nblocks = nblocks;" in lu and "bs = this->bs;" in lu
-    assert "  for (i = nblocks - 1; i >= 1; --i)\n  {\n" in lu
+    assert "  for (int i = nblocks - 1; i >= 1; --i)\n  {\n" in lu
 
 
 def test_classes(out):
@@ -125,7 +125,7 @@ def test_classes(out):
     assert "//! Horner scheme\n//! @param[in] c coefficients 0..n\n//! @param[in] x evaluation point\n" \
            "//! @return value of the polynomial\nscalar poly_eval(" in read(out, "poly_mod.hpp")
     assert "block row and column" not in read(out, "block_lu_mod.cpp")
-    assert "  int k;  //!< loop index\n" in read(out, "poly_mod.cpp")
+    assert "  // k: loop index\n" in read(out, "poly_mod.cpp")
     assert "private:" in lu and "int bs = 0;  //!< block size" in lu
 
 
@@ -143,18 +143,18 @@ def test_features(out):
     assert "auto&& s = h.inner;" in cpp                # pointer associated once -> reference
     assert "auto&& smp = s.samples;" in cpp and "smp(0) = 2.0 * smp(0);" in cpp
     assert "h.owned = std::make_unique<stats>();" in cpp
-    assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
+    assert "lu = block_lu(n, 2);" in cpp and "block_lu tmp(1, n);" in cpp
     assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
     assert 'text = "medium " + std::to_string(k) + "/" + std::to_string(max_items);' in cpp
     # lower bound 0: shifted without warning; other lower bounds: warning
     assert "h.phi.assign(n + 1, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>(2, 2));\n" in cpp
     assert "has lower bound(s) 0" not in cpp
-    assert "std::vector<int> idx(4), shifted(3);" in cpp and "shifted[0] = lo;" in cpp
+    assert "std::vector<int> idx(4);" in cpp and "shifted[0] = lo;" in cpp
     assert "std::fill(idx.begin(), idx.end(), 0);" in cpp
     assert "'shifted' has" not in cpp and "'idx' has" not in cpp       # constant bounds: exact shift, no warning
     assert "// TODO(f2cpp): 'v' has the variable lower bound(s) lo in Fortran" in cpp
     assert "dt = t / 16 + t / (n * n) + static_cast<int>(std::pow(2, n));" in cpp
-    assert "for (k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
+    assert "for (int k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
     poly = read(out, "poly_mod.cpp")
     # lower bound -1 and indirect access through an index array with lower bound 0
     assert "ghost.resize(n + 2);" in poly and "idx.resize(m + 1);" in poly and "ghost(0) = -10.0;" in poly
@@ -162,10 +162,10 @@ def test_features(out):
     assert "ghost((idx(Eigen::seq(1, 2)).array() + 1)) = 1.5 * ghost((idx(Eigen::seq(1, 2)).array() + 1));" in poly
     assert "// TODO(f2cpp):" not in poly
     assert "degree = c.size() - 1;" in poly and "coeff.resize(degree + 1);" in poly
-    assert "for (k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
+    assert "for (int k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
     assert "vec w(c.size());" in poly and "w(k - 1) = k * c(k);" in poly
     assert "d(Eigen::seq(0, n - 1)) = w(Eigen::seq(0, n - 1));" in poly
-    assert "p.resize(c.size() - 1 + 1, x.size());" in poly and "p(k, i - 1) = c(k) * std::pow(x(i - 1), k);" in poly
+    assert "mat p(c.size() - 1 + 1, x.size());" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
     assert "hist[k] = (k + 1) * table(Eigen::seq(0, 1), Eigen::seq(0, 1));" in poly
     assert "h.phi[k](0, 0) = dt * k + h.phi[0].rows();" in cpp
     assert "phi.resize(h.phi.size());" in cpp
@@ -193,8 +193,8 @@ def test_features(out):
     assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
     # integer arrays: std::vector<int> unless used in array expressions / as vector subscript
     assert "int count_marked(const std::vector<int>& flags);" in hpp
-    assert "std::vector<int> marks, copy;" in cpp and "Eigen::VectorXi sel, shifted;" in cpp
-    assert "std::vector<int> fixed(3);" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
+    assert "std::vector<int> marks;" in cpp and "Eigen::VectorXi sel;" in cpp
+    assert "std::vector<int> fixed = {1, 0, 1};" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
     assert "marks.resize(m);" in cpp and "std::fill(marks.begin(), marks.end(), 0);" in cpp
     assert "marks[i - 1] = 1;" in cpp and "copy = marks;" in cpp and "fixed = {1, 0, 1};" in cpp
     assert "count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes[3];" in cpp
@@ -217,9 +217,9 @@ def test_features(out):
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp
     assert "g.blocks.resize(2 * 2 * n * (n + 1));" in cpp and "g.cells.resize(n, n + 1);" in cpp
     assert "g.blocks.setZero();" in cpp
-    assert "for (j = 1; j <= (n + 1); ++j)\n" in cpp
-    assert "g.blocks(0 + 2 * (1 + 2 * (i - 1 + n * (j - 1)))) = " in cpp
-    assert "+ g.cells(i - 1, j - 1).total + 2;" in cpp
+    assert "for (int j = 0; j < (n + 1); ++j)\n" in cpp
+    assert "g.blocks(0 + 2 * (1 + 2 * (i + n * (j)))) = " in cpp
+    assert "+ g.cells(i, j).total + 2;" in cpp
     assert "tmp = v((order.array() - 1));" in cpp and "v((iperm.array() - 1)) = tmp;" in cpp
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp
@@ -653,3 +653,20 @@ def test_internal_procedures_become_lambdas(out):
            "    f = (prob.a * (x.array() - prob.target - shift)).matrix();\n  };" in prob
     assert "fixed_point_solve(shifted_residual, x, 1.e-12, 100);" in prob
     assert "internal" not in str(out[1].files)
+
+
+def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
+    expm, poly, lu = read(out, "expm_mod.cpp"), read(out, "poly_mod.cpp"), read(out, "block_lu_mod.cpp")
+    # merged with the defining assignment / allocate; others right before the first top-level use
+    assert "  int m = A.rows();\n" in expm and "  mat As(m, m);\n" in expm
+    assert "  scalar nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;\n  int s = 0;\n" in expm
+    assert "  scalar c;\n  for (int k = 2; k <= pade_coeff.size(); ++k)\n" in expm
+    assert "  int bs = this->bs;\n" in lu                     # local hides the member: still mergeable
+    # loop variable used mostly as index: 0-based loop, other uses get + 1
+    assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
+    assert "for (int i = 0; i < nblocks; ++i)\n" in lu and "if (i + 1 > 1)\n" in lu
+    # switched off
+    c = cfg(declare_at_first_use=False, zero_based_loops=False)
+    translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
+    old = (tmp_path / "block_lu_mod.cpp").read_text()
+    assert "  int i, info, bs;\n" in old and "for (i = 1; i <= nblocks; ++i)\n" in old

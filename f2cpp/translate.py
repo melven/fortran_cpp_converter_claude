@@ -66,6 +66,9 @@ class Translator:
                             for m in [re.match(r"\s*call\s+(\w+)", t, re.I)] if m}
         self.overrides = {}
         self.out = []
+        self.loop_local = set()    # loop variables that are only used inside their loops
+        self.loop_decl = set()     # ... declared in the for statement
+        self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
         self.notes = []            # soft TODOs of the current statement
         self.last_err_call = None  # (line index, code) of the last call with removed error arg
 
@@ -351,6 +354,8 @@ class Translator:
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
         v = self.lookup(n)
+        if v is not None and n in self.shift and n not in self.overrides:
+            return X(f"{v.cname} + {self.shift[n]}", 0, "integer", P_ADD, v)
         if v is None:
             if n == self.err:
                 raise Untranslatable("error-arg")
@@ -555,19 +560,35 @@ class Translator:
         return cur
 
     # index handling
-    def minus(self, node, c):
-        """translate integer expression 'node - c' with constant folding"""
-        if c == 0:
-            return self.expr(node).code
+    def linear(self, node):
+        """(code of the variable part or None, constant) for `literal`, `name`, `expr +- literal`
+        (shifted loop variables included); None for other expressions"""
         k = cls(node)
         if k == "Int_Literal_Constant":
-            return str(int(str(node.items[0])) - c)
+            return None, int(str(node.items[0]))
+        if k == "Name" and lname(node) in self.shift and lname(node) not in self.overrides:
+            return self.lookup(lname(node)).cname, self.shift[lname(node)]
         if k == "Level_2_Expr" and node.items[1] in "+-" and cls(node.items[2]) == "Int_Literal_Constant":
-            lhs = self.expr(node.items[0])
-            val = int(str(node.items[2].items[0])) * (1 if node.items[1] == "+" else -1) - c
-            if val == 0:
-                return lhs.code
-            return f"{par(lhs, P_ADD)} {'+' if val > 0 else '-'} {abs(val)}"
+            sign = 1 if node.items[1] == "+" else -1
+            sub = self.linear(node.items[0])
+            if sub is None:
+                x = self.expr(node.items[0])
+                if x.rank > 0:
+                    return None
+                sub = par(x, P_ADD), 0
+            return sub[0], sub[1] + sign * int(str(node.items[2].items[0]))
+        return None
+
+    def minus(self, node, c):
+        """translate integer expression 'node - c' with constant folding"""
+        lin = self.linear(node)
+        if lin is not None:
+            base, val = lin[0], lin[1] - c
+            if base is None:
+                return str(val)
+            return base if val == 0 else f"{base} {'+' if val > 0 else '-'} {abs(val)}"
+        if c == 0:
+            return self.expr(node).code
         x = self.expr(node)
         if x.rank > 0:
             raise Untranslatable("vector-subscript")
@@ -991,6 +1012,11 @@ class Translator:
             if line.strip() and BLANK_MARK not in line:
                 self.emit(ind, "// F: " + line.rstrip().replace(CPP_MARK, "").replace("!F2CPP_PF", "@"))
 
+    def comment_text(self, node):
+        text = str(node)[1:]
+        dox = self.cfg["doxygen"]
+        return dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
+
     def comment(self, node, ind, prev=None):
         """returns False for marker comments that are not emitted"""
         s = str(node)
@@ -1009,9 +1035,7 @@ class Translator:
             if d:
                 self.out.append(d)
             return
-        text = s[1:]
-        dox = self.cfg["doxygen"]
-        c = dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
+        c = self.comment_text(node)
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]
         if trailing and self.out and self.out[-1].strip() and not self.out[-1].lstrip().startswith("//"):
             self.out[-1] += "  " + c
@@ -1570,31 +1594,79 @@ class Translator:
             else:
                 self.block([c], ind + 1)
 
+    def index_uses(self, loop, n):
+        """(uses of loop variable n as array index with lower bound 1, other uses, passed as argument)"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        idx = other = 0
+        arg = False
+        for nm in walk(loop.content[1:-1], F.Name):
+            if lname(nm) != n:
+                continue
+            expr, holder = nm, nm.parent
+            if cls(holder) == "Level_2_Expr" and holder.items[0] is nm and holder.items[1] in "+-" and \
+                    cls(holder.items[2]) == "Int_Literal_Constant":
+                expr, holder = holder, holder.parent
+            if cls(holder) == "Section_Subscript_List" and cls(holder.parent) == "Part_Ref":
+                ref = holder.parent
+                pos = list(holder.items).index(expr) if expr in holder.items else 0
+                if cls(ref.parent) == "Data_Ref" and ref.parent.items[0] is not ref:
+                    idx += 1                    # component array: lower bound assumed 1
+                    continue
+                v = self.lookup(lname(ref.items[0]))
+                if v is None:
+                    arg |= self.lookup_proc(lname(ref.items[0])) is not None
+                    other += 1
+                elif v.rank > pos and self.lower_bounds(v)[pos] is None:
+                    idx += 1
+                else:
+                    other += 1
+            elif cls(holder) in ("Actual_Arg_Spec_List", "Actual_Arg_Spec", "Component_Spec_List") and \
+                    cls(holder.parent if cls(holder) == "Actual_Arg_Spec_List" else holder.parent.parent) \
+                    != "Intrinsic_Function_Reference":
+                arg = True                      # by reference: a shifted value is no lvalue
+            else:
+                other += 1
+        return idx, other, arg
+
     def s_Block_Nonlabel_Do_Construct(self, node, ind):
         head = node.content[0]
         if "Label" in cls(head) or node.content[-1].items[1] is not None:
             raise Untranslatable("named-do")
         ctrl = head.items[1]
+        n, shift = None, 0
         if ctrl is None:
             self.emit(ind, "while (true) {")
         elif ctrl.items[0] is not None:
             self.emit(ind, f"while ({self.expr(ctrl.items[0]).code}) {{")
         else:
             var, bounds = ctrl.items[1]
+            n = lname(var)
+            v = self.lookup(n)
             i = self.expr(var).code
-            lo, hi = self.expr(bounds[0]).code, self.expr(bounds[1])
-            if len(bounds) == 2:
-                cond, inc = f"{i} <= {par(hi, P_REL, True)}", f"++{i}"
+            decl = f"{self.cpp_type(v)} " if n in self.loop_decl and v is not None else ""
+            st = self.expr(bounds[2]).code if len(bounds) > 2 else "1"
+            if n in self.loop_local and self.cfg["zero_based_loops"] and st in ("1", "-1"):
+                idx, other, arg = self.index_uses(node, n)
+                shift = 1 if idx > other and not arg else 0
+            lo, hi = self.minus(bounds[0], shift), self.expr(bounds[1])
+            if st == "1":
+                cond = f"{i} < {par(hi, P_REL, True)}" if shift else f"{i} <= {par(hi, P_REL, True)}"
+                inc = f"++{i}"
+            elif re.fullmatch(r"-\d+", st):
+                end = self.minus(bounds[1], shift) if shift else par(hi, P_REL, True)
+                cond, inc = f"{i} >= {end}", f"--{i}" if st == "-1" else f"{i} -= {st[1:]}"
+            elif re.fullmatch(r"\d+", st):
+                cond, inc = f"{i} <= {par(hi, P_REL, True)}", f"{i} += {st}"
             else:
-                st = self.expr(bounds[2]).code
-                if re.fullmatch(r"-\d+", st):
-                    cond, inc = f"{i} >= {par(hi, P_REL, True)}", f"--{i}" if st == "-1" else f"{i} -= {st[1:]}"
-                elif re.fullmatch(r"\d+", st):
-                    cond, inc = f"{i} <= {par(hi, P_REL, True)}", f"{i} += {st}"
-                else:
-                    raise Untranslatable("do-step-sign")
-            self.emit(ind, f"for ({i} = {lo}; {cond}; {inc}) {{")
-        self.block(node.content[1:-1], ind + 1)
+                raise Untranslatable("do-step-sign")
+            self.emit(ind, f"for ({decl}{i} = {lo}; {cond}; {inc}) {{")
+        if shift:
+            self.shift[n] = shift
+        try:
+            self.block(node.content[1:-1], ind + 1)
+        finally:
+            self.shift.pop(n, None)
         self.emit(ind, "}")
 
     def s_Case_Construct(self, node, ind):
