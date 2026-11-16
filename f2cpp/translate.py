@@ -417,7 +417,8 @@ class Translator:
             iface = self.find_iface(v.tname)
             argc = self.bound_args(iface, items_of(args), False) if iface is not None else \
                 self.plain_args(items_of(args))
-            return self.result_x(f"{v.cname}({', '.join(argc)})", iface)
+            callee = f"(*{v.cname})" if v.opt_kind else v.cname
+            return self.result_x(f"{callee}({', '.join(argc)})", iface)
         if v is not None and cls(node) != "Intrinsic_Function_Reference" or (v is not None and v.rank > 0):
             return self.subscript(self.x_Name(name_node), v, items_of(args))
         if n in self.cfg["function_map"]:
@@ -1341,7 +1342,8 @@ class Translator:
                 if v is not None and v.base == "procedure":         # call of a procedure argument
                     iface = self.find_iface(v.tname)
                     argc = self.bound_args(iface, args, False) if iface is not None else self.plain_args(args)
-                    self.emit(ind, f"{v.cname}({', '.join(argc)});")
+                    callee = f"(*{v.cname})" if v.opt_kind else v.cname     # optional: std::optional<std::function>
+                    self.emit(ind, f"{callee}({', '.join(argc)});")
                     return
                 if v is not None:
                     raise Untranslatable("procedure-pointer-call")

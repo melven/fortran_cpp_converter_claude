@@ -34,8 +34,9 @@ module solver_mod
 contains
 
   !> x <- x - f(x) until |f(x)| is small
-  subroutine fixed_point_solve(fun, userData, x, tol, max_iter, ierr)
+  subroutine fixed_point_solve(fun, userData, x, tol, max_iter, ierr, progress)
     procedure(NonLinearFunction) :: fun
+    procedure(NonLinearFunction), optional :: progress   !< called after each step
     class(*), intent(in) :: userData
     real, intent(inout) :: x(:)
     real, intent(in) :: tol
@@ -49,6 +50,7 @@ contains
       PROJECT_CHK_IERR(call fun(userData, x, f, ierr), ierr)
       if (residual_norm(fun, userData, x) < tol) exit
       x = x - f
+      if (present(progress)) call progress(userData, x, f, ierr)
     end do
   end subroutine fixed_point_solve
 

@@ -525,9 +525,12 @@ def test_callbacks_with_user_data(out):
     assert hpp.index("class fixed_point;") < hpp.index("using NonLinearFunction") < hpp.index("class fixed_point final")
     assert "using SolverObserver = std::function<void(const fixed_point& solver, int iterations)>;" in hpp
     assert "void solve(const NonLinearFunction& fun, vec& x);" in hpp
-    assert "void fixed_point_solve(const NonLinearFunction& fun, vec& x, scalar tol, int max_iter);" in hpp
+    assert "void fixed_point_solve(const NonLinearFunction& fun, vec& x, scalar tol, int max_iter, " \
+           "const std::optional<NonLinearFunction>& progress = std::nullopt);" in hpp
     assert "userData" not in hpp and "userData" not in cpp
     assert "fun(x, f);" in cpp and "if (residual_norm(fun, x) < tol) break;" in cpp
+    assert "const std::optional<NonLinearFunction>& progress = std::nullopt" in hpp
+    assert "if (progress.has_value()) (*progress)(x, f);" in cpp                  # optional procedure
     assert "fixed_point_solve(fun, x, tol, max_iter);" in cpp
     assert "if (monitor)\n" in cpp and "monitor(x, f);" in cpp
     assert not out[1].files[os.path.join(CORPUS, "solver_mod.F90")]["info"]
