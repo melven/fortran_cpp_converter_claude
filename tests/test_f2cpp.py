@@ -673,3 +673,40 @@ def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
     translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
     old = (tmp_path / "block_lu_mod.cpp").read_text()
     assert "  int i, info, bs;\n" in old and "for (i = 1; i <= nblocks; ++i)\n" in old
+
+
+def test_lambda_inside_method_sees_the_host(tmp_path):
+    (tmp_path / "lam_mod.F90").write_text("""module lam_mod
+  type :: acc_type
+    real :: total = 0.0
+    real :: scale = 2.0
+  contains
+    procedure :: add
+  end type
+contains
+  subroutine add(this, x, userData)
+    class(acc_type), intent(inout) :: this
+    real, intent(in) :: x(:)
+    class(*), intent(in) :: userData
+    real :: scale
+    integer :: i
+    scale = 3.0
+    do i = 1, size(x)
+      call step(x(i))
+    end do
+  contains
+    subroutine step(v)
+      real, intent(in) :: v
+      this%total = this%total + this%scale * v + scale
+      if (v > 0) this%total = this%total + v
+      call other(userData)
+    end subroutine step
+  end subroutine add
+end module lam_mod
+""")
+    translate([str(tmp_path / "lam_mod.F90")], cfg(), str(tmp_path))
+    cpp, hpp = (tmp_path / "lam_mod.cpp").read_text(), (tmp_path / "lam_mod.hpp").read_text()
+    assert "total = total + this->scale * v + scale;" in cpp      # host local scale hides the member
+    assert "if (v > 0) total = total + v;" in cpp
+    assert "    other();" in cpp                                    # the host's dropped user data
+    assert "private:\n  scalar total = 0.0;\n  scalar scale = 2.0;" in hpp   # used only by its own method

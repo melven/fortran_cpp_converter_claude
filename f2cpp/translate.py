@@ -193,8 +193,24 @@ class Translator:
         return {a for a in p.args if a in self.cfg["drop_args"] and a in p.vars
                 and p.vars[a].polymorphic and p.vars[a].tname == "*"}
 
+    def scope_chain(self):
+        """the procedure and its hosts (internal procedures / lambdas see the host's variables)"""
+        p = self.proc
+        while p is not None:
+            yield p
+            p = p.host
+
+    def method_proc(self):
+        """outermost host: the procedure that is a method (if any)"""
+        chain = list(self.scope_chain())
+        return chain[-1] if chain else None
+
     def is_dropped(self, node):
-        return cls(node) == "Name" and lname(node) in self.dropped(self.proc) and lname(node) not in self.overrides
+        if cls(node) != "Name" or lname(node) in self.overrides:
+            return False
+        n = lname(node)
+        owner = next((p for p in self.scope_chain() if n in p.vars), None)
+        return owner is not None and n in self.dropped(owner)
 
     def storage(self, v):
         """kind of container: scalar eigen vec3 stdvec uptr ptr"""
@@ -350,7 +366,7 @@ class Translator:
         n = lname(node)
         if self.is_dropped(node):
             raise Untranslatable("dropped-argument")
-        local = self.overrides.get(n) or (self.proc.vars.get(n) if self.proc is not None else None)
+        local = self.overrides.get(n) or next((p.vars[n] for p in self.scope_chain() if n in p.vars), None)
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
         v = self.lookup(n)
@@ -481,7 +497,7 @@ class Translator:
     def member(self, obj, name, qual=""):
         """code of member 'name' of obj; 'this->' is omitted unless a local name hides the member"""
         if obj.raw == "this" and not self.cfg["explicit_this"]:
-            hidden = {v.cname for v in self.proc.vars.values() if not v.is_this} if self.proc else set()
+            hidden = {v.cname for p in self.scope_chain() for v in p.vars.values() if not v.is_this}
             hidden |= {v.cname for v in self.overrides.values()}
             if qual or name not in hidden:
                 return qual + name
@@ -508,7 +524,8 @@ class Translator:
 
     def used_member(self, td, name, comp):
         """record from where a component is used: own methods, methods of derived classes, elsewhere"""
-        ctx = self.find_type(self.proc.method_of) if self.proc is not None and self.proc.method_of else None
+        mp = self.method_proc()
+        ctx = self.find_type(mp.method_of) if mp is not None and mp.method_of else None
         if ctx is not None and ctx.comps.get(name) is comp:
             return
         if ctx is not None and any(a.comps.get(name) is comp for a in self.prog.ancestors(ctx)):
@@ -895,9 +912,10 @@ class Translator:
     def call_code(self, p, args):
         """call of a known module procedure (free function or method called by implementation name)"""
         name = cname(p.generic or p.cname)
-        if not p.method_of and self.proc is not None and self.proc.method_of:
+        mp = self.method_proc()
+        if not p.method_of and mp is not None and mp.method_of:
             # a member of the same name would hide the free function
-            t = self.find_type(self.proc.method_of)
+            t = self.find_type(mp.method_of)
             if t is not None and any(name in tt.bindings or name in tt.comps or name in tt.generics
                                      for tt in [t, *self.prog.ancestors(t)]):
                 name = f"{self.prog.namespace(p.module.name)}::{name}"
@@ -1774,7 +1792,7 @@ class Translator:
         self.overrides = saved
 
     def in_const_method(self, x):
-        p = self.proc
+        p = self.method_proc()
         return bool(p and p.pass_arg and p.vars[p.pass_arg].intent == "in" and (x.on_this or x.code == "*this"))
 
 
