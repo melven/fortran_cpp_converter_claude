@@ -65,7 +65,7 @@ with less precise output (calls are passed through unchanged).
 | `pointer` dummy | reference |
 | local `pointer` associated once (`p => a%b%c`) | `auto&& p = a.b.c;` at the point of association |
 | other `pointer` (non-owning member, re-associated local) | `T*` with `TODO(f2cpp)` — decide by hand |
-| `optional` | `std::optional<T>` (`intent(in)` values, arrays), `std::optional<std::reference_wrapper<T>>` (out/inout, objects) |
+| `optional` | `intent(in)` arrays: `const vec& w = vec()`, `present(w)` → `w.size() > 0` (`optional_arrays = "optional"`: `std::optional`); other `intent(in)` values: `std::optional<T>`; out/inout and objects: `std::optional<std::reference_wrapper<T>>` |
 | `a(i)`, `a(i:j, k)`, `a(:, k)`, `a(i, :)` | `a(i - 1)`, `a(Eigen::seq(i - 1, j - 1), k - 1)`, `a.col(k - 1)`, `a.row(i - 1).transpose()` |
 | `matmul`, `transpose`, `dot_product`, `sum`, `maxval`, `abs`, `size`, ... | Eigen equivalents |
 | elementwise `*`, `/`, `**`, array ± scalar, `where (m) a = b` | `cwiseProduct`, `.array()` expressions, `select` |

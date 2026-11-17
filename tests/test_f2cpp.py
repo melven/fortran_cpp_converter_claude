@@ -135,7 +135,7 @@ def test_classes(out):
 def test_features(out):
     hpp, cpp = read(out, "features_mod.hpp"), read(out, "features_mod.cpp")
     assert "scalar clamp(scalar x, scalar lo, scalar hi);" in hpp and "int clamp(int x, int lo, int hi);" in hpp
-    assert "scalar mean(const vec& x, const std::optional<vec>& weights = std::nullopt);" in hpp
+    assert "scalar mean(const vec& x, const vec& weights = vec());" in hpp
     assert "void fill(Eigen::Ref<vec> x, scalar value, std::optional<int> first = std::nullopt);" in hpp
     assert "void swap_rows(mat& a, int i, int j);" in hpp
     assert "wrappers::Legacy legacy;" in hpp and '#include "legacy.hpp"' in hpp
@@ -747,3 +747,20 @@ def test_output_file_names_keep_the_module_spelling(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "prog.F90 contains no module" in err
     assert "other.F90 defines module renamed_mod: the output is renamed_mod.hpp" in err
+
+
+def test_optional_arrays_are_empty_by_default(out, tmp_path):
+    cpp = read(out, "features_mod.cpp")
+    assert "if (weights.size() > 0)\n" in cpp and "m = x.dot(weights) / weights.sum();" in cpp
+    (tmp_path / "o_mod.F90").write_text(
+        "module o_mod\ncontains\nsubroutine f(a, w, idx, s)\nreal, intent(in) :: a(:)\n"
+        "real, intent(in), optional :: w(:)\ninteger, intent(in), optional :: idx(:)\nreal, intent(in), optional :: s\n"
+        "if (.not. present(w)) return\nif (present(idx)) call g(w)\nend subroutine\n"
+        "subroutine g(w)\nreal, intent(in), optional :: w(:)\nend subroutine\n"
+        "subroutine h(a)\nreal, intent(in) :: a(:)\ncall f(a, s=1.0)\ncall f(a, a)\nend subroutine\nend module\n")
+    translate([str(tmp_path / "o_mod.F90")], config.load(), str(tmp_path))
+    hpp, cpp = (tmp_path / "o_mod.hpp").read_text(), (tmp_path / "o_mod.cpp").read_text()
+    assert "void f(const vec& a, const vec& w = vec(), const std::vector<int>& idx = std::vector<int>(), " \
+           "std::optional<scalar> s = std::nullopt);" in hpp
+    assert "if (w.size() == 0) return;" in cpp and "if (!idx.empty()) g(w);" in cpp
+    assert "f(a, vec(), std::vector<int>(), 1.0);" in cpp and "f(a, a);" in cpp

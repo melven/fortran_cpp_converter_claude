@@ -124,7 +124,7 @@ class ModuleEmitter:
             v = p.vars[a]
             s = f"{tr.param_type(v)} {v.cname}"
             if decl and v.opt_kind and i >= len(dummies) - n_opt:
-                s += " = std::nullopt"
+                s += f" = {tr.cpp_type(v)}()" if v.opt_kind == "empty" else " = std::nullopt"
             params.append(s)
         ret = "void"
         if p.kind == "function":

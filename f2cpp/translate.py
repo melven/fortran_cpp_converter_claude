@@ -296,6 +296,8 @@ class Translator:
         const = v.intent == "in"
         if v.base == "procedure":
             return f"const std::optional<{t}>&" if v.opt_kind else f"const {t}&"
+        if v.opt_kind == "empty":
+            return f"const {t}&"
         if v.opt_kind == "optional":
             return f"std::optional<{t}>" if st == "scalar" and v.base != "character" else \
                 f"const std::optional<{t}>&"
@@ -845,7 +847,8 @@ class Translator:
         for d in dummies[:last + 1]:
             dv = p.vars[d]
             if d not in given:
-                res.append("std::nullopt" if dv.opt_kind else "nullptr")
+                res.append(f"{self.cpp_type(dv)}()" if dv.opt_kind == "empty" else
+                           "std::nullopt" if dv.opt_kind else "nullptr")
                 continue
             if self.int_array(dv):
                 x = self.ref(given[d])
@@ -2084,6 +2087,10 @@ def i_present(tr, n, pos, kw):
     v = tr.lookup(lname(pos[0]))
     if v is None or not v.opt_kind:
         raise Untranslatable("present")
+    if v.opt_kind == "empty":
+        if tr.storage(v) in ("stdvec", "vec3"):
+            return X(f"!{v.cname}.empty()", 0, "logical", P_UNARY, neg=X(f"{v.cname}.empty()", 0, "logical"))
+        return X(f"{v.cname}.size() > 0", 0, "logical", P_REL, neg=X(f"{v.cname}.size() == 0", 0, "logical", P_EQ))
     return X(f"{v.cname}.has_value()", 0, "logical")
 
 

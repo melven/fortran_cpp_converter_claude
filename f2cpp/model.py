@@ -52,6 +52,7 @@ class Var:
     force_ptr: bool = False      # select-type alias etc.
     alloc_dims: list = None      # shape of an allocate statement for this name (flat arrays)
     access_need: int = 0         # component: 0 private, 1 used by derived classes, 2 used from outside
+    empty_arrays = True          # class attribute: config optional_arrays == "empty"
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
@@ -67,6 +68,10 @@ class Var:
         """representation of an optional dummy: std::optional of a value or of a reference"""
         if not (self.is_dummy and self.has("optional")):
             return None
+        if Var.empty_arrays and self.intent == "in" and self.rank > 0 and \
+                self.base in ("real", "integer", "logical", "complex") and \
+                not (self.has("allocatable") or self.has("pointer")):
+            return "empty"          # const vec& w = vec(): absent = empty
         if self.intent == "in" and self.base != "type":
             return "optional"       # std::optional<T>
         return "optref"             # std::optional<std::reference_wrapper<T>>
@@ -503,6 +508,7 @@ class Program:
         self.cfg = cfg
         self.modules = {}
         self.spellings = {}
+        Var.empty_arrays = cfg["optional_arrays"] == "empty"
         self.links = []             # pairs of integer arrays that must have the same C++ type
 
     def add(self, module):
