@@ -147,6 +147,8 @@ class Module:
     name: str
     node: object
     uses: list = field(default_factory=list)
+    spelling: str = None                            # name as written in the module statement
+    use_spelling: dict = field(default_factory=dict)    # used module -> name as written in the use
     use_only: dict = field(default_factory=dict)    # used module -> names of the only-lists (None: all)
     vars: dict = field(default_factory=dict)
     types: dict = field(default_factory=dict)
@@ -350,6 +352,7 @@ def collect_type(node, module):
 
 def collect_module(node):
     m = Module(lname(node.content[0].items[1]), node)
+    m.spelling = str(node.content[0].items[1]).strip()
     for part in node.content:
         if cls(part) == "Specification_Part":
             for s in part.content:
@@ -392,6 +395,7 @@ def collect_module(node):
     from fparser.two.utils import walk
     for s in walk(node, F.Use_Stmt):
         u = lname(s.items[2])
+        m.use_spelling.setdefault(u, str(s.items[2]).strip())
         if u not in m.uses:
             m.uses.append(u)
         if s.items[4] is None or "only" not in str(s.items[3]).lower():
@@ -571,7 +575,10 @@ class Program:
         header in module_headers"""
         import os
         h = self.cfg["module_headers"].get(modname)
-        return os.path.splitext(h)[0] if h else modname
+        if h:
+            return os.path.splitext(h)[0]
+        m = self.modules.get(modname)
+        return m.spelling if m is not None and m.spelling else modname
 
     def decide_int_vectors(self, translated):
         """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>"""

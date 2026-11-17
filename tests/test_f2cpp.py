@@ -729,3 +729,21 @@ def test_aliasing(out):
     assert "a.row(1).transpose() = a.row(0).transpose() * 2.0;" in poly   # same or disjoint rows
     assert "a(Eigen::seq(0, 1), 2) = (a(Eigen::seq(1, 2), 2) + a(Eigen::seq(0, 1), 0)).eval();" in poly
     assert "eval()" not in read(out, "block_lu_mod.cpp")
+
+
+def test_output_file_names_keep_the_module_spelling(tmp_path, capsys):
+    from f2cpp.cli import main
+    (tmp_path / "MyThing_mod.F90").write_text("module MyThing_mod\ninteger, parameter :: n = 2\nend module\n")
+    (tmp_path / "user_mod.F90").write_text("module user_mod\nuse MyThing_mod, only: n\nuse Other_Mod, only: m\n"
+                                           "end module\n")
+    (tmp_path / "prog.F90").write_text("program p\nend program\n")
+    (tmp_path / "other.F90").write_text("module renamed_mod\nend module\n")
+    main([str(tmp_path / f) for f in ("MyThing_mod.F90", "user_mod.F90", "prog.F90", "other.F90")]
+         + ["-o", str(tmp_path / "out")])
+    out = tmp_path / "out"
+    assert (out / "MyThing_mod.hpp").exists() and (out / "MyThing_mod.cpp").exists()
+    hpp = (out / "user_mod.hpp").read_text()
+    assert '#include "MyThing_mod.hpp"' in hpp and '#include "Other_Mod.hpp"' in hpp
+    err = capsys.readouterr().err
+    assert "prog.F90 contains no module" in err
+    assert "other.F90 defines module renamed_mod: the output is renamed_mod.hpp" in err

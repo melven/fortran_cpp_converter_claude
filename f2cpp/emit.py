@@ -551,7 +551,8 @@ class ModuleEmitter:
             only = self.mod.use_only.get(u)
             if only and all(n in replaced for n in only):
                 continue        # everything imported from this module is replaced by the configuration
-            h = known.get(u, u + ext)
+            h = known[u] if u in known else \
+                (self.prog.file_stem(u) if u in self.prog.modules else self.mod.use_spelling.get(u, u)) + ext
             if h and f'#include "{h}"' not in res:
                 res.append(f'#include "{h}"')
         return res
@@ -701,7 +702,8 @@ class ModuleEmitter:
                                                        for q in mod.procs.values()) else "")
                 if role == "test":
                     self.doc(cpp, p, 0)
-                    macro = f"TEST_F({mod.name}, {p.cname})" if fixture else f"TEST({mod.name}, {p.cname})"
+                    suite = mod.spelling or mod.name
+                    macro = f"TEST_F({suite}, {p.cname})" if fixture else f"TEST({suite}, {p.cname})"
                     self.emit_proc(cpp, p, 0, head=macro)
                 elif p.method_of:
                     self.emit_proc(cpp, p, 0)
@@ -852,7 +854,7 @@ class ModuleEmitter:
         if protos.out:
             c += protos.out + [""]
         if fixture:
-            c += [f"class {mod.name} : public ::testing::Test {{", "protected:"]
+            c += [f"class {mod.spelling or mod.name} : public ::testing::Test {{", "protected:"]
             for p in mod.procs.values():
                 role = pf_role(p)
                 if role in ("before", "after"):
