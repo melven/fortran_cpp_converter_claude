@@ -23,6 +23,14 @@ DEFAULTS = {
     #         used anywhere else in the translated files (other classes, free functions, tests)
     # "fortran": as declared in Fortran (public unless the type has a private statement)
     "member_access": "auto",
+    # local variables are declared at their first use (merged with the defining assignment,
+    # allocate or constructor call where possible); loop variables in the for statement
+    "declare_at_first_use": True,
+    # loops whose variable is mostly used as array index run from 0: do i = 1, n -> for (int i = 0; i < n; ++i)
+    "zero_based_loops": True,
+    # optional intent(in) arrays: "empty": `const vec& w = vec()`, present(w) -> w.size() > 0;
+    # "optional": `const std::optional<vec>& w = std::nullopt`
+    "optional_arrays": "empty",
     "explicit_this": False,       # True: always write this->member
     # values of the error flag that mean success (lower case), e.g. ["0", "myproj_success"]
     "error_success": ["0"],

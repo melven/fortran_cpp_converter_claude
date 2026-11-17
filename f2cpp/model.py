@@ -52,6 +52,7 @@ class Var:
     force_ptr: bool = False      # select-type alias etc.
     alloc_dims: list = None      # shape of an allocate statement for this name (flat arrays)
     access_need: int = 0         # component: 0 private, 1 used by derived classes, 2 used from outside
+    empty_arrays = True          # class attribute: config optional_arrays == "empty"
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
@@ -67,6 +68,10 @@ class Var:
         """representation of an optional dummy: std::optional of a value or of a reference"""
         if not (self.is_dummy and self.has("optional")):
             return None
+        if Var.empty_arrays and self.intent == "in" and self.rank > 0 and \
+                self.base in ("real", "integer", "logical", "complex") and \
+                not (self.has("allocatable") or self.has("pointer")):
+            return "empty"          # const vec& w = vec(): absent = empty
         if self.intent == "in" and self.base != "type":
             return "optional"       # std::optional<T>
         return "optref"             # std::optional<std::reference_wrapper<T>>
@@ -100,6 +105,11 @@ class Proc:
     external: bool = False       # declared by an interface body only (no definition to translate)
     is_ctor: bool = False
     is_dtor: bool = False
+    host: object = None          # host procedure of an internal procedure
+    internal: dict = field(default_factory=dict)    # internal procedures (contains inside a procedure)
+    cb_arg: str = None           # callback implementation: class(*) user data dummy cast by select type
+    cb_select: object = None     #   ... the select type construct
+    cb_method: bool = False      #   ... translated as method of the user data type
     is_test: str = None          # pFUnit role: test | before | after
     doc: list = field(default_factory=list)
     param_docs: list = field(default_factory=list)      # [([argument names], [text lines])]
@@ -142,6 +152,8 @@ class Module:
     name: str
     node: object
     uses: list = field(default_factory=list)
+    spelling: str = None                            # name as written in the module statement
+    use_spelling: dict = field(default_factory=dict)    # used module -> name as written in the use
     use_only: dict = field(default_factory=dict)    # used module -> names of the only-lists (None: all)
     vars: dict = field(default_factory=dict)
     types: dict = field(default_factory=dict)
@@ -284,6 +296,12 @@ def collect_proc(node, module):
     for c in content[1:]:
         if cls(c) == "Specification_Part":
             collect_param_docs(p, c)
+        elif cls(c) == "Internal_Subprogram_Part":
+            for s in c.content:
+                if cls(s) in ("Subroutine_Subprogram", "Function_Subprogram"):
+                    q = collect_proc(s, module)
+                    q.host = p
+                    p.internal[q.name] = q
     for a in args:
         v = p.vars.setdefault(a, Var(a, cname(a)))
         v.is_dummy = True
@@ -339,6 +357,7 @@ def collect_type(node, module):
 
 def collect_module(node):
     m = Module(lname(node.content[0].items[1]), node)
+    m.spelling = str(node.content[0].items[1]).strip()
     for part in node.content:
         if cls(part) == "Specification_Part":
             for s in part.content:
@@ -381,6 +400,7 @@ def collect_module(node):
     from fparser.two.utils import walk
     for s in walk(node, F.Use_Stmt):
         u = lname(s.items[2])
+        m.use_spelling.setdefault(u, str(s.items[2]).strip())
         if u not in m.uses:
             m.uses.append(u)
         if s.items[4] is None or "only" not in str(s.items[3]).lower():
@@ -488,6 +508,7 @@ class Program:
         self.cfg = cfg
         self.modules = {}
         self.spellings = {}
+        Var.empty_arrays = cfg["optional_arrays"] == "empty"
         self.links = []             # pairs of integer arrays that must have the same C++ type
 
     def add(self, module):
@@ -503,8 +524,39 @@ class Program:
     def inconsistent_case(self, tname):
         return len(self.spellings.get(tname, ())) > 1
 
+    def classify_callbacks(self, m):
+        """callback implementations: proc(userData, ...) with a class(*) user data dummy (drop_args)
+        that is cast with `select type` to exactly one derived type T -> method of T (or, if T is
+        an existing C++ class, a free function with a `T` parameter)"""
+        from fparser.two.utils import walk
+        for p in m.procs.values():
+            if p.method_of or p.external:
+                continue
+            ud = [a for a in p.args if a in self.cfg["drop_args"] and a in p.vars
+                  and p.vars[a].polymorphic and p.vars[a].tname == "*"]
+            execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
+            if len(ud) != 1 or not execs:
+                continue
+            sts = [c for c in execs[0].content if cls(c) == "Select_Type_Construct"
+                   and lname([h for h in c.content if cls(h) == "Select_Type_Stmt"][0].items[1]) == ud[0]]
+            if len(sts) != 1:
+                continue
+            guards = [g for g in walk(sts[0], F.Type_Guard_Stmt) if g.items[1] is not None]
+            if len(guards) != 1 or cls(guards[0].items[1]) == "Intrinsic_Type_Spec":
+                continue
+            tname = lname(guards[0].items[1])
+            t = self.find_type(tname, m)
+            v = p.vars[ud[0]]
+            v.tname, v.polymorphic, v.base = tname, False, "type"
+            p.cb_arg, p.cb_select = ud[0], sts[0]
+            if t is not None and tname not in self.cfg["type_map"]:
+                p.method_of, p.bind_name, p.pass_arg, p.cb_method = t.name, p.cname, ud[0], True
+                v.is_this = True
+
     def finish(self):
         err = self.cfg["error_arg"].lower()
+        for m in self.modules.values():
+            self.classify_callbacks(m)
         for m in self.modules.values():
             classify_pointers(m)
             for t in m.types.values():
@@ -529,7 +581,10 @@ class Program:
         header in module_headers"""
         import os
         h = self.cfg["module_headers"].get(modname)
-        return os.path.splitext(h)[0] if h else modname
+        if h:
+            return os.path.splitext(h)[0]
+        m = self.modules.get(modname)
+        return m.spelling if m is not None and m.spelling else modname
 
     def decide_int_vectors(self, translated):
         """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>"""

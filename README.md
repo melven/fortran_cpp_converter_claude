@@ -19,7 +19,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 
 | Option | Meaning |
 |---|---|
-| `files` | modules (`.F90`) → `<module>.hpp` + `<module>.cpp`; pFUnit tests (`.pf`, `.pfunit`, or any module that uses `funit` / `pfunit`) → `<module>.cpp` |
+| `files` | modules (`.F90`) → `<Module>.hpp` + `<Module>.cpp` (spelling of the `module` statement; a note on stderr if that differs from the file name, a warning for files without a module); pFUnit tests (`.pf`, `.pfunit`, or any module that uses `funit` / `pfunit`) → `<module>.cpp` |
 | `-I FILE` | parse only for symbols (types, signatures); no output. For used modules that are translated separately or already exist in C++ |
 | `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults; may be repeated, later files take precedence (tables and include lists are merged) |
 | `-n NS` | C++ namespace |
@@ -65,7 +65,7 @@ with less precise output (calls are passed through unchanged).
 | `pointer` dummy | reference |
 | local `pointer` associated once (`p => a%b%c`) | `auto&& p = a.b.c;` at the point of association |
 | other `pointer` (non-owning member, re-associated local) | `T*` with `TODO(f2cpp)` — decide by hand |
-| `optional` | `std::optional<T>` (`intent(in)` values, arrays), `std::optional<std::reference_wrapper<T>>` (out/inout, objects) |
+| `optional` | `intent(in)` arrays: `const vec& w = vec()`, `present(w)` → `w.size() > 0` (`optional_arrays = "optional"`: `std::optional`); other `intent(in)` values: `std::optional<T>`; out/inout and objects: `std::optional<std::reference_wrapper<T>>` |
 | `a(i)`, `a(i:j, k)`, `a(:, k)`, `a(i, :)` | `a(i - 1)`, `a(Eigen::seq(i - 1, j - 1), k - 1)`, `a.col(k - 1)`, `a.row(i - 1).transpose()` |
 | `matmul`, `transpose`, `dot_product`, `sum`, `maxval`, `abs`, `size`, ... | Eigen equivalents |
 | elementwise `*`, `/`, `**`, array ± scalar, `where (m) a = b` | `cwiseProduct`, `.array()` expressions, `select` |
@@ -74,10 +74,14 @@ with less precise output (calls are passed through unchanged).
 | `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
 | array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
+| local variables | declared before the first top-level statement that uses it; merged with a defining assignment (`int m = A.rows();`), `allocate` (`mat As(m, m);`) or constructor call (`block_lu tmp(1, n);`). Loop variables used only in their loops: `for (int i = ...)` (`declare_at_first_use`) |
+| `do i = 1, n` whose variable is mostly an array index (lower bound 1) | `for (int i = 0; i < n; ++i)` with `a(i)` → `a(i)` and other uses `i + 1` (`zero_based_loops`) |
+| internal procedures (`contains` inside a procedure) | lambdas `auto f = [&](...) -> T { ... };` at the start of the host body (host association by reference capture), ordered by their dependencies; recursive ones stay Fortran comments |
 | `allocate` / `deallocate` / `allocated` | `resize` / `make_unique` / `size() > 0` ... |
 | `PROJECT_CHK_IERR(call f(a, ierr), ierr)` | `f(a);` — the `ierr` argument is removed everywhere |
 | `PROJECT_ASSERT(c, ierr)`, `PROJECT_CHK_ARGUMENT(c, ierr)` | `if (!(c)) throw std::logic_error(...);` / `std::invalid_argument` (`call_templates`) |
 | `PROJECT_ALLOCATE(a(n), ierr)` | `a.resize(n);` |
+| `if` whose condition cannot be translated (e.g. `if (ierr /= 0) then`) | `if (false /* TODO(f2cpp): ... */)` with the translated body |
 | other statements using `ierr` | kept as comment (`ierr = 0`, `PROJECT_ASSERT(ierr == 0, ierr)`, `if (ierr /= 0) return`, `PROJECT_CHK_IERR(ierr=ierr, ierr)` are dropped) |
 | pFUnit `@test` subroutine `test_x` in module `test_foo_mod` | `TEST(test_foo_mod, test_x)`, outside the project namespace (`using namespace`) |
 | `@before` / `@after` | fixture class `test_foo_mod` with `SetUp` / `TearDown`, tests become `TEST_F` |
@@ -169,9 +173,13 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 
 `drop_args = ["userData"]` removes dummies of that name that are declared `class(*)` from all
 signatures and calls, like the error flag: the user data is captured by the lambda in C++.
-By hand: the call sites (`solve(my_residual, x)` → `solve([&](const vec& x, vec& f) { my_residual(*this, x, f); }, x)`)
-and the callback implementations (statements using the dropped argument, e.g. its
-`select type`, are kept as commented Fortran).
+Callback implementations of the form `subroutine cb(userData, x, f, ierr)` whose user data
+is cast with `select type (userData)` to exactly one derived type `T` become methods of `T`
+(`void T::cb(const vec& x, vec& f) const`); the cast and its `class default` disappear.
+Where such a callback is passed together with its user data, a lambda binds it:
+`call solve(cb, this, x, ierr)` → `solve([&](const vec& x, vec& f) { cb(x, f); }, x);`.
+If `T` is an existing C++ class (`type_map`), `cb` stays a free function with a `const T&`
+parameter. Other uses of the dropped argument are kept as commented Fortran.
 
 ## Existing C++ code (partially translated module hierarchy)
 
@@ -230,7 +238,10 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 
 - **LAPACK / external calls** are passed through with a TODO. `tests/support/lapack_compat.hpp`
   shows thin wrappers that keep such calls working until they are replaced by Eigen decompositions.
-- **Eigen aliasing**: only `transpose` of the assigned variable is flagged.
+- **Eigen aliasing**: an assignment whose right-hand side reads the assigned array in another
+  section or rearranged (`transpose`, `reshape`, ...) gets `.eval()`, `a = transpose(a)` becomes
+  `a.transposeInPlace()`; products, reductions and function results count as new objects. Not
+  detected: aliasing through different names (pointers, two arguments referring to the same array).
 - **Loop bounds** are re-evaluated in every iteration in C++ (once in Fortran).
 - `closed_hierarchy = true` (default) assumes that the run sees every derived type (files to
   translate and `-I`). Otherwise a base class wrongly becomes `final` / non-virtual (compile
@@ -240,7 +251,7 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 - Passing a slice to a non-`const` `Eigen::Ref` of a *different* storage layout, array-valued
   optional objects, pointers: check by hand.
 - Not translated (kept as comment): I/O to units and with numeric edit descriptors (`f10.3`, `es12.4`), `where`/`forall` constructs, implied-do, named
-  `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, internal
+  `exit`/`cycle`, `goto`, substrings, procedure pointers, operator overloading, recursive internal
   procedures, slices of flat (rank ≥ 4) arrays and over the vector index of `std::vector<mat>`, most string intrinsics, `program` units.
 - **Name lookup across modules** is simpler than in Fortran: a name is searched in the module
   itself and then in all (transitively) used modules, public names only. `only:` lists and

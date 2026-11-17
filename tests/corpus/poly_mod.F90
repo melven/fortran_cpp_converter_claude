@@ -4,7 +4,7 @@ module poly_mod
   implicit none
   private
 
-  public :: poly_type, poly_eval, poly_derivative, moments_table, gather_shifted
+  public :: poly_type, poly_eval, poly_derivative, moments_table, gather_shifted, weighted_norm, overlap_demo
 
   type :: poly_type
     integer :: degree = -1
@@ -114,5 +114,52 @@ contains
     ghost(idx(1:2)) = 1.5 * ghost(idx(1:2))
     res(m) = res(m) + ghost(-1) + ghost(idx(2))
   end subroutine gather_shifted
+
+  !> internal procedures with host association
+  function weighted_norm(x, w) result(r)
+    real, intent(in) :: x(:), w
+    real :: r
+    integer :: k, calls
+
+    calls = 0
+    r = 0.0
+    do k = 1, size(x)
+      call accumulate(x(k))
+    end do
+    r = sqrt(r) + scaled(real(calls))
+  contains
+    !> adds the weighted square of v
+    subroutine accumulate(v)
+      real, intent(in) :: v
+      r = r + w * sq(v)
+      calls = calls + 1
+    end subroutine accumulate
+
+    function sq(v) result(s)
+      real, intent(in) :: v
+      real :: s
+      s = v * v
+    end function sq
+
+    function scaled(v) result(s)
+      real, intent(in) :: v
+      real :: s
+      s = 1.0e-3 * v
+    end function scaled
+  end function weighted_norm
+
+  !> assignments whose right-hand side reads the assigned array (Fortran evaluates it first)
+  subroutine overlap_demo(x, a)
+    real, intent(inout) :: x(:), a(:, :)
+    integer :: n
+    n = size(x)
+    x(2:n) = x(1:n - 1)
+    x = x(n:1:-1)
+    a = a + transpose(a)
+    a = transpose(a)
+    a(:, 1) = matmul(a, a(:, 2))
+    a(2, :) = a(1, :) * 2.0
+    a(1:2, 3) = a(2:3, 3) + a(1:2, 1)
+  end subroutine overlap_demo
 
 end module poly_mod

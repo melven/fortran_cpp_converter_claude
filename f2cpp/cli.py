@@ -47,7 +47,17 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
             report.start(path)
             report.add("untranslated", "parse-error")
             continue
+        if not mods:
+            print(f"f2cpp: {path} contains no module (programs, submodules and external procedures are "
+                  "not translated)", file=sys.stderr)
+            report.start(path)
+            report.add("untranslated", "no-module")
         for m in mods:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            if path in paths and stem != prog.file_stem(m.name) and m.name not in cfg["module_headers"] \
+                    and stem != m.spelling:
+                print(f"f2cpp: {path} defines module {m.spelling}: the output is {m.spelling}{cfg['header_ext']} / "
+                      f"{m.spelling}{cfg['source_ext']}", file=sys.stderr)
             if m.name in prog.modules:
                 print(f"f2cpp: module {m.name} is defined more than once; ignoring the one in {path}",
                       file=sys.stderr)

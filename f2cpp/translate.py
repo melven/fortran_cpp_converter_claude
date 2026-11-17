@@ -66,6 +66,9 @@ class Translator:
                             for m in [re.match(r"\s*call\s+(\w+)", t, re.I)] if m}
         self.overrides = {}
         self.out = []
+        self.loop_local = set()    # loop variables that are only used inside their loops
+        self.loop_decl = set()     # ... declared in the for statement
+        self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
         self.notes = []            # soft TODOs of the current statement
         self.last_err_call = None  # (line index, code) of the last call with removed error arg
 
@@ -73,8 +76,11 @@ class Translator:
     def lookup(self, n):
         if n in self.overrides:
             return self.overrides[n]
-        if self.proc is not None and n in self.proc.vars:
-            return self.proc.vars[n]
+        p = self.proc
+        while p is not None:                # own variables, then those of the host (host association)
+            if n in p.vars:
+                return p.vars[n]
+            p = p.host
         for m in self.prog.visible(self.mod):
             if n in m.vars and (m is self.mod or m.is_public(n, m.vars[n].access)):
                 return m.vars[n]
@@ -82,6 +88,11 @@ class Translator:
 
     def lookup_proc(self, n, args=None):
         """procedure of that name; for a generic name the specific procedure that fits the arguments"""
+        p = self.proc
+        while p is not None:                # internal procedures of the procedure and of its host
+            if n in p.internal:
+                return p.internal[n]
+            p = p.host
         for m in self.prog.visible(self.mod):
             if m is not self.mod and not m.is_public(n):
                 continue                    # private names of other modules are not visible
@@ -182,8 +193,24 @@ class Translator:
         return {a for a in p.args if a in self.cfg["drop_args"] and a in p.vars
                 and p.vars[a].polymorphic and p.vars[a].tname == "*"}
 
+    def scope_chain(self):
+        """the procedure and its hosts (internal procedures / lambdas see the host's variables)"""
+        p = self.proc
+        while p is not None:
+            yield p
+            p = p.host
+
+    def method_proc(self):
+        """outermost host: the procedure that is a method (if any)"""
+        chain = list(self.scope_chain())
+        return chain[-1] if chain else None
+
     def is_dropped(self, node):
-        return cls(node) == "Name" and lname(node) in self.dropped(self.proc) and lname(node) not in self.overrides
+        if cls(node) != "Name" or lname(node) in self.overrides:
+            return False
+        n = lname(node)
+        owner = next((p for p in self.scope_chain() if n in p.vars), None)
+        return owner is not None and n in self.dropped(owner)
 
     def storage(self, v):
         """kind of container: scalar eigen vec3 stdvec uptr ptr"""
@@ -269,6 +296,8 @@ class Translator:
         const = v.intent == "in"
         if v.base == "procedure":
             return f"const std::optional<{t}>&" if v.opt_kind else f"const {t}&"
+        if v.opt_kind == "empty":
+            return f"const {t}&"
         if v.opt_kind == "optional":
             return f"std::optional<{t}>" if st == "scalar" and v.base != "character" else \
                 f"const std::optional<{t}>&"
@@ -339,10 +368,12 @@ class Translator:
         n = lname(node)
         if self.is_dropped(node):
             raise Untranslatable("dropped-argument")
-        local = self.overrides.get(n) or (self.proc.vars.get(n) if self.proc is not None else None)
+        local = self.overrides.get(n) or next((p.vars[n] for p in self.scope_chain() if n in p.vars), None)
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
         v = self.lookup(n)
+        if v is not None and n in self.shift and n not in self.overrides:
+            return X(f"{v.cname} + {self.shift[n]}", 0, "integer", P_ADD, v)
         if v is None:
             if n == self.err:
                 raise Untranslatable("error-arg")
@@ -388,7 +419,8 @@ class Translator:
             iface = self.find_iface(v.tname)
             argc = self.bound_args(iface, items_of(args), False) if iface is not None else \
                 self.plain_args(items_of(args))
-            return self.result_x(f"{v.cname}({', '.join(argc)})", iface)
+            callee = f"(*{v.cname})" if v.opt_kind else v.cname
+            return self.result_x(f"{callee}({', '.join(argc)})", iface)
         if v is not None and cls(node) != "Intrinsic_Function_Reference" or (v is not None and v.rank > 0):
             return self.subscript(self.x_Name(name_node), v, items_of(args))
         if n in self.cfg["function_map"]:
@@ -468,7 +500,7 @@ class Translator:
     def member(self, obj, name, qual=""):
         """code of member 'name' of obj; 'this->' is omitted unless a local name hides the member"""
         if obj.raw == "this" and not self.cfg["explicit_this"]:
-            hidden = {v.cname for v in self.proc.vars.values() if not v.is_this} if self.proc else set()
+            hidden = {v.cname for p in self.scope_chain() for v in p.vars.values() if not v.is_this}
             hidden |= {v.cname for v in self.overrides.values()}
             if qual or name not in hidden:
                 return qual + name
@@ -495,7 +527,8 @@ class Translator:
 
     def used_member(self, td, name, comp):
         """record from where a component is used: own methods, methods of derived classes, elsewhere"""
-        ctx = self.find_type(self.proc.method_of) if self.proc is not None and self.proc.method_of else None
+        mp = self.method_proc()
+        ctx = self.find_type(mp.method_of) if mp is not None and mp.method_of else None
         if ctx is not None and ctx.comps.get(name) is comp:
             return
         if ctx is not None and any(a.comps.get(name) is comp for a in self.prog.ancestors(ctx)):
@@ -547,19 +580,35 @@ class Translator:
         return cur
 
     # index handling
-    def minus(self, node, c):
-        """translate integer expression 'node - c' with constant folding"""
-        if c == 0:
-            return self.expr(node).code
+    def linear(self, node):
+        """(code of the variable part or None, constant) for `literal`, `name`, `expr +- literal`
+        (shifted loop variables included); None for other expressions"""
         k = cls(node)
         if k == "Int_Literal_Constant":
-            return str(int(str(node.items[0])) - c)
+            return None, int(str(node.items[0]))
+        if k == "Name" and lname(node) in self.shift and lname(node) not in self.overrides:
+            return self.lookup(lname(node)).cname, self.shift[lname(node)]
         if k == "Level_2_Expr" and node.items[1] in "+-" and cls(node.items[2]) == "Int_Literal_Constant":
-            lhs = self.expr(node.items[0])
-            val = int(str(node.items[2].items[0])) * (1 if node.items[1] == "+" else -1) - c
-            if val == 0:
-                return lhs.code
-            return f"{par(lhs, P_ADD)} {'+' if val > 0 else '-'} {abs(val)}"
+            sign = 1 if node.items[1] == "+" else -1
+            sub = self.linear(node.items[0])
+            if sub is None:
+                x = self.expr(node.items[0])
+                if x.rank > 0:
+                    return None
+                sub = par(x, P_ADD), 0
+            return sub[0], sub[1] + sign * int(str(node.items[2].items[0]))
+        return None
+
+    def minus(self, node, c):
+        """translate integer expression 'node - c' with constant folding"""
+        lin = self.linear(node)
+        if lin is not None:
+            base, val = lin[0], lin[1] - c
+            if base is None:
+                return str(val)
+            return base if val == 0 else f"{base} {'+' if val > 0 else '-'} {abs(val)}"
+        if c == 0:
+            return self.expr(node).code
         x = self.expr(node)
         if x.rank > 0:
             raise Untranslatable("vector-subscript")
@@ -798,7 +847,8 @@ class Translator:
         for d in dummies[:last + 1]:
             dv = p.vars[d]
             if d not in given:
-                res.append("std::nullopt" if dv.opt_kind else "nullptr")
+                res.append(f"{self.cpp_type(dv)}()" if dv.opt_kind == "empty" else
+                           "std::nullopt" if dv.opt_kind else "nullptr")
                 continue
             if self.int_array(dv):
                 x = self.ref(given[d])
@@ -808,6 +858,13 @@ class Translator:
                 else:
                     dv.needs_eigen = True
                     self.touch(x)
+            elif dv.base == "procedure" and gone & set(given) and cls(given[d]) == "Name" and \
+                    self.lookup(lname(given[d])) is None and \
+                    getattr(self.lookup_proc(lname(given[d])), "cb_arg", None):
+                # callback implementation with user data: bind the user data in a lambda
+                res.append(self.callback_lambda(self.lookup_proc(lname(given[d])), dv,
+                                                given[sorted(gone & set(given))[0]]))
+                continue
             else:
                 x = self.expr(given[d])
             code = self.matrix(x)
@@ -832,12 +889,37 @@ class Translator:
         if s.lower() == p.name:
             p.spellings.add(s)
 
+    def callback_lambda(self, q, dummy, user_data):
+        """callback q(userData, x, f) passed together with its user data -> [&](x, f) { obj.q(x, f); }"""
+        iface = self.find_iface(dummy.tname)
+        if iface is None:
+            raise Untranslatable("callback-interface")
+        gone = self.dropped(iface)
+        i_dummies = [a for a in iface.args if a != self.err]
+        q_dummies = [a for a in q.args if a != self.err]
+        if len(i_dummies) != len(q_dummies):
+            raise Untranslatable("callback-signature")
+        params = [iface.vars[a] for a in i_dummies if a not in gone]
+        obj = self.expr(user_data)
+        args = []
+        for ia, qa in zip(i_dummies, q_dummies):
+            if ia in gone:
+                if not q.cb_method:
+                    args.append(obj.code)
+            else:
+                args.append(iface.vars[ia].cname)
+        callee = self.member(obj, q.cname) if q.cb_method else q.cname
+        plist = ", ".join(f"{self.param_type(v)} {v.cname}" for v in params)
+        ret = "return " if iface.kind == "function" else ""
+        return f"[&]({plist}) {{ {ret}{callee}({', '.join(args)}); }}"
+
     def call_code(self, p, args):
         """call of a known module procedure (free function or method called by implementation name)"""
         name = cname(p.generic or p.cname)
-        if not p.method_of and self.proc is not None and self.proc.method_of:
+        mp = self.method_proc()
+        if not p.method_of and mp is not None and mp.method_of:
             # a member of the same name would hide the free function
-            t = self.find_type(self.proc.method_of)
+            t = self.find_type(mp.method_of)
             if t is not None and any(name in tt.bindings or name in tt.comps or name in tt.generics
                                      for tt in [t, *self.prog.ancestors(t)]):
                 name = f"{self.prog.namespace(p.module.name)}::{name}"
@@ -952,6 +1034,11 @@ class Translator:
             if line.strip() and BLANK_MARK not in line:
                 self.emit(ind, "// F: " + line.rstrip().replace(CPP_MARK, "").replace("!F2CPP_PF", "@"))
 
+    def comment_text(self, node):
+        text = str(node)[1:]
+        dox = self.cfg["doxygen"]
+        return dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
+
     def comment(self, node, ind, prev=None):
         """returns False for marker comments that are not emitted"""
         s = str(node)
@@ -970,9 +1057,7 @@ class Translator:
             if d:
                 self.out.append(d)
             return
-        text = s[1:]
-        dox = self.cfg["doxygen"]
-        c = dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
+        c = self.comment_text(node)
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]
         if trailing and self.out and self.out[-1].strip() and not self.out[-1].lstrip().startswith("//"):
             self.out[-1] += "  " + c
@@ -1036,6 +1121,10 @@ class Translator:
         if k == "Call_Stmt" and lname(node.items[0]).startswith(ASSERT_PREFIX + "assert") and \
                 self.err_assert(node, ind):
             return
+        if k == "If_Construct":
+            return self.s_If_Construct(node, ind)     # condition as TODO, the body is translated
+        if k == "If_Stmt":
+            return self.s_If_Stmt(node, ind)
         if k == "Call_Stmt" and lname(node.items[0]) in self.macro_calls and node.items[1] is not None:
             # PROJECT_ASSERT(ierr == 0, ierr): the error flag is replaced by exceptions
             cond = str(items_of(node.items[1])[0]).replace(" ", "").lower().replace(".eq.", "==")
@@ -1172,10 +1261,89 @@ class Translator:
         if lhs.rank > 0 and rhs.rank == 0:
             raise Untranslatable("array=scalar:" + (self.storage(v) if v is not None else "unknown"))
         code = self.matrix(rhs)
-        if lhs.rank > 0 and v is not None and self.saw_transpose and \
-                re.search(rf"(?<![\w.>]){re.escape(v.cname)}\b", code.replace("this->", "")):
-            self.note("aliasing", "check aliasing (transpose of the assigned variable)")
+        if lhs.rank > 0 and v is not None and self.storage(v) in ("eigen", "vec3", "flat") and \
+                v.base != "character":
+            alias = self.aliasing(lhs_n, rhs_n)
+            if alias == "transpose":
+                self.emit(ind, f"{par(lhs)}.transposeInPlace();")
+                return
+            if alias:           # Fortran evaluates the right-hand side completely before assigning
+                code = f"{code}.eval()" if postfix_only(code) else f"({code}).eval()"
         self.emit(ind, f"{target} = {code};")
+
+    # intrinsics whose result is a new object (products, reductions): no aliasing with their arguments
+    NO_ALIAS = {"matmul", "dot_product", "sum", "product", "maxval", "minval", "norm2", "size", "any", "all",
+                "count", "maxloc", "minloc", "lbound", "ubound", "allocated", "shape"}
+    # intrinsics that rearrange elements: aliasing if the assigned array is an argument
+    REARRANGE = {"transpose", "reshape", "cshift", "eoshift", "spread", "pack", "unpack"}
+
+    @staticmethod
+    def designator(node):
+        """(path of the variable / component, subscript text of the last part or None)"""
+        k = cls(node)
+        if k == "Name":
+            return lname(node), None
+        if k == "Part_Ref":
+            return lname(node.items[0]), str(node.items[1]).replace(" ", "").lower()
+        if k == "Data_Ref":
+            parts = [Translator.designator(p) for p in node.items]
+            return "%".join(p for p, _ in parts), parts[-1][1]
+        return None, None
+
+    def aliasing(self, lhs_n, rhs_n):
+        """does the right-hand side read the assigned array in a way that Eigen's lazy evaluation could
+        overwrite before it is read? -> False | True | "transpose" (a = transpose(a))"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        path, subs = self.designator(lhs_n)
+        if path is None:
+            return True
+        if cls(rhs_n) == "Intrinsic_Function_Reference" and lname(rhs_n.items[0]) == "transpose" and \
+                subs is None and self.designator(items_of(rhs_n.items[1])[0]) == (path, None):
+            return "transpose"
+        for node in walk(rhs_n, (F.Name, F.Part_Ref, F.Data_Ref)):
+            up = node.parent
+            if (cls(up) == "Part_Ref" and up.items[0] is node) or cls(up) == "Data_Ref":
+                continue                            # part of a larger designator
+            p, s = self.designator(node)
+            if p != path:
+                continue
+            safe, rearranged, up = False, False, node.parent
+            while up is not None and up is not rhs_n.parent:
+                if cls(up) == "Intrinsic_Function_Reference":
+                    fn = lname(up.items[0])
+                    safe |= fn in self.NO_ALIAS
+                    rearranged |= fn in self.REARRANGE
+                elif cls(up) in ("Function_Reference", "Structure_Constructor"):
+                    safe = True                     # result of a procedure: a new object
+                elif cls(up) == "Part_Ref" and self.lookup(lname(up.items[0])) is None and \
+                        self.lookup_proc(lname(up.items[0])) is not None:
+                    safe = True
+                up = up.parent
+            if safe:
+                continue
+            if rearranged or (s != subs and not self.disjoint(subs, s)):
+                return True
+        return False
+
+    @staticmethod
+    def disjoint(a, b):
+        """sections that cannot overlap partially: a dimension indexed by two different integer
+        literals, or by two scalars with all other dimensions equal (a(i, :) = a(j, :): the same or
+        disjoint rows)"""
+        if a is None or b is None:
+            return False
+        da, db = a.split(","), b.split(",")
+        if len(da) != len(db):
+            return False
+        for k, (x, y) in enumerate(zip(da, db)):
+            if ":" in x or ":" in y:
+                continue
+            if x != y and x.lstrip("-").isdigit() and y.lstrip("-").isdigit():
+                return True
+            if all(u == w for m, (u, w) in enumerate(zip(da, db)) if m != k):
+                return True
+        return False
 
     def s_Pointer_Assignment_Stmt(self, node, ind):
         lhs, rhs = self.expr(node.items[0]), self.expr(node.items[2])
@@ -1260,7 +1428,8 @@ class Translator:
                 if v is not None and v.base == "procedure":         # call of a procedure argument
                     iface = self.find_iface(v.tname)
                     argc = self.bound_args(iface, args, False) if iface is not None else self.plain_args(args)
-                    self.emit(ind, f"{v.cname}({', '.join(argc)});")
+                    callee = f"(*{v.cname})" if v.opt_kind else v.cname     # optional: std::optional<std::function>
+                    self.emit(ind, f"{callee}({', '.join(argc)});")
                     return
                 if v is not None:
                     raise Untranslatable("procedure-pointer-call")
@@ -1423,9 +1592,11 @@ class Translator:
             self.emit(ind, f"{x.raw or x.code} = nullptr;")
 
     def s_If_Stmt(self, node, ind):
-        cond = self.expr(node.items[0])
+        cond = X(self.condition(node.items[0]))
         sub = Translator(self.prog, self.mod, self.proc, self.report)
-        sub.overrides = self.overrides
+        # same translation state: overrides, shifted loop variables, loop declarations
+        sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
+            self.overrides, self.shift, self.loop_local, self.loop_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):
             self.emit(ind, f"if ({cond.code}) {sub.out[0]}")
@@ -1517,13 +1688,26 @@ class Translator:
         self.emit(ind, f"{lhs.code} = ({mask.code}).select({self.matrix(rhs)}, {lhs.code});")
 
     # constructs
+    def condition(self, node):
+        """condition of an if; if it cannot be translated (e.g. it tests the error flag), the body is
+        still translated and the condition becomes `false` with the Fortran text as TODO"""
+        try:
+            if self.err_uses(node):
+                raise Untranslatable("error-arg")
+            return self.expr(node).code
+        except Untranslatable as e:
+            self.report.add("untranslated", "condition:" + e.category)
+            why = "error flag, replace by try/catch" if e.category == "error-arg" else \
+                f"not translated ({e.category})"
+            return f"false /* {TODO}: {why}: {str(node).replace('*/', '* /')} */"
+
     def s_If_Construct(self, node, ind):
         for c in node.content:
             k = cls(c)
             if k == "If_Then_Stmt":
-                self.emit(ind, f"if ({self.expr(c.items[0]).code}) {{")
+                self.emit(ind, f"if ({self.condition(c.items[0])}) {{")
             elif k == "Else_If_Stmt":
-                self.emit(ind, f"}} else if ({self.expr(c.items[0]).code}) {{")
+                self.emit(ind, f"}} else if ({self.condition(c.items[0])}) {{")
             elif k == "Else_Stmt":
                 self.emit(ind, "} else {")
             elif k == "End_If_Stmt":
@@ -1531,31 +1715,79 @@ class Translator:
             else:
                 self.block([c], ind + 1)
 
+    def index_uses(self, loop, n):
+        """(uses of loop variable n as array index with lower bound 1, other uses, passed as argument)"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        idx = other = 0
+        arg = False
+        for nm in walk(loop.content[1:-1], F.Name):
+            if lname(nm) != n:
+                continue
+            expr, holder = nm, nm.parent
+            if cls(holder) == "Level_2_Expr" and holder.items[0] is nm and holder.items[1] in "+-" and \
+                    cls(holder.items[2]) == "Int_Literal_Constant":
+                expr, holder = holder, holder.parent
+            if cls(holder) == "Section_Subscript_List" and cls(holder.parent) == "Part_Ref":
+                ref = holder.parent
+                pos = list(holder.items).index(expr) if expr in holder.items else 0
+                if cls(ref.parent) == "Data_Ref" and ref.parent.items[0] is not ref:
+                    idx += 1                    # component array: lower bound assumed 1
+                    continue
+                v = self.lookup(lname(ref.items[0]))
+                if v is None:
+                    arg |= self.lookup_proc(lname(ref.items[0])) is not None
+                    other += 1
+                elif v.rank > pos and self.lower_bounds(v)[pos] is None:
+                    idx += 1
+                else:
+                    other += 1
+            elif cls(holder) in ("Actual_Arg_Spec_List", "Actual_Arg_Spec", "Component_Spec_List") and \
+                    cls(holder.parent if cls(holder) == "Actual_Arg_Spec_List" else holder.parent.parent) \
+                    != "Intrinsic_Function_Reference":
+                arg = True                      # by reference: a shifted value is no lvalue
+            else:
+                other += 1
+        return idx, other, arg
+
     def s_Block_Nonlabel_Do_Construct(self, node, ind):
         head = node.content[0]
         if "Label" in cls(head) or node.content[-1].items[1] is not None:
             raise Untranslatable("named-do")
         ctrl = head.items[1]
+        n, shift = None, 0
         if ctrl is None:
             self.emit(ind, "while (true) {")
         elif ctrl.items[0] is not None:
             self.emit(ind, f"while ({self.expr(ctrl.items[0]).code}) {{")
         else:
             var, bounds = ctrl.items[1]
+            n = lname(var)
+            v = self.lookup(n)
             i = self.expr(var).code
-            lo, hi = self.expr(bounds[0]).code, self.expr(bounds[1])
-            if len(bounds) == 2:
-                cond, inc = f"{i} <= {par(hi, P_REL, True)}", f"++{i}"
+            decl = f"{self.cpp_type(v)} " if n in self.loop_decl and v is not None else ""
+            st = self.expr(bounds[2]).code if len(bounds) > 2 else "1"
+            if n in self.loop_local and self.cfg["zero_based_loops"] and st in ("1", "-1"):
+                idx, other, arg = self.index_uses(node, n)
+                shift = 1 if idx > other and not arg else 0
+            lo, hi = self.minus(bounds[0], shift), self.expr(bounds[1])
+            if st == "1":
+                cond = f"{i} < {par(hi, P_REL, True)}" if shift else f"{i} <= {par(hi, P_REL, True)}"
+                inc = f"++{i}"
+            elif re.fullmatch(r"-\d+", st):
+                end = self.minus(bounds[1], shift) if shift else par(hi, P_REL, True)
+                cond, inc = f"{i} >= {end}", f"--{i}" if st == "-1" else f"{i} -= {st[1:]}"
+            elif re.fullmatch(r"\d+", st):
+                cond, inc = f"{i} <= {par(hi, P_REL, True)}", f"{i} += {st}"
             else:
-                st = self.expr(bounds[2]).code
-                if re.fullmatch(r"-\d+", st):
-                    cond, inc = f"{i} >= {par(hi, P_REL, True)}", f"--{i}" if st == "-1" else f"{i} -= {st[1:]}"
-                elif re.fullmatch(r"\d+", st):
-                    cond, inc = f"{i} <= {par(hi, P_REL, True)}", f"{i} += {st}"
-                else:
-                    raise Untranslatable("do-step-sign")
-            self.emit(ind, f"for ({i} = {lo}; {cond}; {inc}) {{")
-        self.block(node.content[1:-1], ind + 1)
+                raise Untranslatable("do-step-sign")
+            self.emit(ind, f"for ({decl}{i} = {lo}; {cond}; {inc}) {{")
+        if shift:
+            self.shift[n] = shift
+        try:
+            self.block(node.content[1:-1], ind + 1)
+        finally:
+            self.shift.pop(n, None)
         self.emit(ind, "}")
 
     def s_Case_Construct(self, node, ind):
@@ -1587,7 +1819,36 @@ class Translator:
             else:
                 self.block([c], ind + 1)
 
+    def callback_cast(self, node, ind):
+        """select type of the user data in a callback implementation: only the body of the guard"""
+        p = self.proc
+        assoc = node.content[0].items[0]
+        saved = dict(self.overrides)
+        self.overrides[lname(assoc) if assoc is not None else p.cb_arg] = p.vars[p.cb_arg]
+        guard, default = None, []
+        for c in node.content[1:]:
+            k = cls(c)
+            if k == "Type_Guard_Stmt":
+                guard = c.items[1] is not None
+            elif k == "End_Select_Type_Stmt":
+                break
+            elif guard:
+                self.block([c], ind)
+            elif guard is False and cls(c) != "Comment":
+                default.append(c)
+        self.overrides = saved
+        # class default: usually an assertion that cannot fail any more (the type is static in C++)
+        trivial = ("Return_Stmt", "Stop_Stmt", "Error_Stop_Stmt", "Continue_Stmt")
+        if any(cls(c) not in trivial and not (cls(c) == "Call_Stmt" and lname(c.items[0]) in self.macro_calls)
+               and not (cls(c) == "Assignment_Stmt" and self.is_err(c.items[0])) for c in default):
+            self.report.add("todo", "callback-default")
+            for c in default:
+                self.fortran_comment(c, ind, "class default of the user data cast (dropped)")
+
     def s_Select_Type_Construct(self, node, ind):
+        if self.proc is not None and self.proc.cb_select is not None and \
+                (node.node if cls(node) == "_Trimmed" else node) is self.proc.cb_select:
+            return self.callback_cast(node, ind)
         head = node.content[0]
         assoc, sel_node = head.items
         sel = self.expr(sel_node)
@@ -1632,7 +1893,7 @@ class Translator:
         self.overrides = saved
 
     def in_const_method(self, x):
-        p = self.proc
+        p = self.method_proc()
         return bool(p and p.pass_arg and p.vars[p.pass_arg].intent == "in" and (x.on_this or x.code == "*this"))
 
 
@@ -1653,6 +1914,19 @@ class _Trimmed:
 
     def __str__(self):
         return "\n".join(str(c) for c in self.content)
+
+
+def postfix_only(code):
+    """no operator outside of parentheses / brackets: a member call can be appended directly"""
+    depth = 0
+    for ch in code:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0 and ch in " +-*/!&|?":
+            return False
+    return True
 
 
 def is_zero(code):
@@ -1813,6 +2087,10 @@ def i_present(tr, n, pos, kw):
     v = tr.lookup(lname(pos[0]))
     if v is None or not v.opt_kind:
         raise Untranslatable("present")
+    if v.opt_kind == "empty":
+        if tr.storage(v) in ("stdvec", "vec3"):
+            return X(f"!{v.cname}.empty()", 0, "logical", P_UNARY, neg=X(f"{v.cname}.empty()", 0, "logical"))
+        return X(f"{v.cname}.size() > 0", 0, "logical", P_REL, neg=X(f"{v.cname}.size() == 0", 0, "logical", P_EQ))
     return X(f"{v.cname}.has_value()", 0, "logical")
 
 

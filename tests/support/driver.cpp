@@ -7,6 +7,7 @@
 #include "poly_mod.hpp"
 #include "shape_mod.hpp"
 #include "solver_mod.hpp"
+#include "problem_mod.hpp"
 
 using namespace project;
 
@@ -61,6 +62,14 @@ int main()
   print(tab);
   print(hst[0]);
   print(hst[1]);
+  vec xo(4);
+  mat ao(3, 3);
+  xo << 1.0, 2.0, 3.0, 4.0;
+  for (int j = 1; j <= 3; ++j)
+    for (int i = 1; i <= 3; ++i) ao(i - 1, j - 1) = i + 0.5 * j * j;
+  overlap_demo(xo, ao);
+  print(xo);
+  print(ao);
   vec gs(4), gx(3);
   gx << 1.0, 2.0, 3.0;
   gather_shifted(gx, gs);
@@ -72,5 +81,16 @@ int main()
   const scalar factor = 0.5;
   fp.solve([&](const vec& x, vec& f) { f = factor * (x.array() - 3.0).matrix(); }, x0);
   print(x0);
+  problem prob;
+  x0 << 1.0, 2.0;
+  prob.solve(x0);
+  print(x0);
+  x0 << -1.0, 5.0;
+  solve_problem(prob, x0);
+  print(x0);
+  solve_shifted(prob, 0.25, x0);
+  vec wn(3);
+  wn << 1.0, -2.0, 0.5;
+  std::printf("%24.15E%24.15E%24.15E\n", x0(0), x0(1), weighted_norm(wn, 0.3));
   return 0;
 }

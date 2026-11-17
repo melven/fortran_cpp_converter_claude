@@ -13,7 +13,7 @@ HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
 SUPPORT = os.path.join(HERE, "support")
 EIGEN = "/usr/include/eigen3"
-MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod", "generic_mod"]
+MODULES = ["expm_mod", "block_lu_mod", "shape_mod", "features_mod", "poly_mod", "solver_mod", "generic_mod", "problem_mod"]
 
 needs_cxx = pytest.mark.skipif(not (shutil.which("g++") and os.path.isdir(EIGEN)), reason="g++/Eigen missing")
 
@@ -70,7 +70,8 @@ def test_report(out):
     assert "inconsistent-type-case:Holder_Type,holder_type" in todo
     for name, counters in files.items():
         if "features" in name:
-            assert set(counters["untranslated"]) == {"error-arg:If_Construct", "write:format-descriptor"}
+            assert set(counters["untranslated"]) == {"condition:error-arg", "write:format-descriptor",
+                                                     "condition:intrinsic:verify"}
         else:
             assert not counters["untranslated"], name
 
@@ -95,10 +96,10 @@ def test_expressions(out):
     assert "PROJECT_" not in cpp and "project_macros" not in cpp
     assert "solve_inplace(D, N);" in cpp
     lu = read(out, "block_lu_mod.cpp")
-    assert "diag[i - 1] = diag[i - 1] - lower[i - 2] * upper[i - 2];" in lu
+    assert "diag[i] = diag[i] - lower[i - 1] * upper[i - 1];" in lu
     assert "diag.assign(nblocks, mat(bs, bs));" in lu
     assert "this->nblocks = nblocks;" in lu and "bs = this->bs;" in lu
-    assert "  for (i = nblocks - 1; i >= 1; --i)\n  {\n" in lu
+    assert "  for (int i = nblocks - 1; i >= 1; --i)\n  {\n" in lu
 
 
 def test_classes(out):
@@ -125,14 +126,16 @@ def test_classes(out):
     assert "//! Horner scheme\n//! @param[in] c coefficients 0..n\n//! @param[in] x evaluation point\n" \
            "//! @return value of the polynomial\nscalar poly_eval(" in read(out, "poly_mod.hpp")
     assert "block row and column" not in read(out, "block_lu_mod.cpp")
-    assert "  int k;  //!< loop index\n" in read(out, "poly_mod.cpp")
+    # binding comment only if the procedure has no documentation of its own
+    assert "short description" not in lu and "  void factorize();  //!< LU decomposition of all blocks\n" in lu
+    assert "  // k: loop index\n" in read(out, "poly_mod.cpp")
     assert "private:" in lu and "int bs = 0;  //!< block size" in lu
 
 
 def test_features(out):
     hpp, cpp = read(out, "features_mod.hpp"), read(out, "features_mod.cpp")
     assert "scalar clamp(scalar x, scalar lo, scalar hi);" in hpp and "int clamp(int x, int lo, int hi);" in hpp
-    assert "scalar mean(const vec& x, const std::optional<vec>& weights = std::nullopt);" in hpp
+    assert "scalar mean(const vec& x, const vec& weights = vec());" in hpp
     assert "void fill(Eigen::Ref<vec> x, scalar value, std::optional<int> first = std::nullopt);" in hpp
     assert "void swap_rows(mat& a, int i, int j);" in hpp
     assert "wrappers::Legacy legacy;" in hpp and '#include "legacy.hpp"' in hpp
@@ -143,18 +146,18 @@ def test_features(out):
     assert "auto&& s = h.inner;" in cpp                # pointer associated once -> reference
     assert "auto&& smp = s.samples;" in cpp and "smp(0) = 2.0 * smp(0);" in cpp
     assert "h.owned = std::make_unique<stats>();" in cpp
-    assert "lu = block_lu(n, 2);" in cpp and "tmp = block_lu(1, n);" in cpp
+    assert "lu = block_lu(n, 2);" in cpp and "block_lu tmp(1, n);" in cpp
     assert "// tmp.finalize();  TODO(f2cpp): destructor runs automatically" in cpp
     assert 'text = "medium " + std::to_string(k) + "/" + std::to_string(max_items);' in cpp
     # lower bound 0: shifted without warning; other lower bounds: warning
     assert "h.phi.assign(n + 1, Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>(2, 2));\n" in cpp
     assert "has lower bound(s) 0" not in cpp
-    assert "std::vector<int> idx(4), shifted(3);" in cpp and "shifted[0] = lo;" in cpp
+    assert "std::vector<int> idx(4);" in cpp and "shifted[0] = lo;" in cpp
     assert "std::fill(idx.begin(), idx.end(), 0);" in cpp
     assert "'shifted' has" not in cpp and "'idx' has" not in cpp       # constant bounds: exact shift, no warning
     assert "// TODO(f2cpp): 'v' has the variable lower bound(s) lo in Fortran" in cpp
     assert "dt = t / 16 + t / (n * n) + static_cast<int>(std::pow(2, n));" in cpp
-    assert "for (k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
+    assert "for (int k = 0; k <= static_cast<int>(phi.size()) - 1; ++k)\n" in cpp
     poly = read(out, "poly_mod.cpp")
     # lower bound -1 and indirect access through an index array with lower bound 0
     assert "ghost.resize(n + 2);" in poly and "idx.resize(m + 1);" in poly and "ghost(0) = -10.0;" in poly
@@ -162,10 +165,10 @@ def test_features(out):
     assert "ghost((idx(Eigen::seq(1, 2)).array() + 1)) = 1.5 * ghost((idx(Eigen::seq(1, 2)).array() + 1));" in poly
     assert "// TODO(f2cpp):" not in poly
     assert "degree = c.size() - 1;" in poly and "coeff.resize(degree + 1);" in poly
-    assert "for (k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
+    assert "for (int k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
     assert "vec w(c.size());" in poly and "w(k - 1) = k * c(k);" in poly
     assert "d(Eigen::seq(0, n - 1)) = w(Eigen::seq(0, n - 1));" in poly
-    assert "p.resize(c.size() - 1 + 1, x.size());" in poly and "p(k, i - 1) = c(k) * std::pow(x(i - 1), k);" in poly
+    assert "mat p(c.size() - 1 + 1, x.size());" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
     assert "hist[k] = (k + 1) * table(Eigen::seq(0, 1), Eigen::seq(0, 1));" in poly
     assert "h.phi[k](0, 0) = dt * k + h.phi[0].rows();" in cpp
     assert "phi.resize(h.phi.size());" in cpp
@@ -193,8 +196,8 @@ def test_features(out):
     assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
     # integer arrays: std::vector<int> unless used in array expressions / as vector subscript
     assert "int count_marked(const std::vector<int>& flags);" in hpp
-    assert "std::vector<int> marks, copy;" in cpp and "Eigen::VectorXi sel, shifted;" in cpp
-    assert "std::vector<int> fixed(3);" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
+    assert "std::vector<int> marks;" in cpp and "Eigen::VectorXi sel;" in cpp
+    assert "std::vector<int> fixed = {1, 0, 1};" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
     assert "marks.resize(m);" in cpp and "std::fill(marks.begin(), marks.end(), 0);" in cpp
     assert "marks[i - 1] = 1;" in cpp and "copy = marks;" in cpp and "fixed = {1, 0, 1};" in cpp
     assert "count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes[3];" in cpp
@@ -217,19 +220,24 @@ def test_features(out):
     assert "vec blocks;" in hpp and "Eigen::Array<stats, Eigen::Dynamic, Eigen::Dynamic> cells;" in hpp
     assert "g.blocks.resize(2 * 2 * n * (n + 1));" in cpp and "g.cells.resize(n, n + 1);" in cpp
     assert "g.blocks.setZero();" in cpp
-    assert "for (j = 1; j <= (n + 1); ++j)\n" in cpp
-    assert "g.blocks(0 + 2 * (1 + 2 * (i - 1 + n * (j - 1)))) = " in cpp
-    assert "+ g.cells(i - 1, j - 1).total + 2;" in cpp
+    assert "for (int j = 0; j < (n + 1); ++j)\n" in cpp
+    assert "g.blocks(0 + 2 * (1 + 2 * (i + n * (j)))) = " in cpp
+    assert "+ g.cells(i, j).total + 2;" in cpp
+    assert "if (g.cells(i, j).samples.size() > 0) g.cells(i, j).samples.resize(0);" in cpp    # one-line if
     assert "tmp = v((order.array() - 1));" in cpp and "v((iperm.array() - 1)) = tmp;" in cpp
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp
     assert "double accurate_sum(" in cpp
-    assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  // TODO(f2cpp): uses error flag" in cpp
+    # condition on the error flag: TODO, but the body is translated
+    assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  if (false /* TODO(f2cpp): error flag, replace by " \
+           "try/catch: ierr /= 0 */)\n  {\n    std::cout << \"accumulate failed\" << std::endl;\n    return;\n  }" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
     assert "m = project::mean(samples(Eigen::seq(0, n - 1)));" in cpp
     assert "b = (a.array() > 0.0).select(a, b);" in cpp
     assert "  }\n  else if (k >= 3 && k <= max_items)\n  {\n" in cpp
-    assert "// F: IF (ierr /= 0) THEN" in cpp
+    # other untranslatable condition
+    assert 'if (false /* TODO(f2cpp): not translated (intrinsic:verify): VERIFY(label, \'abc\') > 0 */) ' \
+           'text = "x";' in cpp
 
 
 def test_pfunit(out):
@@ -286,14 +294,14 @@ def test_compiles(out, name):
 def test_same_results_as_fortran(out, tmp_path):
     d = out[0]
     srcs = [os.path.join(CORPUS, f) for f in ("expm_mod.F90", "block_lu_mod.F90", "shape_mod.F90", "poly_mod.F90",
-                                               "solver_mod.F90", "driver.F90")]
+                                               "solver_mod.F90", "problem_mod.F90", "driver.F90")]
     run(["gfortran", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-J", str(tmp_path), *srcs,
          "-llapack", "-o", str(tmp_path / "fdriver")], CORPUS)
     ref = run([str(tmp_path / "fdriver")], d).split()
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
-         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "-llapack", "-o", "cdriver"], d)
+         "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run(["./cdriver"], d).split()
-    assert len(res) == len(ref) == 49
+    assert len(res) == len(ref) == 69
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
@@ -522,9 +530,12 @@ def test_callbacks_with_user_data(out):
     assert hpp.index("class fixed_point;") < hpp.index("using NonLinearFunction") < hpp.index("class fixed_point final")
     assert "using SolverObserver = std::function<void(const fixed_point& solver, int iterations)>;" in hpp
     assert "void solve(const NonLinearFunction& fun, vec& x);" in hpp
-    assert "void fixed_point_solve(const NonLinearFunction& fun, vec& x, scalar tol, int max_iter);" in hpp
+    assert "void fixed_point_solve(const NonLinearFunction& fun, vec& x, scalar tol, int max_iter, " \
+           "const std::optional<NonLinearFunction>& progress = std::nullopt);" in hpp
     assert "userData" not in hpp and "userData" not in cpp
     assert "fun(x, f);" in cpp and "if (residual_norm(fun, x) < tol) break;" in cpp
+    assert "const std::optional<NonLinearFunction>& progress = std::nullopt" in hpp
+    assert "if (progress.has_value()) (*progress)(x, f);" in cpp                  # optional procedure
     assert "fixed_point_solve(fun, x, tol, max_iter);" in cpp
     assert "if (monitor)\n" in cpp and "monitor(x, f);" in cpp
     assert not out[1].files[os.path.join(CORPUS, "solver_mod.F90")]["info"]
@@ -542,9 +553,9 @@ def test_procedure_map_and_callback_implementation(tmp_path):
     c["procedure_map"] = {"nonlinearfunction": "my::Callback"}
     translate([str(tmp_path / "impl_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "solver_mod.F90")])
     cpp = (tmp_path / "impl_mod.cpp").read_text()
-    assert "fixed_point_solve(my_res, x, 1.e-8, 10);" in cpp         # user data dropped: wrap by hand in a lambda
-    assert "void my_res(const vec& x, vec& f)" in cpp
-    assert "// TODO(f2cpp): not translated (dropped-argument)\n  // F: SELECT TYPE(userData)" in cpp
+    # user data type is not parsed (existing C++ class): free function with a typed parameter
+    assert "fixed_point_solve([&](const vec& x, vec& f) { my_res(obj, x, f); }, x, 1.e-8, 10);" in cpp
+    assert "void my_res(const thing& userData, const vec& x, vec& f)\n{\n  f = x;\n  f = userData.a * x;\n}" in cpp
 
 
 @needs_cxx
@@ -628,3 +639,128 @@ def test_vector_subscript_of_components_with_lower_bounds(tmp_path):
     cpp = (tmp_path / "ns_mod.cpp").read_text()
     assert "norm_scal = norm_scal_grp_tmp((norm_scal_grp_idx(Eigen::seq(1, Eigen::last)).array() + 1));" in cpp
     assert not report.files[path]["untranslated"]
+
+
+def test_callback_implementations_become_methods(out):
+    hpp, cpp = read(out, "problem_mod.hpp"), read(out, "problem_mod.cpp")
+    assert "  //! residual f = a * (x - target)\n  void problem_residual(const vec& x, vec& f) const;" in hpp
+    assert "void problem::problem_residual(const vec& x, vec& f) const\n{\n" \
+           "  f = (a * (x.array() - target)).matrix();\n}" in cpp
+    assert "fixed_point_solve([&](const vec& x, vec& f) { problem_residual(x, f); }, x, 1.e-12, 100);" in cpp
+    assert "fp.solve([&](const vec& x, vec& f) { prob.problem_residual(x, f); }, x);" in cpp
+    assert "userData" not in cpp and "TODO" not in cpp.split("markers.")[1]
+
+
+def test_internal_procedures_become_lambdas(out):
+    poly, prob = read(out, "poly_mod.cpp"), read(out, "problem_mod.cpp")
+    # defined before use (sq before accumulate), capturing the host variables by reference
+    assert "  auto sq = [&](scalar v) -> scalar\n  {" in poly
+    assert poly.index("auto sq = ") < poly.index("auto accumulate = ") < poly.index("auto scaled = ")
+    assert "  //! adds the weighted square of v\n  auto accumulate = [&](scalar v)\n  {\n" \
+           "    r = r + w * sq(v);\n    calls = calls + 1;\n  };" in poly
+    assert "accumulate(x(k - 1));" in poly and "r = std::sqrt(r) + scaled(static_cast<scalar>(calls));" in poly
+    # an internal procedure as callback (its user data argument is dropped)
+    assert "  auto shifted_residual = [&](const vec& x, vec& f)\n  {\n" \
+           "    f = (prob.a * (x.array() - prob.target - shift)).matrix();\n  };" in prob
+    assert "fixed_point_solve(shifted_residual, x, 1.e-12, 100);" in prob
+    assert "internal" not in str(out[1].files)
+
+
+def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
+    expm, poly, lu = read(out, "expm_mod.cpp"), read(out, "poly_mod.cpp"), read(out, "block_lu_mod.cpp")
+    # merged with the defining assignment / allocate; others right before the first top-level use
+    assert "  int m = A.rows();\n" in expm and "  mat As(m, m);\n" in expm
+    assert "  scalar nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;\n  int s = 0;\n" in expm
+    assert "  scalar c;\n  for (int k = 2; k <= pade_coeff.size(); ++k)\n" in expm
+    assert "  int bs = this->bs;\n" in lu                     # local hides the member: still mergeable
+    # loop variable used mostly as index: 0-based loop, other uses get + 1
+    assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
+    assert "for (int i = 0; i < nblocks; ++i)\n" in lu and "if (i + 1 > 1)\n" in lu
+    # switched off
+    c = cfg(declare_at_first_use=False, zero_based_loops=False)
+    translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
+    old = (tmp_path / "block_lu_mod.cpp").read_text()
+    assert "  int i, info, bs;\n" in old and "for (i = 1; i <= nblocks; ++i)\n" in old
+
+
+def test_lambda_inside_method_sees_the_host(tmp_path):
+    (tmp_path / "lam_mod.F90").write_text("""module lam_mod
+  type :: acc_type
+    real :: total = 0.0
+    real :: scale = 2.0
+  contains
+    procedure :: add
+  end type
+contains
+  subroutine add(this, x, userData)
+    class(acc_type), intent(inout) :: this
+    real, intent(in) :: x(:)
+    class(*), intent(in) :: userData
+    real :: scale
+    integer :: i
+    scale = 3.0
+    do i = 1, size(x)
+      call step(x(i))
+    end do
+  contains
+    subroutine step(v)
+      real, intent(in) :: v
+      this%total = this%total + this%scale * v + scale
+      if (v > 0) this%total = this%total + v
+      call other(userData)
+    end subroutine step
+  end subroutine add
+end module lam_mod
+""")
+    translate([str(tmp_path / "lam_mod.F90")], cfg(), str(tmp_path))
+    cpp, hpp = (tmp_path / "lam_mod.cpp").read_text(), (tmp_path / "lam_mod.hpp").read_text()
+    assert "total = total + this->scale * v + scale;" in cpp      # host local scale hides the member
+    assert "if (v > 0) total = total + v;" in cpp
+    assert "    other();" in cpp                                    # the host's dropped user data
+    assert "private:\n  scalar total = 0.0;\n  scalar scale = 2.0;" in hpp   # used only by its own method
+
+
+def test_aliasing(out):
+    poly = read(out, "poly_mod.cpp")
+    assert "x(Eigen::seq(1, n - 1)) = x(Eigen::seq(0, n - 2)).eval();" in poly           # overlapping
+    assert "x = x(Eigen::seq(n - 1, 0, -1)).eval();" in poly
+    assert "a = (a + a.transpose()).eval();" in poly and "a.transposeInPlace();" in poly
+    assert "a.col(0) = a * a.col(1);" in poly                     # products are evaluated by Eigen
+    assert "a.row(1).transpose() = a.row(0).transpose() * 2.0;" in poly   # same or disjoint rows
+    assert "a(Eigen::seq(0, 1), 2) = (a(Eigen::seq(1, 2), 2) + a(Eigen::seq(0, 1), 0)).eval();" in poly
+    assert "eval()" not in read(out, "block_lu_mod.cpp")
+
+
+def test_output_file_names_keep_the_module_spelling(tmp_path, capsys):
+    from f2cpp.cli import main
+    (tmp_path / "MyThing_mod.F90").write_text("module MyThing_mod\ninteger, parameter :: n = 2\nend module\n")
+    (tmp_path / "user_mod.F90").write_text("module user_mod\nuse MyThing_mod, only: n\nuse Other_Mod, only: m\n"
+                                           "end module\n")
+    (tmp_path / "prog.F90").write_text("program p\nend program\n")
+    (tmp_path / "other.F90").write_text("module renamed_mod\nend module\n")
+    main([str(tmp_path / f) for f in ("MyThing_mod.F90", "user_mod.F90", "prog.F90", "other.F90")]
+         + ["-o", str(tmp_path / "out")])
+    out = tmp_path / "out"
+    assert (out / "MyThing_mod.hpp").exists() and (out / "MyThing_mod.cpp").exists()
+    hpp = (out / "user_mod.hpp").read_text()
+    assert '#include "MyThing_mod.hpp"' in hpp and '#include "Other_Mod.hpp"' in hpp
+    err = capsys.readouterr().err
+    assert "prog.F90 contains no module" in err
+    assert "other.F90 defines module renamed_mod: the output is renamed_mod.hpp" in err
+
+
+def test_optional_arrays_are_empty_by_default(out, tmp_path):
+    cpp = read(out, "features_mod.cpp")
+    assert "if (weights.size() > 0)\n" in cpp and "m = x.dot(weights) / weights.sum();" in cpp
+    (tmp_path / "o_mod.F90").write_text(
+        "module o_mod\ncontains\nsubroutine f(a, w, idx, s)\nreal, intent(in) :: a(:)\n"
+        "real, intent(in), optional :: w(:)\ninteger, intent(in), optional :: idx(:)\nreal, intent(in), optional :: s\n"
+        "if (.not. present(w)) return\nif (present(idx)) call g(w)\nend subroutine\n"
+        "subroutine g(w)\nreal, intent(in), optional :: w(:)\nend subroutine\n"
+        "subroutine h(a)\nreal, intent(in) :: a(:)\ncall f(a, s=1.0)\ncall f(a, a)\nend subroutine\nend module\n")
+    translate([str(tmp_path / "o_mod.F90")], config.load(), str(tmp_path))
+    hpp, cpp = (tmp_path / "o_mod.hpp").read_text(), (tmp_path / "o_mod.cpp").read_text()
+    assert "void f(const vec& a, const vec& w = vec(), const std::vector<int>& idx = std::vector<int>(), " \
+           "std::optional<scalar> s = std::nullopt);" in hpp
+    assert "if (w.size() == 0) return;" in cpp and "if (!idx.empty()) g(w);" in cpp
+    assert "f(a, vec(), std::vector<int>(), 1.0);" in cpp and "f(a, a);" in cpp
