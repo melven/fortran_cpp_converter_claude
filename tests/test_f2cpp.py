@@ -764,3 +764,54 @@ def test_optional_arrays_are_empty_by_default(out, tmp_path):
            "std::optional<scalar> s = std::nullopt);" in hpp
     assert "if (w.size() == 0) return;" in cpp and "if (!idx.empty()) g(w);" in cpp
     assert "f(a, vec(), std::vector<int>(), 1.0);" in cpp and "f(a, a);" in cpp
+
+
+def test_unwrapped_mutable_wrapper_type(tmp_path):
+    (tmp_path / "mutable_mod.F90").write_text("""module mutable_mod
+  implicit none
+  type MutableRealArray1d_type
+    !> pointer instead of allocatable to make it mutable
+    real, pointer, contiguous :: v(:) => null()
+  end type
+end module mutable_mod
+""")
+    (tmp_path / "cache_mod.F90").write_text("""module cache_mod
+  use mutable_mod, only: MutableRealArray1d_type
+  implicit none
+  type :: cache_type
+    integer :: n = 0
+    type(MutableRealArray1d_type) :: tmp     !< scratch space
+  contains
+    procedure :: setup
+    procedure :: apply
+  end type
+contains
+  subroutine setup(this, n)
+    class(cache_type), intent(inout) :: this
+    integer, intent(in) :: n
+    this%n = n
+    if (associated(this%tmp%v)) deallocate(this%tmp%v)
+    allocate(this%tmp%v(n))
+    this%tmp%v = 0.0
+  end subroutine setup
+  function apply(this, x) result(s)
+    class(cache_type), intent(in) :: this
+    real, intent(in) :: x(:)
+    real :: s
+    this%tmp%v(1:this%n) = 2.0 * x(1:this%n)
+    this%tmp%v(1) = this%tmp%v(1) + 1.0
+    s = sum(this%tmp%v)
+  end function apply
+end module cache_mod
+""")
+    c = cfg()
+    c["unwrap_types"] = {"mutablerealarray1d_type": "v"}
+    translate([str(tmp_path / "mutable_mod.F90"), str(tmp_path / "cache_mod.F90")], c, str(tmp_path))
+    hpp, cpp = (tmp_path / "cache_mod.hpp").read_text(), (tmp_path / "cache_mod.cpp").read_text()
+    assert "mutable vec tmp;  //!< scratch space" in hpp
+    assert "class MutableRealArray1d" not in (tmp_path / "mutable_mod.hpp").read_text()
+    assert "if (tmp.size() > 0) tmp.resize(0);" in cpp and "tmp.resize(n);" in cpp and "tmp.setZero();" in cpp
+    assert "tmp(Eigen::seq(0, n - 1)) = 2.0 * x(Eigen::seq(0, n - 1));" in cpp
+    assert "tmp(0) = tmp(0) + 1.0;" in cpp and "scalar s = tmp.sum();" in cpp
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "cache_mod.cpp"],
+        str(tmp_path))

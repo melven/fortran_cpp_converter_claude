@@ -55,6 +55,7 @@ class Var:
     empty_arrays = True          # class attribute: config optional_arrays == "empty"
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
+    unwrapped: str = None        # variable of an unwrapped wrapper type: name of the wrapped component
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
@@ -570,11 +571,43 @@ class Program:
                     elif b.name in self.cfg["destructor_bindings"] and \
                             not [a for a in p.args if a not in (p.pass_arg, err)]:
                         p.is_dtor, p.bind_name = True, "~"
+        self.unwrap_types()
         for m in self.modules.values():
             for t in m.types.values():
                 p = self.find_type(t.parent, m) if t.parent else None
                 if p:
                     p.children.add(t.name)
+
+    def unwrap_types(self):
+        """variables / components of wrapper types (unwrap_types) take the type of the wrapped
+        component; members become mutable (the Fortran idiom: a pointer component can be changed
+        through an intent(in) object)"""
+        wrap = self.cfg["unwrap_types"]
+        if not wrap:
+            return
+
+        def procs(ps):
+            for p in ps:
+                yield p
+                yield from procs(p.internal.values())
+        for m in self.modules.values():
+            scopes = [(m.vars, False)] + [(t.comps, True) for t in m.types.values()] + \
+                [(p.vars, False) for p in procs([*m.procs.values(), *m.ifaces.values()])]
+            for scope, member in scopes:
+                for v in scope.values():
+                    if v.base != "type" or v.tname not in wrap or v.unwrapped:
+                        continue
+                    t = self.find_type(v.tname, m)
+                    inner = t.comps.get(wrap[v.tname]) if t is not None else None
+                    if inner is None or v.rank:
+                        continue
+                    v.unwrapped = wrap[v.tname]
+                    v.base, v.tname, v.kind, v.polymorphic = inner.base, inner.tname, inner.kind, inner.polymorphic
+                    v.dims, v.rank = list(inner.dims), inner.rank
+                    keep = {"optional", "target", "value"}
+                    v.attrs = (v.attrs & keep) | ({"allocatable"} if inner.rank or inner.has("allocatable")
+                                                   or inner.has("pointer") else set())
+                    v.mutable = member
 
     def file_stem(self, modname):
         """output file name (without extension) of a module: module name, or the name of its

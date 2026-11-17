@@ -160,6 +160,20 @@ error flag); a template may contain several statements. An empty template (`""`)
 an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
 (`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
 
+## Wrapper types
+
+`unwrap_types` replaces a wrapper type around a single component by that component:
+
+```toml
+[unwrap_types]
+mutablerealarray1d_type = "v"     # type with `real, pointer, contiguous :: v(:)`
+```
+
+`type(MutableRealArray1d_type) :: tmp` becomes `mutable vec tmp;` in a class (a plain `vec` for
+locals and arguments); `this%tmp%v(i)` → `tmp(i - 1)`, `allocate(this%tmp%v(n))` →
+`tmp.resize(n)`, `associated(this%tmp%v)` → `tmp.size() > 0`. The wrapper type itself is not
+emitted.
+
 ## Callbacks
 
 | Fortran | C++ |

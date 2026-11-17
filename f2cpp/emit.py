@@ -614,7 +614,7 @@ class ModuleEmitter:
         dirs = self.tr()
         dirs.block(cpp_directives, 0)
 
-        types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types]
+        types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types if t not in cfg["unwrap_types"]]
         aliases = self.tr()     # std::function aliases: before the classes, which use them as arguments
         # a test module used by other (test) modules provides shared helpers: it gets a header
         shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
@@ -645,6 +645,8 @@ class ModuleEmitter:
                     one = type("S", (), {"items": (s.items[0], s.items[1], _One(s, n))})()
                     self.decl_stmt(sink, one, mod.vars, 1 if sink is cpp_priv else 0,
                                    prefix="inline " if sink is hpp else "")
+            elif k == "Derived_Type_Def" and lname(s.content[0].items[1]) in cfg["unwrap_types"]:
+                pending = []                            # wrapper type: replaced by its component
             elif k == "Derived_Type_Def":
                 sink = cpp_priv if mod.is_test and not shared else hpp   # tests have a header only if shared
                 sink.block(pending, 0)

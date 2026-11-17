@@ -550,6 +550,10 @@ class Translator:
         for p in parts[1:]:
             pname, subs = (p.items[0], items_of(p.items[1])) if cls(p) == "Part_Ref" else (p, None)
             n = lname(pname)
+            if cur.var is not None and cur.var.unwrapped == n and cur.whole:
+                if subs is not None:            # x%v(i) of an unwrapped wrapper type: x(i)
+                    cur = self.subscript(cur, cur.var, subs)
+                continue
             if cur.rank > 0:
                 raise Untranslatable("component-of-array")
             td = self.find_type(cur.tname)
@@ -1589,6 +1593,9 @@ class Translator:
     def s_Nullify_Stmt(self, node, ind):
         for a in items_of(node.items[1]):
             x = self.expr(a)
+            if x.var is not None and x.var.unwrapped and self.storage(x.var) == "eigen":
+                self.emit(ind, f"{x.code}.resize({', '.join(['0'] * x.var.rank)});")
+                continue
             self.emit(ind, f"{x.raw or x.code} = nullptr;")
 
     def s_If_Stmt(self, node, ind):
