@@ -837,7 +837,9 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR" in binding
     assert "    call c_f_pointer(mySolver, this_c)\n    call c_f_pointer(this_c%p_impl, obj)" in binding
     assert "int* project_MySolver_n(const project_MySolver* mySolver);" in h
-    assert "  explicit MySolver(project_MySolver* handle) : handle_(handle) {}" in hpp
+    assert "  explicit MySolver(project_MySolver* handle = nullptr) : handle_(handle) {}" in hpp
+    assert "namespace MySolver_private\n{" in hpp and "template <class T = MySolver>\n" \
+           "std::unique_ptr<T> wrapFromC(project_MySolver& c)\n{\n  return std::make_unique<T>(&c);" in hpp
     assert "protected:\n  project_MySolver* handle_ = nullptr;" in hpp
     assert '#ifdef DLLEXPORT\n  DLLEXPORT :: project_MySolver_apply\n#endif' in binding
     # the C interface is only included in the glue; the header declares the handle type itself
@@ -980,7 +982,8 @@ def test_wrapped_class_hierarchy(tmp_path):
     bh, sh = read((d,), "body_mod.hpp"), read((d,), "sphere_mod.hpp")
     sb = read((d,), "sphere_mod_c_binding.F90")
     assert "class body\n{" in bh and "  scalar volume() const;" in bh and "  project_body* handle_ = nullptr;" in bh
-    assert "class sphere final : public body\n{" in sh and "explicit sphere(project_body* handle) : body(handle) {}" in sh
+    assert "class sphere final : public body\n{" in sh and "  using body::body;" in sh
+    assert "std::unique_ptr<T> wrapFromC(project_body& c)\n{\n  return body_private::wrapFromC<T>(c);" in sh
     assert "volume" not in sh and "handle_" not in sh                  # overrides dispatch in the base class
     assert "  type, public :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
         read((d,), "body_mod_c_binding.F90")
@@ -1230,13 +1233,13 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
               wrap=[os.path.join(w, "c_mod.F90")])
     hpp, b = (tmp_path / "c_mod.hpp").read_text(), (tmp_path / "c_mod_c_binding.F90").read_text()
     assert "struct project_B;" in hpp and "class C final : public B" in hpp
-    assert "explicit C(project_B* handle) : B(handle) {}" in hpp and "write_state" not in hpp
+    assert "  using B::B;" in hpp and "return B_private::wrapFromC<T>(c);" in hpp and "write_state" not in hpp
     assert "  use b_mod_c_binding, only: BWrapper_type, B_c" in b and "project_A" not in b + hpp
     # B wrapped as well: B is the root, its override of A's method is wrapped in B
     translate([], c, str(tmp_path), [os.path.join(w, "a_mod.F90")],
               wrap=[os.path.join(w, "b_mod.F90"), os.path.join(w, "c_mod.F90")])
     bh, bb = (tmp_path / "b_wrapper.hpp").read_text(), (tmp_path / "b_wrapper_c_binding.F90").read_text()
-    assert "class B : public A" in bh and "explicit B(project_B* handle) : handle_(handle) {}" in bh
+    assert "class B : public A" in bh and "explicit B(project_B* handle = nullptr) : handle_(handle) {}" in bh
     assert "  void write_state() const;" in bh and "protected:\n  project_B* handle_ = nullptr;" in bh
     assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
     assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb

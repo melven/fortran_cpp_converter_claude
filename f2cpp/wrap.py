@@ -73,6 +73,26 @@ class WrapEmitter(ModuleEmitter):
         """bind(C) type of the C struct of the handle: <Root>_c"""
         return f"{self.c_class_name(self.root(t)[1])}_c"
 
+    def wrap_from_c(self, t, name, ht, hpp):
+        """<Class>_private::wrapFromC<T = Class>(c): C++ object of (derived) type T for the C object c;
+        a derived class forwards to its parent's (hand-written parents must provide the same template)"""
+        cls = name.split("::")[-1]
+        if self.is_root(t):
+            body = "return std::make_unique<T>(&c);"
+        else:
+            parent = self.prog.type_name(t.parent, self.mod)
+            body = f"return {parent}_private::wrapFromC<T>(c);"
+        hpp.emit(0, f"namespace {cls}_private")
+        hpp.emit(0, "{")
+        hpp.emit(0, f"//! C++ object (class T: {cls} or derived) of the C object c")
+        hpp.emit(0, f"template <class T = {cls}>")
+        hpp.emit(0, f"std::unique_ptr<T> wrapFromC({ht}& c)")
+        hpp.emit(0, "{")
+        hpp.emit(1, body)
+        hpp.emit(0, "}")
+        hpp.emit(0, f"}} // namespace {cls}_private")
+        hpp.emit(0, "")
+
     def object_access(self, t, cname, handle, has_err, body):
         """binding statements: the Fortran object `obj` from the handle, around the statements body"""
         decl, stmts, ptr = [], [""], handle
@@ -508,9 +528,11 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(0, f"class {name}{final}{base}")
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
-            hpp.emit(1, f"{name}() = default;  //!< empty object (tests)")
-            init = "handle_(handle)" if self.is_root(t) else f"{prog.type_name(t.parent, mod)}(handle)"
-            hpp.emit(1, f"explicit {name}({ht}* handle) : {init} {{}}  //!< object created in Fortran")
+            if self.is_root(t):
+                hpp.emit(1, f"explicit {name}({ht}* handle = nullptr) : handle_(handle) {{}}  "
+                            "//!< object created in Fortran (nullptr: empty object)")
+            else:                               # no added members: the parent's constructor
+                hpp.emit(1, f"using {prog.type_name(t.parent, mod)}::{prog.type_name(t.parent, mod).split('::')[-1]};")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
             hpp.emit(1, f"{name}({name}&&) = default;")
@@ -546,6 +568,7 @@ class WrapEmitter(ModuleEmitter):
                 hpp.emit(1, f"{ht}* handle_ = nullptr;  //!< the Fortran object (C binding: {stem_h})")
             hpp.emit(0, "};")
             hpp.emit(0, "")
+            self.wrap_from_c(t, name, ht, hpp)
         from .prepass import CPP_MARK
         for p in mod.procs.values():
             for c in p.doc:                             # #ifdef ... around procedures: in all three files

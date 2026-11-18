@@ -1,5 +1,6 @@
 // Wrapped class hierarchy: body (root, deferred volume) and sphere (derived), both wrapped Fortran.
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 
 #include "sphere_mod.hpp"
@@ -10,7 +11,8 @@ using namespace project;
 
 int main()
 {
-  sphere s(project_body_create_sphere(2.0, 3.0));
+  std::unique_ptr<sphere> ps = sphere_private::wrapFromC(*project_body_create_sphere(2.0, 3.0));
+  sphere& s = *ps;
   body& b = s;
   std::printf("%.15e %.15e %.15e\n", b.volume(), b.density(), s.surface());   // dispatch in Fortran
   s.grow(0.5);
