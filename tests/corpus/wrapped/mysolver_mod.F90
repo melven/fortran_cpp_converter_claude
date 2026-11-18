@@ -14,6 +14,7 @@ module mysolver_mod
     real, allocatable :: diag(:)       !< diagonal
     real, allocatable :: coupling(:, :)
     character(len=32) :: label = ''
+    real :: weights(3) = [1.0, 2.0, 3.0]   !< fixed weights
   contains
     procedure :: init => mysolver_init
     procedure :: apply => mysolver_apply

@@ -826,23 +826,38 @@ def test_wrapped_module_end_to_end(tmp_path):
     the result equals the pure Fortran program"""
     d = str(tmp_path)
     w = os.path.join(CORPUS, "wrapped")
-    translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True), d,
+    consts = {"mysolver_type": ["n", "diag", "weights", "label"]}
+    translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True, wrap_constants=consts), d,
               wrap=[os.path.join(w, "mysolver_mod.F90")])
     hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
     binding = read((d,), "mysolver_mod_c_binding.F90")
     assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
            "int* ierr);" in h
     assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
-    assert "typedef struct project_MySolver {\nvoid* p_impl;\n} project_MySolver;" in h
-    assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR" in binding
+    assert "typedef struct project_MySolver {\nvoid* p_impl;\nint n;\nPROJECT_REAL* diag;\nint diag_size;\n" \
+           "PROJECT_REAL weights[3];\n} project_MySolver;" in h
+    assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
+           "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
+           "    real(C_REAL) :: weights(3) = 0\n  end type MySolver_c" in binding
+    # constants: copied into the C struct (wrapFromC), const getters only
+    assert "    this_c%n = obj%n\n    this_c%diag = C_NULL_PTR\n    this_c%diag_size = 0\n    if (allocated(obj%diag)) then\n" \
+           "      this_c%diag = c_loc(obj%diag)\n      this_c%diag_size = size(obj%diag)\n    end if\n" \
+           "    this_c%weights = obj%weights" in binding
+    assert "void project_MySolver_set_constants(project_MySolver* mySolver);" in h
+    assert "  project_MySolver_set_constants(&c);\n  return std::unique_ptr<MySolver>(new MySolver(c));" in cpp
+    assert "  //! problem size\n  int n() const;  //!< constant (C struct)\n" \
+           "  //! diagonal\n  Eigen::Map<const vec> diag() const;  //!< constant (C struct)\n" in hpp
+    assert "Eigen::Map<const vec> MySolver::weights() const\n{\n  return Eigen::Map<const vec>(handle_->weights, 3);" in cpp
+    assert "Eigen::Map<const vec> MySolver::diag() const\n{\n  return Eigen::Map<const vec>(handle_->diag, handle_->diag_size);" in cpp
+    assert "  // TODO(f2cpp): constant label not wrapped: character" in hpp
+    assert "int& n()" not in hpp and "Eigen::Map<vec> diag()" not in hpp
     assert "    call c_f_pointer(mySolver, this_c)\n    call c_f_pointer(this_c%p_impl, obj)" in binding
-    assert "int* project_MySolver_n(const project_MySolver* mySolver);" in h
     assert "namespace MySolver_private\n{\nstd::unique_ptr<MySolver> wrapFromC(project_MySolver& c);" in hpp
     assert "public:\n  MySolver() = default;  //!< empty object\n" in hpp
     assert "protected:\n  explicit MySolver(project_MySolver& c) : handle_(&c) {}  //!< the object created in Fortran\n" \
            "  friend std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c);\n" \
            "  project_MySolver* handle_ = nullptr;" in hpp
-    assert "std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c)\n{\n" \
+    assert "std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c)\n{\n  project_MySolver_set_constants(&c);\n" \
            "  return std::unique_ptr<MySolver>(new MySolver(c));  // new: protected constructor, make_unique has no access" in cpp
     assert '#ifdef DLLEXPORT\n  DLLEXPORT :: project_MySolver_apply\n#endif' in binding
     # the C interface is only included in the glue; the header declares the handle type itself
@@ -852,9 +867,9 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
     assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
-    assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! problem size\n  int& n();\n  //! problem size (const version)\n  const int& n() const;" in hpp
+    assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
     assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
-    assert "  bool verbose() const;\n  //! diagonal\n  Eigen::Map<vec> diag();\n  //! diagonal (const version)\n" in hpp
+    assert "  bool verbose() const;\n  Eigen::Map<mat> coupling();\n" in hpp
     assert "  Eigen::Map<mat> coupling();\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
@@ -891,11 +906,11 @@ def test_wrapped_module_end_to_end(tmp_path):
     run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
          "ref_user.o", "-o", "fdrv"], d)
     ref = run(["./fdrv"], d).split()
-    vals = " ".join(res[:3]).split()
-    assert len(vals) == len(ref) == 5
+    vals = " ".join(res[:4]).split()
+    assert len(vals) == len(ref) == 8
     for a, b in zip(vals, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
-    assert res[3] == "project_MySolver_apply: size of x"
+    assert res[4] == "project_MySolver_apply: size of x"
 
 
 def test_wrapped_module_without_size_checks(tmp_path):

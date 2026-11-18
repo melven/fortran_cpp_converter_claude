@@ -189,6 +189,13 @@ inherit it from the root. A hand-written parent class must provide this protecte
 `.cpp`, reading its members from `c`). Derived classes add no members. Moving to pure C++: delete
 `wrapFromC`, the protected constructor and `handle_`; the public interface stays.
 
+Constants: `[wrap_constants]` with `"mysolver_type" = ["n", "diag", "weights"]` (root types, struct
+handle): members of the C struct (`int n;`, allocatable / pointer rank 1: `PROJECT_REAL* diag; int
+diag_size;` into the Fortran object, fixed size: `PROJECT_REAL weights[3];` copied), filled by
+`project_<Class>_set_constants` (called in `wrapFromC`, usable in Fortran factories), C++ only
+`int n() const` / `Eigen::Map<const vec> diag() const` reading the struct. Changes in Fortran
+after `wrapFromC` are not seen.
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and

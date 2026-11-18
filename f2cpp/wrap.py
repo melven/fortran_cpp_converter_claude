@@ -73,7 +73,7 @@ class WrapEmitter(ModuleEmitter):
         """bind(C) type of the C struct of the handle: <Root>_c"""
         return f"{self.c_class_name(self.root(t)[1])}_c"
 
-    def wrap_from_c(self, t, name, ht, hpp, cpp):
+    def wrap_from_c(self, t, name, ht, hpp, cpp, setter=None):
         """<Class>_private::wrapFromC(c): C++ object of the C object c (protected constructor; derived
         classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
         cls = name.split("::")[-1]
@@ -84,6 +84,8 @@ class WrapEmitter(ModuleEmitter):
         hpp.emit(0, "")
         cpp.emit(0, f"std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c)")
         cpp.emit(0, "{")
+        if setter:
+            cpp.emit(1, f"{setter}(&c);")
         cpp.emit(1, f"return std::unique_ptr<{cls}>(new {cls}(c));  // new: protected constructor, make_unique has no access")
         cpp.emit(0, "}")
         cpp.emit(0, "")
@@ -215,8 +217,9 @@ class WrapEmitter(ModuleEmitter):
     def getters(self, t):
         """public components with a getter: [(var, kind)] kind scalar | array | logical"""
         res = []
+        consts = self.cfg["wrap_constants"].get(self.root(t)[1], [])
         for v in t.comps.values():
-            if not comp_public(t, v):
+            if not comp_public(t, v) or v.name in consts:
                 continue
             if v.base in ("real", "integer") and v.rank == 0 and not v.has("pointer"):
                 res.append((v, "scalar"))
@@ -228,6 +231,105 @@ class WrapEmitter(ModuleEmitter):
                 self.report.add("todo", f"wrap-component:{v.name}")
                 res.append((v, self.component_kind(v)))
         return res
+
+    def constants(self, t):
+        """configured constant components of t: ([(var, kind, size)], [TODO texts]);
+        kind scalar | logical | fixed | array"""
+        cache = self.__dict__.setdefault("constants_cache", {})
+        if t.name not in cache:
+            cache[t.name] = self._constants(t)
+        return cache[t.name]
+
+    def _constants(self, t):
+        names = self.cfg["wrap_constants"].get(t.name, [])
+        if not names:
+            return [], []
+        if not self.is_root(t) or not self.struct_handle(t):
+            self.report.add("todo", f"wrap-constants:{t.name}")
+            return [], [f"constants {', '.join(names)}: only for root types with a struct handle"]
+        res, todo = [], []
+        for n in names:
+            v = t.comps.get(n)
+            size = None
+            if v is None:
+                why = "no such component"
+            elif v.base not in ("real", "integer", "logical") or v.rank > 1 or v.has("pointer") and not v.rank:
+                why = self.component_kind(v)
+            elif v.rank == 0:
+                why = None
+            elif v.has("allocatable") or v.has("pointer"):
+                why = None if v.base != "logical" else self.component_kind(v)
+            else:
+                lo, up = v.dims[0]
+                size = str(up).strip() if up is not None else ""
+                why = None if size.isdigit() and (lo is None or str(lo).strip() == "1") and v.base != "logical" \
+                    else self.component_kind(v) + " (literal size, lower bound 1)"
+            if why:
+                self.report.add("todo", f"wrap-constant:{n}")
+                todo.append(f"constant {n} not wrapped: {why}")
+                continue
+            kind = ("logical" if v.base == "logical" else "scalar") if not v.rank else \
+                "fixed" if size else "array"
+            res.append((v, kind, size))
+        return res, todo
+
+    def constants_struct(self, consts):
+        """(C struct member lines, Fortran bind(C) component lines)"""
+        c, f = [], []
+        for v, kind, size in consts:
+            ct, ft, n = self.c_type(v), self.f_type(v), v.cname
+            if kind in ("scalar", "logical"):
+                c.append(f"{ct} {n};")
+                f.append(f"{ft} :: {n} = " + (".false." if kind == "logical" else "0"))
+            elif kind == "fixed":
+                c.append(f"{ct} {n}[{size}];")
+                f.append(f"{ft} :: {n}({size}) = 0")
+            else:
+                c += [f"{ct}* {n};", f"int {n}_size;"]
+                f += [f"type(C_PTR) :: {n} = C_NULL_PTR", f"integer(C_INT) :: {n}_size = 0"]
+        return c, f
+
+    def set_constants(self, t, consts, fb):
+        """binding routine project_<Class>_set_constants: the constants into the C struct"""
+        cname = self.c_name(t, "set_constants")
+        handle = lower_camel(self.c_class(t))
+        body = []
+        for v, kind, _ in consts:
+            n, m = v.cname, f"obj%{v.name}"
+            if kind == "logical":
+                body.append(f"this_c%{n} = logical({m}, C_BOOL)")
+            elif kind == "array":
+                test = "associated" if v.has("pointer") else "allocated"
+                body += [f"this_c%{n} = C_NULL_PTR", f"this_c%{n}_size = 0", f"if ({test}({m})) then",
+                         f"  this_c%{n} = c_loc({m})", f"  this_c%{n}_size = size({m})", "end if"]
+            else:
+                body.append(f"this_c%{n} = {m}")
+        odecl, ostmts = self.object_access(t, cname, handle, False, body)
+        fb += ["", "  !@c_declaration", f"  !  void {cname}({self.c_type_name(t)}* {handle});",
+               "  !@end_c_declaration",
+               f"  !> copies the constants of the Fortran object into the C struct",
+               f"  subroutine {cname}({handle}) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + \
+            [f"    type(C_PTR), value :: {handle}"] + odecl + ostmts + [f"  end subroutine {cname}"]
+        return cname
+
+    def constant_getter(self, t, v, kind, hdecl, cpp):
+        tr, n = self.tr(), v.cname
+        if kind == "scalar":
+            decl, body = f"{tr.cpp_type(v)} {n}() const", f"return handle_->{n};"
+        elif kind == "logical":
+            decl, body = f"bool {n}() const", f"return handle_->{n};"
+        else:
+            et = tr.eigen_type(v, 1)
+            size = f"handle_->{n}_size" if kind == "array" else next(s for w, k, s in self.consts if w is v)
+            decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>(handle_->{n}, {size});"
+        for line in self.component_docs(t).get(v.name, []):
+            hdecl.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
+        hdecl.emit(1, decl + ";  //!< constant (C struct)")
+        cpp.emit(0, decl.replace(f" {n}()", f" {self.prog.type_name(t.name)}::{n}()", 1))
+        cpp.emit(0, "{")
+        cpp.emit(1, body)
+        cpp.emit(0, "}")
+        cpp.emit(0, "")
 
     def component_kind(self, v):
         """description of a component without getter (the reason)"""
@@ -560,7 +662,8 @@ class WrapEmitter(ModuleEmitter):
             root, rname = self.root(t)
             if self.is_root(t):
                 if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
-                    typedefs += [f"!typedef struct {ht} {{", "!  void* p_impl;", f"!}} {ht};"]
+                    typedefs += [f"!typedef struct {ht} {{", "!  void* p_impl;"] + \
+                        [f"!  {line}" for line in self.constants_struct(self.constants(t)[0])[0]] + [f"!}} {ht};"]
                     structs.append(t)
                 else:
                     typedefs.append(f"!typedef struct {ht} {ht};")
@@ -579,7 +682,12 @@ class WrapEmitter(ModuleEmitter):
                 self.report.add("todo", "wrap:unknown-base")
             final = " final" if not t.children and not t.abstract else ""
             base = f" : public {prog.type_name(t.parent, mod)}" if t.parent else ""
-            self.wrap_from_c(t, name, ht, hpp, cpp)
+            self.consts, self.const_todo = self.constants(t)
+            setter = self.set_constants(t, self.consts, fb) if self.consts else None
+            if not self.is_root(t):         # the constants of the root's struct
+                if root is not None and self.constants(root)[0]:
+                    setter = self.c_name(root, "set_constants")
+            self.wrap_from_c(t, name, ht, hpp, cpp, setter)
             hpp.emit(0, f"class {name}{final}{base}")
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
@@ -615,8 +723,13 @@ class WrapEmitter(ModuleEmitter):
                 self.method(t, bd, p, args, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-method")
             getters = self.getters(t)
-            if getters:
+            if getters or self.consts or self.const_todo:
                 hpp.emit(0, "")
+            for v, kind, _ in self.consts:
+                self.constant_getter(t, v, kind, hpp, cpp)
+                self.report.add("translated", "wrapped-constant")
+            for why in self.const_todo:
+                hpp.emit(1, f"// {TODO}: {why}")
             for v, kind in getters:
                 if kind in ("scalar", "logical", "array"):
                     self.getter(t, v, kind, fb, hpp, cpp)
@@ -714,7 +827,8 @@ class WrapEmitter(ModuleEmitter):
             b += [f"  !> C struct {self.c_type_name(t)}: handle of {t.spelling or t.name}",
                   f"  type, bind(C), public :: {self.struct_type(t)}",
                   "    type(C_PTR) :: p_impl = C_NULL_PTR" +
-                  ("   !< the Fortran object" if not self.poly(t) else f"   !< {self.wrapper_type(t)}"),
+                  ("   !< the Fortran object" if not self.poly(t) else f"   !< {self.wrapper_type(t)}")] + \
+                 [f"    {line}" for line in self.constants_struct(self.constants(t)[0])[1]] + [
                   f"  end type {self.struct_type(t)}", ""]
         for t in wrappers:                          # the handle of a class hierarchy points to this wrapper
             b += [f"  !> handle of {t.spelling or t.name} and its extensions",

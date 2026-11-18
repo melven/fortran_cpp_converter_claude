@@ -20,6 +20,7 @@ int main()
   s.apply(x, y);
   std::printf("%24.15E%24.15E%24.15E\n", y(0), y(1), y(2));
   std::printf("%24.15E\n", s.shift());
+  std::printf("%24.15E%24.15E%24.15E\n", double(s.n()), s.diag()(2), s.weights()(2));   // constants
   try
   {
     vec wrong(2);

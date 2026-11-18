@@ -134,6 +134,11 @@ DEFAULTS = {
     # part of the wrapped hierarchy, the next derived type is its root (handle, wrapper type)
     "wrap_independent_bases": [],
     "wrap_direct_handles": [],
+    # "constant" components of wrapped root types: members of the C struct of the handle (copied by
+    # project_<Class>_set_constants, called in wrapFromC), only a const getter in C++.
+    # {"mysolver_type": ["n", "diag"]}: real / integer / logical scalars, rank 1 arrays (fixed size:
+    # copied; allocatable / pointer: pointer + size into the Fortran object)
+    "wrap_constants": {},
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
@@ -195,6 +200,7 @@ def load(path=None, **overrides):
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
+    cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
     for key, val in overrides.items():
         if val is not None:
