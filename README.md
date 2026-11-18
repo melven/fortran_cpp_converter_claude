@@ -173,7 +173,9 @@ Class hierarchies: the object pointer is `<Root>Wrapper_type` (`class(Root_type)
 defined in the root's binding module; one C struct `project_<Root>` per hierarchy, passed as pointer, `const` for `intent(in)` objects). The C++
 classes keep their inheritance (`class sphere final : public body`); methods of the root dispatch
 in Fortran (also deferred ones), methods added in derived classes use `select type` (`ierr = -1`
-or `error stop` for another dynamic type). The base may be wrapped in the same run or by hand
+or `error stop` for another dynamic type). Base types that exist independently in Fortran and C++ (`wrap_independent_bases`, e.g. a
+serialization base) are not part of the hierarchy: the next derived type is its root. The base may be
+wrapped in the same run or by hand
 (its module given with `-I`, its C++ header with `module_headers`). The binding and the glue keep
 the original file header with `@file` renamed and `@brief` prefixed by `C binding: ` /
 `C++ wrapper: `.

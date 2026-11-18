@@ -37,14 +37,27 @@ class WrapEmitter(ModuleEmitter):
     def root(self, t):
         """(root type of the hierarchy or None if not parsed, its name)"""
         name, cur = t.name, t
-        while cur is not None and cur.parent:
+        while cur is not None and cur.parent and cur.parent not in self.cfg["wrap_independent_bases"]:
             name = cur.parent
             cur = self.prog.find_type(cur.parent, cur.module)
         return cur, name
 
+    def is_root(self, t):
+        return self.root(t)[1] == t.name
+
+    def overrides_wrapped(self, t):
+        """binding names that t inherits from wrapped ancestors (their C++ methods dispatch in Fortran)"""
+        names, cur = set(), t
+        while cur is not None and not self.is_root(cur):
+            cur = self.prog.find_type(cur.parent, cur.module)
+            if cur is not None:
+                names |= set(cur.bindings)
+        return names
+
     def poly(self, t):
         """class hierarchy: the handle points to <Root>Wrapper_type with class(Root_type), pointer :: ptr"""
-        return self.prog.polymorphic(t)
+        root, _ = self.root(t)
+        return not self.is_root(t) or (root is not None and (bool(root.children) or root.abstract))
 
     def wrapper_type(self, t):
         return f"{self.c_class_name(self.root(t)[1])}Wrapper_type"
@@ -471,7 +484,7 @@ class WrapEmitter(ModuleEmitter):
             name = self.prog.type_name(t.name)
             ht = self.c_type_name(t)
             root, rname = self.root(t)
-            if root is t or not t.parent:
+            if self.is_root(t):
                 if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
                     typedefs += [f"!typedef struct {ht} {{", "!  void* p_impl;", f"!}} {ht};"]
                     structs.append(t)
@@ -496,16 +509,17 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
             hpp.emit(1, f"{name}() = default;  //!< empty object (tests)")
-            init = f"{prog.type_name(t.parent, mod)}(handle)" if t.parent else "handle_(handle)"
+            init = "handle_(handle)" if self.is_root(t) else f"{prog.type_name(t.parent, mod)}(handle)"
             hpp.emit(1, f"explicit {name}({ht}* handle) : {init} {{}}  //!< object created in Fortran")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
             hpp.emit(1, f"{name}({name}&&) = default;")
             hpp.emit(1, f"{name}& operator=({name}&&) = default;")
             hpp.emit(0, "")
+            inherited = self.overrides_wrapped(t)
             for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
                 p = prog.binding_proc(t, bd)
-                if prog.overrides(t, bd.name):
+                if bd.name in inherited:
                     continue            # the method of the base class dispatches in Fortran
                 if p is None or bd.nopass or p.is_ctor or p.is_dtor:
                     if p is not None and (p.is_ctor or p.is_dtor):
@@ -526,7 +540,7 @@ class WrapEmitter(ModuleEmitter):
             for v, kind in getters:
                 self.getter(t, v, kind, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-getter")
-            if not t.parent:
+            if self.is_root(t):
                 hpp.emit(0, "")
                 hpp.emit(0, "protected:")
                 hpp.emit(1, f"{ht}* handle_ = nullptr;  //!< the Fortran object (C binding: {stem_h})")

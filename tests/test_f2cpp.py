@@ -1218,3 +1218,25 @@ end module cfg_mod
     assert "read_more(tixiHandle, xpath, n);" in cpp and "external_read(tixiHandle, xpath);" in cpp
     assert "n = n + xpath.size();" in cpp
     assert "not translated (expanded-argument)" in cpp                 # copy = configNode
+
+
+def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
+    """A exists in Fortran and C++ (not wrapped), B is wrapped (by hand: -I), C is wrapped now"""
+    w = os.path.join(CORPUS, "wrapped")
+    c = cfg()
+    c["wrap_independent_bases"] = ["a_type"]
+    c["module_headers"] = {"a_mod": "serialization/a.hpp", "b_mod": "b_wrapper.hpp"}
+    translate([], c, str(tmp_path), [os.path.join(w, "a_mod.F90"), os.path.join(w, "b_mod.F90")],
+              wrap=[os.path.join(w, "c_mod.F90")])
+    hpp, b = (tmp_path / "c_mod.hpp").read_text(), (tmp_path / "c_mod_c_binding.F90").read_text()
+    assert "struct project_B;" in hpp and "class C final : public B" in hpp
+    assert "explicit C(project_B* handle) : B(handle) {}" in hpp and "write_state" not in hpp
+    assert "  use b_mod_c_binding, only: BWrapper_type, B_c" in b and "project_A" not in b + hpp
+    # B wrapped as well: B is the root, its override of A's method is wrapped in B
+    translate([], c, str(tmp_path), [os.path.join(w, "a_mod.F90")],
+              wrap=[os.path.join(w, "b_mod.F90"), os.path.join(w, "c_mod.F90")])
+    bh, bb = (tmp_path / "b_wrapper.hpp").read_text(), (tmp_path / "b_wrapper_c_binding.F90").read_text()
+    assert "class B : public A" in bh and "explicit B(project_B* handle) : handle_(handle) {}" in bh
+    assert "  void write_state() const;" in bh and "protected:\n  project_B* handle_ = nullptr;" in bh
+    assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
+    assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb

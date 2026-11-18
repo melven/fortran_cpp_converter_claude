@@ -130,6 +130,9 @@ DEFAULTS = {
     # to the Fortran object (class hierarchies: to <Root>Wrapper_type); "direct": pointer to the object /
     # wrapper itself. wrap_direct_handles: root types that use "direct" anyway
     "wrap_handle": "struct",
+    # base types that exist independently in Fortran and C++ (e.g. a generic serialization base): not
+    # part of the wrapped hierarchy, the next derived type is its root (handle, wrapper type)
+    "wrap_independent_bases": [],
     "wrap_direct_handles": [],
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
@@ -191,6 +194,7 @@ def load(path=None, **overrides):
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
+    cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
     for key, val in overrides.items():
         if val is not None:
             cfg[key] = val
