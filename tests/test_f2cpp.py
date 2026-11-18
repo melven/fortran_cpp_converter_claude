@@ -1107,3 +1107,41 @@ end module ifd_mod
     for d in ("-DDEBUG -DWITH_B -DWITH_D -DWITH_X", ""):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN] + d.split() +
             ["-include", "project_math.hpp", "-c", "ifd_mod.cpp"], str(tmp_path))
+
+
+def test_preprocessor_lines_around_internal_procedures(tmp_path):
+    (tmp_path / "ce_mod.F90").write_text("""module ce_mod
+  implicit none
+  type :: ce_type
+    real, allocatable :: tmp_u(:)
+  contains
+    procedure :: residual
+  end type
+contains
+  subroutine residual(this, y)
+    class(ce_type), intent(inout) :: this
+    real, intent(in) :: y(:)
+#ifndef USE_COPY
+    this%tmp_u = y
+#else
+    call copyArray(y, this%tmp_u)
+#endif
+
+#ifdef USE_COPY
+  contains
+    pure subroutine copyArray(source, dest)
+      real, intent(in) :: source(:)
+      real, intent(out) :: dest(:)
+      dest = source
+    end subroutine
+#endif
+  end subroutine
+end module ce_mod
+""")
+    translate([str(tmp_path / "ce_mod.F90")], cfg(), str(tmp_path))
+    cpp = (tmp_path / "ce_mod.cpp").read_text()
+    body = cpp[cpp.index("::residual"):]
+    assert body.count("#if") == body.count("#endif") == 2 and "TODO(f2cpp): unbalanced" not in cpp
+    assert "auto copyArray = [&](const vec& source, vec& dest)" in cpp
+    for d in ("-DUSE_COPY", "-DNONE"):
+        run(["g++", "-std=c++17", "-Wall", "-I.", "-I" + SUPPORT, "-I" + EIGEN, d, "-c", "ce_mod.cpp"], str(tmp_path))

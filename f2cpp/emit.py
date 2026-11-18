@@ -486,6 +486,33 @@ class ModuleEmitter:
             tr.last_err_call = (tr.last_err_call[0] + inserted, tr.last_err_call[1])
         tr.out.extend(new)
 
+    def result_decl(self, tr, p, ind, done, moved):
+        """declaration of a function result without declaration statement (typed function prefix)"""
+        if p.kind == "function" and not done and p.result in p.vars and p.result not in moved:
+            tr.emit(ind + 1, f"{tr.cpp_type(p.vars[p.result])} {p.vars[p.result].cname};")
+            return True
+        return done
+
+    def balance_preprocessor(self, tr, start):
+        """safety net: #if / #endif within a function body must be balanced"""
+        depth = 0
+        for k in range(start, len(tr.out)):
+            s = tr.out[k].strip()
+            if s.startswith("#if"):
+                depth += 1
+            elif s.startswith("#endif"):
+                if depth == 0:
+                    tr.out[k] = f"// {TODO}: unbalanced preprocessor line: {s}"
+                    self.report.add("todo", "unbalanced-preprocessor")
+                    continue
+                depth -= 1
+            elif s.startswith(("#else", "#elif")) and depth == 0:
+                tr.out[k] = f"// {TODO}: unbalanced preprocessor line: {s}"
+                self.report.add("todo", "unbalanced-preprocessor")
+        for _ in range(depth):
+            tr.out.append(f"#endif  // TODO(f2cpp): added, the Fortran #endif could not be placed")
+            self.report.add("todo", "unbalanced-preprocessor")
+
     def emit_proc(self, tr_out, p, ind, head=None, close="}"):
         """definition of a procedure appended to tr_out.out"""
         tr = self.tr(p)
@@ -510,16 +537,26 @@ class ModuleEmitter:
         moved_comments, hidden_decl = {}, None      # trailing comments of declarations that moved
         body_start = len(tr.out)
         has_result_decl = False
+        lambdas_done = False
         for part in p.node.content:
             k = cls(part)
             if k == "Specification_Part":
                 prev = None
-                for d in part.content:
+                decl_idx = [i for i, d in enumerate(part.content)
+                            if cls(d) in ("Type_Declaration_Stmt", "Procedure_Declaration_Stmt")]
+                for i, d in enumerate(part.content):
                     kd = cls(d)
                     if kd in ("Implicit_Part", "Comment"):
                         for c in (d.content if kd == "Implicit_Part" else [d]):
                             if cls(c) != "Comment" or id(c) in p.doc_nodes:
                                 continue            # argument documentation is in the header
+                            trailing = prev is not None and c.item is not None and last_line(prev) == c.item.span[0]
+                            if p.internal and not lambdas_done and decl_idx and i > decl_idx[-1] and not trailing:
+                                # lambdas right after the declarations: before comments / #ifdef that follow
+                                has_result_decl = self.result_decl(tr, p, ind, has_result_decl, moved)
+                                tr.emit(0, "")
+                                self.emit_lambdas(tr, p, ind + 1)
+                                lambdas_done = True
                             if hidden_decl is not None and c.item is not None and \
                                     last_line(hidden_decl[0]) == c.item.span[0]:
                                 if hidden_decl[1] in moved:
@@ -550,12 +587,11 @@ class ModuleEmitter:
                         self.report.add("untranslated", "specification:" + kd)
                         tr.fortran_comment(d, ind + 1, "not translated")
             elif k == "Execution_Part":
-                if p.kind == "function" and not has_result_decl and p.result in p.vars and p.result not in moved:
-                    tr.emit(ind + 1, f"{tr.cpp_type(p.vars[p.result])} {p.vars[p.result].cname};")
-                    has_result_decl = True
-                if p.internal:
+                has_result_decl = self.result_decl(tr, p, ind, has_result_decl, moved)
+                if p.internal and not lambdas_done:
                     tr.emit(0, "")
                     self.emit_lambdas(tr, p, ind + 1)
+                    lambdas_done = True
                 prev, k = None, -1
                 for c in part.content:
                     if cls(c) == "Comment":
@@ -564,12 +600,21 @@ class ModuleEmitter:
                     k += 1
                     self.emit_statement(tr, c, ind + 1, prev, at.get(k, []), moved_comments)
                     prev = c
+            elif k == "Internal_Subprogram_Part":
+                # the lambdas are at the start of the body; preprocessor lines of this part (e.g. an
+                # #endif after the internal procedures) stay here to keep #if / #endif balanced
+                for c in part.content:
+                    for x in ([c] if cls(c) == "Comment" else
+                              [d for d in getattr(c, "content", []) if cls(d) == "Comment"]):
+                        if str(x).startswith(CPP_MARK):
+                            tr.comment(x, ind + 1)
         while len(tr.out) > body_start and tr.out[-1] == "":
             tr.out.pop()
         while len(tr.out) > body_start + 1 and tr.out[body_start] == "":
             del tr.out[body_start]
         if p.kind == "function" and not tr.out[-1].strip().startswith("return "):
             tr.emit(ind + 1, tr.return_code())
+        self.balance_preprocessor(tr, body_start)
         tr.emit(ind, close)
 
     # ------------------------------------------------------------------ module
