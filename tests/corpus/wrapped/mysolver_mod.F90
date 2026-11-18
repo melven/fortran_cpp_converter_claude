@@ -8,6 +8,7 @@ module mysolver_mod
 
   type :: MySolver_type
     integer :: n = 0                   !< problem size
+    !> spectral shift
     real :: shift = 0.0
     logical :: verbose = .false.
     real, allocatable :: diag(:)       !< diagonal

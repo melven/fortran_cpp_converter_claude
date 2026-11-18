@@ -228,6 +228,41 @@ class WrapEmitter(ModuleEmitter):
                 self.report.add("todo", f"wrap-component:{v.name}")
         return res
 
+    def component_docs(self, t):
+        """{component: [comment text]}: comments before the statement and behind it on the same line"""
+        from .prepass import CPP_MARK, BLANK_MARK, PF_MARK
+        flat = []
+        for part in t.node.content[1:-1]:       # fparser spreads components / comments over several nodes
+            k = cls(part)
+            if k == "Component_Part":
+                flat += part.content
+            elif k == "Comment":
+                flat.append(part)
+            elif k == "Type_Bound_Procedure_Part":
+                break
+        docs, lead, last = {}, [], []
+        for d in flat:
+            if cls(d) == "Comment":
+                text = str(d)
+                if not text.strip() or text.startswith((CPP_MARK, BLANK_MARK, PF_MARK)):
+                    lead = []
+                    continue
+                text = re.sub(r"^![<>!]?\s?", "", text.strip()).rstrip()
+                prev = last[-1][1] if last else None
+                if prev is not None and d.item is not None and getattr(prev, "item", None) is not None \
+                        and prev.item.span[1] == d.item.span[0]:
+                    for n, _ in last:
+                        docs[n].append(text)        # trailing comment of the previous statement
+                else:
+                    lead.append(text)
+                continue
+            names = [lname(e.items[0]) for e in items_of(d.items[2])] if cls(d) == "Data_Component_Def_Stmt" else []
+            last = [(n, d) for n in names]
+            for n in names:
+                docs[n] = list(lead)
+            lead = []
+        return docs
+
     # ------------------------------------------------------------------ method binding
     def proc_c_name(self, p):
         """C name of a module procedure: project_<procedure> (c_procedure_names: other names)"""
@@ -441,7 +476,13 @@ class WrapEmitter(ModuleEmitter):
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
             decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
                      (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
-        for decl, body in decls:
+        doc, dox = self.component_docs(t).get(v.name, []), self.cfg["doxygen"]
+        for k, (decl, body) in enumerate(decls):
+            lines = list(doc)
+            if lines and k == 1:
+                lines[-1] += " (const version)"
+            for line in lines:
+                hdecl.emit(1, f"{dox} {line}".rstrip())
             hdecl.emit(1, decl + ";")
             cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
             cpp.emit(0, "{")

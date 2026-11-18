@@ -852,7 +852,9 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
     assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
-    assert "  void apply(const vec& x, vec& y) const;" in hpp and "  int& n();\n  const int& n() const;" in hpp
+    assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! problem size\n  int& n();\n  //! problem size (const version)\n  const int& n() const;" in hpp
+    assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
+    assert "  bool verbose() const;\n  //! diagonal\n  Eigen::Map<vec> diag();\n  //! diagonal (const version)\n" in hpp
     assert "  Eigen::Map<mat> coupling();\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
