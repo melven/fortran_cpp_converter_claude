@@ -524,10 +524,27 @@ class WrapEmitter(ModuleEmitter):
         # header
         h = self.cpp_file_header(cfg["header_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)"] + self.guard()[0] + [""]
-        h += self.std_includes("\n".join(hpp.out), self.HEADER_INCLUDES)
+        h += self.std_includes("\n".join(hpp.out) + ("\nstd::function" if mod.ifaces else ""),
+                               self.HEADER_INCLUDES)
         inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
         h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
         h += [f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
+        # forward declarations of the classes (they may refer to each other) and std::function aliases of
+        # abstract interfaces (procedure arguments), as in the translation
+        classes = [t for t in mod.types.values() if t.name not in cfg["unwrap_types"] and not self.excluded(t.name)]
+        deferred = {b.iface for m in prog.modules.values() for t in m.types.values()
+                    for b in t.bindings.values() if b.deferred}
+        aliases = self.tr()
+        for p in mod.ifaces.values():
+            if p.external or p.name in deferred or p.name in cfg["procedure_map"]:
+                continue
+            ret, _, params, _ = self.signature(self.tr(p), p, False)
+            self.doc(aliases, p, 0)
+            aliases.emit(0, f"using {p.cname} = std::function<{ret}({params})>;")
+            aliases.emit(0, "")
+        if classes and (len(classes) > 1 or aliases.out):
+            h += [f"class {prog.type_name(t.name)};" for t in classes] + [""]
+        h += aliases.out
         h += strip_blank(hpp.out) + ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]
         c = self.cpp_file_header(cfg["source_ext"], "C++ wrapper: ") + \
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",

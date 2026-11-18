@@ -1014,3 +1014,36 @@ def test_wrapped_class_with_hand_wrapped_base(tmp_path):
     assert '#include "body_wrapper.hpp"' in sh and "class sphere final : public body" in sh
     assert "  use body_mod_c_binding, only: bodyWrapper_type" in (tmp_path / "sphere_mod_c_binding.F90").read_text()
     assert '#include "body_mod.h"' in (tmp_path / "sphere_mod.h").read_text()
+
+
+def test_wrapped_header_forward_declarations(tmp_path):
+    (tmp_path / "pair_mod.F90").write_text("""module pair_mod
+  implicit none
+  type :: node_type
+    integer :: id = 0
+  contains
+    procedure :: link
+  end type
+  type :: edge_type
+    integer :: weight = 1
+  end type
+  abstract interface
+    function cost_iface(e) result(c)
+      import :: edge_type
+      type(edge_type), intent(in) :: e
+      real :: c
+    end function
+  end interface
+contains
+  subroutine link(this, e, f)
+    class(node_type), intent(inout) :: this
+    type(edge_type), intent(in) :: e
+    procedure(cost_iface) :: f
+  end subroutine
+end module pair_mod
+""")
+    translate([], cfg(), str(tmp_path), wrap=[str(tmp_path / "pair_mod.F90")])
+    hpp = (tmp_path / "pair_mod.hpp").read_text()
+    assert "class node;\nclass edge;\n" in hpp and hpp.index("class edge;") < hpp.index("class node final")
+    assert "using cost_iface = std::function<scalar(const edge& e)>;" in hpp and "#include <functional>" in hpp
+    assert "void link(const edge& e, const cost_iface& f);" in hpp       # not wrapped (objects): declared
