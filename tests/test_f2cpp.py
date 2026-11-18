@@ -438,7 +438,9 @@ def test_module_header_rename(tmp_path):
     c = config.load()
     c["module_headers"] = {"project_global_thing": "project_thing.hpp"}
     translate([str(tmp_path / "project_global_thing.F90"), str(tmp_path / "user_mod.F90")], c, str(tmp_path))
-    assert '#include "project_thing.hpp"' in (tmp_path / "user_mod.hpp").read_text()
+    # only needed in the function body: included in the source, not in the header
+    assert '#include "project_thing.hpp"' in (tmp_path / "user_mod.cpp").read_text()
+    assert "project_thing" not in (tmp_path / "user_mod.hpp").read_text()
     assert (tmp_path / "project_thing.hpp").read_text().startswith("//! @file project_thing.hpp")
     assert '#include "project_thing.hpp"' in (tmp_path / "project_thing.cpp").read_text()
 
@@ -735,7 +737,7 @@ def test_output_file_names_keep_the_module_spelling(tmp_path, capsys):
     from f2cpp.cli import main
     (tmp_path / "MyThing_mod.F90").write_text("module MyThing_mod\ninteger, parameter :: n = 2\nend module\n")
     (tmp_path / "user_mod.F90").write_text("module user_mod\nuse MyThing_mod, only: n\nuse Other_Mod, only: m\n"
-                                           "end module\n")
+                                           "integer, parameter :: k = n + m\nend module\n")
     (tmp_path / "prog.F90").write_text("program p\nend program\n")
     (tmp_path / "other.F90").write_text("module renamed_mod\nend module\n")
     main([str(tmp_path / f) for f in ("MyThing_mod.F90", "user_mod.F90", "prog.F90", "other.F90")]
@@ -937,3 +939,22 @@ end module rec_mod
     assert "class record final\n{\npublic:\n\n  int id = 0;\n  scalar value = 0.0;\n};" in hpp
     assert "int keep_me();" in hpp and "_records" not in hpp + cpp
     assert "internal" not in hpp and "scratch" not in hpp + cpp and "show" not in hpp + cpp
+
+
+def test_includes_only_where_needed(tmp_path):
+    (tmp_path / "a_mod.F90").write_text("module a_mod\ntype :: pt_type\nreal :: x\nend type\n"
+                                        "integer, parameter :: na = 2\nend module\n")
+    (tmp_path / "b_mod.F90").write_text("module b_mod\ncontains\nfunction twice(k) result(r)\ninteger :: k, r\n"
+                                        "r = 2 * k\nend function\nend module\n")
+    (tmp_path / "c_mod.F90").write_text("module c_mod\nend module\n")
+    (tmp_path / "u_mod.F90").write_text(
+        "module u_mod\nuse a_mod, only: pt_type, na\nuse b_mod, only: twice\nuse c_mod\n"
+        "contains\nfunction f(p) result(r)\ntype(pt_type), intent(in) :: p\nreal :: r\n"
+        "r = p%x * twice(na)\nend function\n"
+        "subroutine g()\nuse c_mod\nend subroutine\nend module\n")
+    translate([str(tmp_path / f) for f in ("u_mod.F90",)], config.load(), str(tmp_path),
+              [str(tmp_path / f) for f in ("a_mod.F90", "b_mod.F90", "c_mod.F90")])
+    hpp, cpp = (tmp_path / "u_mod.hpp").read_text(), (tmp_path / "u_mod.cpp").read_text()
+    assert '#include "a_mod.hpp"' in hpp                               # pt in the signature
+    assert '#include "b_mod.hpp"' in cpp and "b_mod" not in hpp        # twice only in the body
+    assert '#include "c_mod.hpp"' in hpp                               # no only-list: kept

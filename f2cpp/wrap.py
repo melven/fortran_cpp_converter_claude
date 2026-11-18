@@ -440,7 +440,8 @@ class WrapEmitter(ModuleEmitter):
         # header
         h = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)"] + self.guard()[0] + [""]
         h += self.std_includes("\n".join(hpp.out), self.HEADER_INCLUDES)
-        h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
+        inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
+        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
         h += [f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
         h += strip_blank(hpp.out) + ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]
         c = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",

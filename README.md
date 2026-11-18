@@ -258,6 +258,10 @@ A `use m, only: a, b` produces no `#include` if all imported names are replaced 
 C++ altogether (e.g. the error codes) goes into `ignore_modules`: no include, no
 "missing module" warning.
 
+Includes: a module used with an `only:` list is included in the header if one of its names appears
+there, in the source if it appears only there, otherwise not at all; modules used without `only:`
+are included in the header.
+
 ## Missing modules
 
 The summary and the report list used modules that are neither translated in the same call nor

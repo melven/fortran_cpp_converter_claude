@@ -568,9 +568,13 @@ class ModuleEmitter:
         tr.emit(ind, close)
 
     # ------------------------------------------------------------------ module
-    def includes(self):
+    def includes(self, header_text=None, source_text=""):
+        """#include lines of the used modules; with header_text: -> (for the header, for the source):
+        a module imported with an only-list is included where one of its names is used (nowhere: not at
+        all); modules used without only-list are included in the header"""
+        import re
         ext, known = self.cfg["header_ext"], self.cfg["module_headers"]
-        res = []
+        h, c = [], []
         replaced = set(self.cfg["function_map"]) | set(self.cfg["call_templates"]) | \
             set(self.cfg["kind_map"]) | set(self.cfg["constant_map"]) | \
             {s.lower() for s in self.cfg["error_success"]}
@@ -580,11 +584,47 @@ class ModuleEmitter:
             only = self.mod.use_only.get(u)
             if only and all(n in replaced for n in only):
                 continue        # everything imported from this module is replaced by the configuration
-            h = known[u] if u in known else \
+            hdr = known[u] if u in known else \
                 (self.prog.file_stem(u) if u in self.prog.modules else self.mod.use_spelling.get(u, u)) + ext
-            if h and f'#include "{h}"' not in res:
-                res.append(f'#include "{h}"')
-        return res
+            if not hdr:
+                continue
+            line = f'#include "{hdr}"'
+            target = h
+            if header_text is not None and only and not any("(" in n or n in ("operator", "assignment")
+                                                            for n in only):
+                pats = [re.compile(rf"(?<![\w]){re.escape(x)}(?![\w])", re.I)
+                        for n in only if n not in replaced for x in self.cpp_names(u, n)]
+                if any(p.search(header_text) for p in pats):
+                    target = h
+                elif any(p.search(source_text) for p in pats):
+                    target = c
+                else:
+                    self.report.add("info", f"include-not-needed:{u}")
+                    continue
+            if line not in h + c:
+                target.append(line)
+        return (h, c) if header_text is not None else h
+
+    def cpp_names(self, u, n):
+        """C++ identifiers that a name n imported from module u can appear as"""
+        from .model import cname
+        names = {cname(n)}
+        m = self.prog.modules.get(u)
+        names.add(self.prog.type_name(n).split("::")[-1])          # types (also of unparsed modules)
+        if n in self.cfg["type_map"]:
+            names.add(self.cfg["type_map"][n].split("::")[-1].split("<")[0])
+        if m is not None:
+            if n in m.procs:
+                names.add(m.procs[n].cname)
+                if m.procs[n].generic:
+                    names.add(m.procs[n].generic)
+            if n in m.generics:
+                names.add(m.generic_spelling.get(n, n))
+            if n in m.vars:
+                names.add(m.vars[n].cname)
+            if n in m.ifaces:
+                names.add(m.ifaces[n].cname)
+        return {x for x in names if x}
 
     HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
@@ -780,7 +820,8 @@ class ModuleEmitter:
                 h = self.file_header(top, cfg["header_ext"]) + \
                     [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
                 h += self.std_includes("\n".join(hpp.out + protos_pub.out + aliases.out), self.HEADER_INCLUDES)
-                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + self.includes()
+                inc_h, _ = self.includes("\n".join(hpp.out + protos_pub.out + aliases.out + cpp.out + cpp_priv.out))
+                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + inc_h
                 h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 or aliases.out else []) + \
                     aliases.out + strip_blank(hpp.out)
                 h += ([""] + protos_pub.out if protos_pub.out else []) + [""] + self.guard()[1]
@@ -793,7 +834,9 @@ class ModuleEmitter:
         h = self.file_header(top, cfg["header_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
         h += self.std_includes(guard_text, self.HEADER_INCLUDES)
-        h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
+        body = "\n".join(cpp.out + cpp_priv.out + protos_priv.out)
+        inc_h, inc_c = self.includes(guard_text, body)
+        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h
         h += [""] + mod_doc.out + [self.open_ns(), ""]
         if types_fwd and (len(types_fwd) > 1 or aliases.out):
             h += types_fwd + [""]
@@ -804,7 +847,8 @@ class ModuleEmitter:
 
         body = "\n".join(cpp.out + cpp_priv.out)
         c = self.file_header(top, cfg["source_ext"]) + \
-            [BANNER.format(src=os.path.basename(self.src)), f'#include "{self.prog.file_stem(mod.name)}{cfg["header_ext"]}"', ""]
+            [BANNER.format(src=os.path.basename(self.src)), f'#include "{self.prog.file_stem(mod.name)}{cfg["header_ext"]}"']
+        c += inc_c + [""]
         c += self.std_includes(body, self.SOURCE_INCLUDES)
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
@@ -880,7 +924,7 @@ class ModuleEmitter:
                                                        ("optional", ["std::optional"]),
                                                        ("vector", ["std::vector"])])
         c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
-            self.includes() + dirs.out
+            self.includes("\n".join(cpp.out + cpp_priv.out + protos.out))[0] + dirs.out
         if shared:
             c.append(f'#include "{self.prog.file_stem(mod.name)}{self.cfg["header_ext"]}"')
         # tests are not part of the project namespace
