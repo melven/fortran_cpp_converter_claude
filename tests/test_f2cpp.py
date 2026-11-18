@@ -833,7 +833,10 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "void project_MySolver_apply(project_MySolver mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
            "int* ierr);" in h
     assert "typedef void* project_MySolver;" in h and "int* project_MySolver_n(project_MySolver mySolver);" in h
-    assert "  explicit MySolver(project_MySolver handle) : handle_(handle) {}" in hpp and '#include "mysolver_mod.h"' in hpp
+    assert "  explicit MySolver(project_MySolver handle) : handle_(handle) {}" in hpp
+    # the C interface is only included in the glue; the header declares the handle type itself
+    assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
+    assert "typedef void* project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
     assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
     assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding

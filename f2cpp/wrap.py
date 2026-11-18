@@ -536,7 +536,12 @@ class WrapEmitter(ModuleEmitter):
                                self.HEADER_INCLUDES)
         inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
         h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
-        h += [f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
+        # the C interface stays out of the C++ header: only the handle types (same typedef as in the .h)
+        handles = sorted({self.c_type_name(t) for t in mod.types.values()
+                          if t.name not in cfg["unwrap_types"] and not self.excluded(t.name)})
+        if handles:
+            h += [""] + [f"typedef void* {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
+        h += ["", self.open_ns(), ""]
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
         classes = [t for t in mod.types.values() if t.name not in cfg["unwrap_types"] and not self.excluded(t.name)]
@@ -557,7 +562,7 @@ class WrapEmitter(ModuleEmitter):
         c = self.cpp_file_header(cfg["source_ext"], "C++ wrapper: ") + \
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
-             self.open_ns(), ""]
+             f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
 
         # binding module
