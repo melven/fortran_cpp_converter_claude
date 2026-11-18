@@ -824,7 +824,8 @@ def test_wrapped_module_end_to_end(tmp_path):
     the result equals the pure Fortran program"""
     d = str(tmp_path)
     w = os.path.join(CORPUS, "wrapped")
-    translate([os.path.join(w, "solver_user_mod.F90")], cfg(), d, wrap=[os.path.join(w, "mysolver_mod.F90")])
+    translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True), d,
+              wrap=[os.path.join(w, "mysolver_mod.F90")])
     hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
     binding = read((d,), "mysolver_mod_c_binding.F90")
     assert "void project_MySolver_apply(MySolver mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, int* ierr);" in h
@@ -864,3 +865,10 @@ def test_wrapped_module_end_to_end(tmp_path):
     for a, b in zip(vals, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
     assert res[3] == "project_MySolver_apply: size of x"
+
+
+def test_wrapped_module_without_size_checks(tmp_path):
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], cfg(), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
+    cpp = (tmp_path / "mysolver_mod.cpp").read_text()
+    assert "invalid_argument" not in cpp and "  y.resize(x.size());\n  int ierr = 0;\n" in cpp

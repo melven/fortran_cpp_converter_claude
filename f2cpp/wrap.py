@@ -208,11 +208,13 @@ class WrapEmitter(ModuleEmitter):
                     codes = [tr.expr(n).code for n in nodes] if all(n is not None for n in nodes) else None
                 except Untranslatable:
                     codes = None
-                if codes is None:
+                if intent == "out" and codes is not None and "Ref<" not in tr.param_type(v):
+                    glue.append(("pre", f"{v.cname}.resize({', '.join(codes)});"))
+                elif not self.cfg["wrap_size_checks"]:
+                    pass
+                elif codes is None:
                     self.report.add("todo", "wrap-size-check")
                     glue.append(("pre", f"// {TODO}: size of {v.cname} is not checked"))
-                elif intent == "out" and "Ref<" not in tr.param_type(v):
-                    glue.append(("pre", f"{v.cname}.resize({', '.join(codes)});"))
                 else:
                     have = [f"{v.cname}.size()"] if v.rank == 1 else [f"{v.cname}.rows()", f"{v.cname}.cols()"]
                     cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes))

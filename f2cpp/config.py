@@ -117,6 +117,8 @@ DEFAULTS = {
     "wrap_string_in": ["project_str", "str_array_ptr_to_str"],    # module, C string -> Fortran string
     # sizes of array arguments that are not given by a size check: "type%binding" -> {"x": "this%n"}
     "wrap_sizes": {},
+    # check array sizes in the C++ glue before the call (the C interface has no sizes)
+    "wrap_size_checks": False,
     # abstract interface (lower case) -> C++ type of procedure arguments / components declared
     # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
     "procedure_map": {},
