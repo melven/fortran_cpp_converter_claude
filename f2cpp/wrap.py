@@ -31,6 +31,10 @@ class WrapEmitter(ModuleEmitter):
     def c_class(self, t):
         return self.cfg["c_class_names"].get(t.name) or self.prog.type_name(t.name).split("::")[-1]
 
+    def c_type_name(self, t):
+        """C typedef of the handle: project_MySolver"""
+        return f"{self.cfg['c_prefix']}_{self.c_class(t)}"
+
     def c_name(self, t, what):
         return f"{self.cfg['c_prefix']}_{self.c_class(t)}_{what}"
 
@@ -153,7 +157,7 @@ class WrapEmitter(ModuleEmitter):
         cname = self.c_name(t, bd.name)
         handle = lower_camel(self.c_class(t))
         has_err = err in p.args
-        f_args, c_args, decls, pre, post, call, glue = [handle], [f"{self.c_class(t)} {handle}"], [], [], [], [], []
+        f_args, c_args, decls, pre, post, call, glue = [handle], [f"{self.c_type_name(t)} {handle}"], [], [], [], [], []
         decls.append(f"type(C_PTR), value :: {handle}")
         for a, kind, dims in args:
             v = p.vars[a]
@@ -299,7 +303,7 @@ class WrapEmitter(ModuleEmitter):
         fb.append("  !@c_declaration")
         if kind == "scalar":
             ct = self.c_type(v)
-            fb.append(f"  !  {ct}* {cname}({self.c_class(t)} {handle});")
+            fb.append(f"  !  {ct}* {cname}({self.c_type_name(t)} {handle});")
             fb.append("  !@end_c_declaration")
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")",
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res",
@@ -307,7 +311,7 @@ class WrapEmitter(ModuleEmitter):
                    f"    res = c_loc(obj%{v.name})", f"  end function {cname}"]
             decl, body = f"{tr.cpp_type(v)}& {v.cname}() const", f"return *{cname}(handle_);"
         elif kind == "logical":
-            fb.append(f"  !  bool {cname}({self.c_class(t)} {handle});")
+            fb.append(f"  !  bool {cname}({self.c_type_name(t)} {handle});")
             fb.append("  !@end_c_declaration")
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")",
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res",
@@ -317,7 +321,7 @@ class WrapEmitter(ModuleEmitter):
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
-            fb.append(f"  !  void {cname}({self.c_class(t)} {handle}, {ct}** data, "
+            fb.append(f"  !  void {cname}({self.c_type_name(t)} {handle}, {ct}** data, "
                       + ", ".join(f"int* {d}" for d in dims) + ");")
             fb.append("  !@end_c_declaration")
             test = "associated" if v.has("pointer") else "allocated"
@@ -356,7 +360,8 @@ class WrapEmitter(ModuleEmitter):
                 continue
             name = self.prog.type_name(t.name)
             cc = self.c_class(t)
-            typedefs.append(f"!typedef void* {cc};")
+            ht = self.c_type_name(t)
+            typedefs.append(f"!typedef void* {ht};")
             if prog.polymorphic(t):
                 self.report.add("todo", "wrap:polymorphic")
                 hpp.emit(0, f"// {TODO}: polymorphic class: wrapping of class hierarchies is not supported yet")
@@ -364,12 +369,12 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
             hpp.emit(1, f"{name}() = default;  //!< empty object (tests)")
-            hpp.emit(1, f"explicit {name}(void* handle) : handle_(handle) {{}}  //!< object created in Fortran ({cc})")
+            hpp.emit(1, f"explicit {name}({ht} handle) : handle_(handle) {{}}  //!< object created in Fortran")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
             hpp.emit(1, f"{name}({name}&&) = default;")
             hpp.emit(1, f"{name}& operator=({name}&&) = default;")
-            hpp.emit(1, "void* handle() const { return handle_; }")
+            hpp.emit(1, f"{ht} handle() const {{ return handle_; }}")
             hpp.emit(0, "")
             for bd in t.bindings.values():
                 p = prog.binding_proc(t, bd)
@@ -394,7 +399,7 @@ class WrapEmitter(ModuleEmitter):
                 self.report.add("translated", "wrapped-getter")
             hpp.emit(0, "")
             hpp.emit(0, "private:")
-            hpp.emit(1, "void* handle_ = nullptr;")
+            hpp.emit(1, f"{ht} handle_ = nullptr;")
             hpp.emit(0, "};")
             hpp.emit(0, "")
         for p in mod.procs.values():
@@ -406,11 +411,11 @@ class WrapEmitter(ModuleEmitter):
         h = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)"] + self.guard()[0] + [""]
         h += self.std_includes("\n".join(hpp.out), self.HEADER_INCLUDES)
         h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
-        h += ["", self.open_ns(), ""]
+        h += [f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
         h += strip_blank(hpp.out) + ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]
         c = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
-             f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
+             self.open_ns(), ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
 
         # binding module
