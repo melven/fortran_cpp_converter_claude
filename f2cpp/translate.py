@@ -186,6 +186,16 @@ class Translator:
             self.report.add("info", "unknown-interface:" + str(name))
         return p.cname if p is not None else cname(str(name))
 
+    def expansion(self, v):
+        """[(C++ type, parameter name, component)] of a dummy argument expanded by expand_args, or None"""
+        if v is None or not v.is_dummy or v.base != "type" or v.rank:
+            return None
+        return self.cfg["expand_args"].get(v.tname)
+
+    def expanded_name(self, node):
+        """Name node of an expanded dummy argument -> its expansion"""
+        return self.expansion(self.lookup(lname(node))) if cls(node) == "Name" else None
+
     def dropped(self, p):
         """dummies that are removed: class(*) user data arguments named in drop_args"""
         if p is None or not self.cfg["drop_args"]:
@@ -368,6 +378,8 @@ class Translator:
         n = lname(node)
         if self.is_dropped(node):
             raise Untranslatable("dropped-argument")
+        if self.expanded_name(node):
+            raise Untranslatable("expanded-argument")       # only components / passing on are translated
         local = self.overrides.get(n) or next((p.vars[n] for p in self.scope_chain() if n in p.vars), None)
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
@@ -546,6 +558,17 @@ class Translator:
 
     def x_Data_Ref(self, node, parts=None):
         parts = parts or list(node.items)
+        exp = self.expanded_name(parts[0])
+        if exp:                                 # component of an expanded argument: its parameter
+            comp = parts[1]
+            n = lname(comp.items[0] if cls(comp) == "Part_Ref" else comp)
+            hit = next(((t, c) for t, c, k in exp if k == n), None)
+            if hit is None or len(parts) > 2 or cls(comp) == "Part_Ref":
+                raise Untranslatable("expanded-argument")
+            base = "character" if "string" in hit[0] else "integer" if "int" in hit[0] else \
+                "logical" if "bool" in hit[0] else "real" if any(w in hit[0] for w in ("double", "float", "scalar")) \
+                else "unknown"
+            return X(hit[1], 0, base)
         cur = self.expr(parts[0])
         on_this = cur.raw == "this"
         for p in parts[1:]:
@@ -827,6 +850,9 @@ class Translator:
             kw, node = self.split_arg(a)
             if self.is_err(node) or self.is_dropped(node):
                 continue
+            if self.expanded_name(node):        # expanded argument passed to an unknown procedure
+                res += [n for _, n, _ in self.expanded_name(node)]
+                continue
             x = self.expr(node)
             res.append((f"/*{kw}=*/ " if kw else "") + self.matrix(x))
         return res
@@ -854,6 +880,12 @@ class Translator:
             if d not in given:
                 res.append(f"{self.cpp_type(dv)}()" if dv.opt_kind == "empty" else
                            "std::nullopt" if dv.opt_kind else "nullptr")
+                continue
+            if self.expansion(dv):              # expanded argument passed on: its parameters
+                exp = self.expanded_name(given[d])
+                if not exp or [k for _, _, k in exp] != [k for _, _, k in self.expansion(dv)]:
+                    raise Untranslatable("expanded-argument")
+                res += [n for _, n, _ in exp]
                 continue
             if self.int_array(dv):
                 x = self.ref(given[d])

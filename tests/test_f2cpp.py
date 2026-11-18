@@ -1183,3 +1183,38 @@ def test_accessors_of_unknown_types_index_from_zero(tmp_path):
     cpp = (tmp_path / "u_mod.cpp").read_text()
     assert "system.x()(i - 1) = 2.0 * system.x()(i - 1);" in cpp   # accessor (array, lower bound 1)
     assert "system.x()(0) = system.m(2, i);" in cpp                  # unknown component: passed through
+
+
+def test_expanded_arguments(tmp_path):
+    (tmp_path / "cfg_mod.F90").write_text("""module cfg_mod
+  use tixi_node, only: ConfigNode_type
+  implicit none
+contains
+  subroutine read_settings(configNode, n, ierr)
+    type(ConfigNode_type), intent(in) :: configNode
+    integer, intent(out) :: n
+    integer, intent(out) :: ierr
+    n = tixiGetIntegerElement(configNode%tixiHandle, trim(configNode%xml_path) // '/n')
+    call read_more(configNode, n, ierr)
+    call external_read(configNode, ierr)
+  end subroutine read_settings
+  subroutine read_more(configNode, n, ierr)
+    type(ConfigNode_type), intent(in) :: configNode
+    integer, intent(inout) :: n
+    integer, intent(out) :: ierr
+    type(ConfigNode_type) :: copy
+    n = n + len_trim(configNode%xml_path)
+    copy = configNode
+  end subroutine read_more
+end module cfg_mod
+""")
+    (tmp_path / "x.toml").write_text('[expand_args]\nConfigNode_type = ["int tixiHandle = tixiHandle", '
+                                     '"const std::string& xpath = xml_path"]\n')
+    c = config.load(str(tmp_path / "x.toml"))
+    translate([str(tmp_path / "cfg_mod.F90")], c, str(tmp_path))
+    hpp, cpp = (tmp_path / "cfg_mod.hpp").read_text(), (tmp_path / "cfg_mod.cpp").read_text()
+    assert "void read_settings(int tixiHandle, const std::string& xpath, int& n);" in hpp
+    assert 'n = tixiGetIntegerElement(tixiHandle, xpath + "/n");' in cpp
+    assert "read_more(tixiHandle, xpath, n);" in cpp and "external_read(tixiHandle, xpath);" in cpp
+    assert "n = n + xpath.size();" in cpp
+    assert "not translated (expanded-argument)" in cpp                 # copy = configNode

@@ -212,6 +212,19 @@ locals and arguments); `this%tmp%v(i)` → `tmp(i - 1)`, `allocate(this%tmp%v(n)
 `tmp.resize(n)`, `associated(this%tmp%v)` → `tmp.size() > 0`. The wrapper type itself is not
 emitted.
 
+## Arguments that are several parameters in C++
+
+`expand_args` turns a dummy argument of a (not translated) type into several C++ parameters:
+
+```toml
+[expand_args]
+confignode_type = ["int tixiHandle = tixiHandle", "const std::string& xpath = xml_path"]
+```
+
+`type(ConfigNode_type) :: configNode` becomes `int tixiHandle, const std::string& xpath`;
+`configNode%xml_path` → `xpath`; passing the argument on (`call f(configNode, x)`) → `f(tixiHandle,
+xpath, x)`. Other uses of the object are kept as commented Fortran (`expanded-argument`).
+
 ## Callbacks
 
 | Fortran | C++ |

@@ -134,6 +134,10 @@ DEFAULTS = {
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
+    # dummy arguments of a (not translated) type that are several parameters in C++:
+    # type -> ["C++ type name = component", ...], e.g.
+    # confignode_type = ["int tixiHandle = tixiHandle", "const std::string& xpath = xml_path"]
+    "expand_args": {},
     # abstract interface (lower case) -> C++ type of procedure arguments / components declared
     # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
     "procedure_map": {},
@@ -175,6 +179,10 @@ def load(path=None, **overrides):
                                     for n in v} for k, v in cfg["accessors"].items()}
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
     cfg["unwrap_types"] = {k.lower(): v.lower() for k, v in cfg["unwrap_types"].items()}
+    import re as _re
+    cfg["expand_args"] = {k.lower(): [(m.group(1), m.group(2), m.group(3).lower()) for m in
+                                      (_re.match(r"^\s*(.*\S)\s+(\w+)\s*=\s*(\w+)\s*$", e) for e in v) if m]
+                          for k, v in cfg["expand_args"].items()}
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
     cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
     cfg["c_procedure_names"] = {k.lower(): v for k, v in cfg["c_procedure_names"].items()}

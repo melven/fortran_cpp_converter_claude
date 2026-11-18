@@ -122,6 +122,9 @@ class ModuleEmitter:
                 break
         for i, a in enumerate(dummies):
             v = p.vars[a]
+            if tr.expansion(v):                 # one argument -> several C++ parameters (expand_args)
+                params += [f"{t} {n}" for t, n, _ in tr.expansion(v)]
+                continue
             s = f"{tr.param_type(v)} {v.cname}"
             if decl and v.opt_kind and i >= len(dummies) - n_opt:
                 s += f" = {tr.cpp_type(v)}()" if v.opt_kind == "empty" else " = std::nullopt"
