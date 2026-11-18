@@ -169,7 +169,8 @@ with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, expli
 `wrap_sizes`), input string (`str_array_ptr_to_str`) and optional scalar arguments, scalar
 function results. Other methods are declared and throw `std::logic_error` (TODO). Configuration:
 `c_prefix`, `c_class_names` (shorter class names in C names), `c_real`, `c_single_precision`,
-`wrap_string_in`, `wrap_sizes`. Wrapped modules must not use translated modules.
+`wrap_string_in`, `wrap_sizes`. A wrapped module may use translated modules as long as their Fortran
+originals are still built (noted as `wrap-uses-translated` in the report).
 
 ## Classes replaced by library classes with another interface
 

@@ -489,16 +489,12 @@ def register_accessors(prog, wrapped):
 
 
 def check_dependencies(prog, wrapped, translated, report):
-    """wrapped (Fortran) modules must not use translated (C++) modules"""
+    """wrapped (Fortran) modules that use translated modules: fine as long as the Fortran original of
+    the translated module is still built; only noted in the report"""
     names = {m.name for m in translated}
-    ok = True
     for m in wrapped:
         for u in m.uses:
             if u in names:
                 report.start(m.name)
-                report.add("untranslated", f"wrap-dependency:{u}")
-                ok = False
-                import sys
-                print(f"f2cpp: wrapped module {m.spelling} uses the translated module {u}: the Fortran "
-                      "library cannot depend on the C++ library", file=sys.stderr)
-    return ok
+                report.add("info", f"wrap-uses-translated:{u}")
+    return True
