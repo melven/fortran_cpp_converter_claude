@@ -131,6 +131,9 @@ myproj_chk_argument_msg = 'if (!({0})) throw std::invalid_argument({1});'
 "myproj_macros.h" = ""                     # drop the Fortran macro header
 ```
 
+`call_templates` keys may be glob patterns (`"log_*" = ""` drops all such calls); an exact
+name takes precedence over a pattern.
+
 `function_map` renames project functions and subroutines with a direct C++ counterpart
 (function references and `call` statements; arguments unchanged, `ierr` removed), e.g.
 `str = "std::to_string"`. `call_templates` covers everything else, e.g. `sort_rank`.

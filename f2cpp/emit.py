@@ -641,9 +641,7 @@ class ModuleEmitter:
         import re
         ext, known = self.cfg["header_ext"], self.cfg["module_headers"]
         h, c = [], []
-        replaced = set(self.cfg["function_map"]) | set(self.cfg["call_templates"]) | \
-            set(self.cfg["kind_map"]) | set(self.cfg["constant_map"]) | \
-            {s.lower() for s in self.cfg["error_success"]}
+        replaced = MappedNames(self.cfg)
         for u in self.mod.uses:
             if u in self.cfg["ignore_modules"]:
                 continue
@@ -936,11 +934,10 @@ class ModuleEmitter:
     def missing_modules(self):
         """report used modules whose definitions are neither parsed (file or -I) nor mapped"""
         cfg = self.cfg
-        mapped = set(cfg["function_map"]) | set(cfg["call_templates"]) | set(cfg["type_map"]) | \
-            set(cfg["kind_map"]) | set(cfg["constant_map"]) | {s.lower() for s in cfg["error_success"]}
+        mapped = MappedNames(cfg, type_map=True)
         kinds = ("unknown-name", "external-call", "external-function", "unknown-type")
         unresolved = sorted({c.split(":", 1)[1] for c in self.report.cur["info"]
-                             if c.split(":")[0] in kinds} - mapped)
+                             if c.split(":")[0] in kinds and c.split(":", 1)[1] not in mapped})
         for u, only in self.mod.use_only.items():
             if u in self.prog.modules or u in cfg["ignore_modules"]:
                 continue
@@ -1020,6 +1017,20 @@ class ModuleEmitter:
             c += ["};", ""]
         c += strip_blank(cpp.out) + [""]
         return "\n".join(self.braces(squeeze(c)))
+
+
+class MappedNames:
+    """names replaced by the configuration (function_map, call_templates incl. glob patterns, ...)"""
+
+    def __init__(self, cfg, type_map=False):
+        self.cfg = cfg
+        self.names = set(cfg["function_map"]) | set(cfg["call_templates"]) | set(cfg["kind_map"]) | \
+            set(cfg["constant_map"]) | {s.lower() for s in cfg["error_success"]} | \
+            (set(cfg["type_map"]) if type_map else set())
+
+    def __contains__(self, n):
+        from .translate import match_name
+        return n in self.names or match_name(n, self.cfg["call_templates"]) is not None
 
 
 def loop_var(do):

@@ -512,6 +512,10 @@ class Translator:
                     return template
         return None
 
+    def call_template(self, n):
+        """call template of procedure n (exact name or glob pattern, e.g. "log_*")"""
+        return match_name(n, self.cfg["call_templates"])
+
     @staticmethod
     def declares_self(template):
         """the template declares the object itself: "Type {self}(...);" -> no separate declaration"""
@@ -1466,14 +1470,16 @@ class Translator:
             if n in self.cfg["function_map"]:
                 self.emit(ind, self.mapped_call(n, args) + ";")
                 return
-            if n in self.cfg["call_templates"]:
+            template = self.call_template(n)
+            if template is not None:
                 codes = self.plain_args(args)
 
                 def sub(m):
                     c = codes[int(m.group(1))]
                     return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) else c
-                text = re.sub(r"\{(\d+)(:str)?\}", sub, self.cfg["call_templates"][n])
-                self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
+                text = re.sub(r"\{(\d+)(:str)?\}", sub, template)
+                if text.strip():                # an empty template drops the call
+                    self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
                 return
             if p is not None:
                 self.spelled(p, desig)
@@ -1974,6 +1980,14 @@ class _Trimmed:
 
     def __str__(self):
         return "\n".join(str(c) for c in self.content)
+
+
+def match_name(name, table):
+    """value of name in table: exact key, else the first glob pattern that matches"""
+    import fnmatch
+    if name in table:
+        return table[name]
+    return next((v for k, v in table.items() if any(ch in k for ch in "*?[") and fnmatch.fnmatch(name, k)), None)
 
 
 def postfix_only(code):

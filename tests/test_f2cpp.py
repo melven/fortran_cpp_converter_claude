@@ -1266,3 +1266,17 @@ end module project_solverX
     cpp = (tmp_path / "project_solverX.cpp").read_text()
     assert "  project::config::solverXConfig_wrapper config(tixiHandle, xml_path);\n" in cpp
     assert "solverX_config config" not in cpp and "n = config.size;" in cpp
+
+
+def test_call_templates_with_glob_patterns(tmp_path):
+    (tmp_path / "g_mod.F90").write_text(
+        "module g_mod\nuse logging, only: log_debug, log_info, log_error\ncontains\nsubroutine s(x)\n"
+        "real :: x\ncall log_debug('a')\ncall log_info('b')\ncall log_error('c', x)\nx = 1.0\n"
+        "end subroutine\nend module\n")
+    c = config.load()
+    c["call_templates"] = {"log_error": "report_error({0}, {1});", "log_*": ""}
+    path = str(tmp_path / "g_mod.F90")
+    report, _ = translate([path], c, str(tmp_path))
+    cpp = (tmp_path / "g_mod.cpp").read_text()
+    assert "void s(scalar& x)\n{\n  report_error(\"c\", x);\n  x = 1.0;\n}" in cpp     # exact name first
+    assert "logging" not in (tmp_path / "g_mod.hpp").read_text() + cpp and not report.files[path]["missing"]
