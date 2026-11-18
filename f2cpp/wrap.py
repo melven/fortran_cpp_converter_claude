@@ -73,25 +73,20 @@ class WrapEmitter(ModuleEmitter):
         """bind(C) type of the C struct of the handle: <Root>_c"""
         return f"{self.c_class_name(self.root(t)[1])}_c"
 
-    def wrap_from_c(self, t, name, ht, hpp):
-        """<Class>_private::wrapFromC<T = Class>(c): C++ object of (derived) type T for the C object c;
-        a derived class forwards to its parent's (hand-written parents must provide the same template)"""
+    def wrap_from_c(self, t, name, ht, hpp, cpp):
+        """<Class>_private::wrapFromC(c): C++ object of the C object c (protected constructor; derived
+        classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
         cls = name.split("::")[-1]
-        if self.is_root(t):
-            body = "return std::make_unique<T>(&c);"
-        else:
-            parent = self.prog.type_name(t.parent, self.mod)
-            body = f"return {parent}_private::wrapFromC<T>(c);"
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"//! C++ object (class T: {cls} or derived) of the C object c")
-        hpp.emit(0, f"template <class T = {cls}>")
-        hpp.emit(0, f"std::unique_ptr<T> wrapFromC({ht}& c)")
-        hpp.emit(0, "{")
-        hpp.emit(1, body)
+        hpp.emit(0, f"std::unique_ptr<{cls}> wrapFromC({ht}& c);  //!< C++ object of the C object c")
         hpp.emit(0, "}")
-        hpp.emit(0, f"}} // namespace {cls}_private")
         hpp.emit(0, "")
+        cpp.emit(0, f"std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c)")
+        cpp.emit(0, "{")
+        cpp.emit(1, f"return std::unique_ptr<{cls}>(new {cls}(c));")
+        cpp.emit(0, "}")
+        cpp.emit(0, "")
 
     def object_access(self, t, cname, handle, has_err, body):
         """binding statements: the Fortran object `obj` from the handle, around the statements body"""
@@ -414,7 +409,9 @@ class WrapEmitter(ModuleEmitter):
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decl, body = f"{tr.cpp_type(v)}& {v.cname}() const", f"return *{cname}(handle_);"
+            ty = tr.cpp_type(v)
+            decls = [(f"{ty}& {v.cname}()", f"return *{cname}(handle_);"),
+                     (f"const {ty}& {v.cname}() const", f"return *{cname}(handle_);")]
         elif kind == "logical":
             fb.append(f"  !  bool {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
@@ -422,7 +419,7 @@ class WrapEmitter(ModuleEmitter):
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decl, body = f"bool {v.cname}() const", f"return {cname}(handle_);"
+            decls = [(f"bool {v.cname}() const", f"return {cname}(handle_);")]  # Fortran logical: no reference
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
@@ -439,17 +436,19 @@ class WrapEmitter(ModuleEmitter):
                    f"    integer(C_INT), intent(out) :: {', '.join(dims)}"] + odecl + ostmts + \
                 [f"  end subroutine {cname}"]
             et = tr.eigen_type(v, v.rank)
-            decl = f"Eigen::Map<{et}> {v.cname}() const"
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
                     f" {cname}(handle_, &data, " + ", ".join(f"&{d}" for d in dims) +
-                    f"); return Eigen::Map<{et}>(data, " + ", ".join(dims) + ");")
-        hdecl.emit(1, decl + ";")
-        cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
-        cpp.emit(0, "{")
-        for stmt in body.split("; "):
-            cpp.emit(1, stmt.rstrip(";") + ";")
-        cpp.emit(0, "}")
-        cpp.emit(0, "")
+                    "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
+            decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
+                     (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
+        for decl, body in decls:
+            hdecl.emit(1, decl + ";")
+            cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
+            cpp.emit(0, "{")
+            for stmt in body.split("; "):
+                cpp.emit(1, stmt.rstrip(";") + ";")
+            cpp.emit(0, "}")
+            cpp.emit(0, "")
 
     # ------------------------------------------------------------------ file headers
     def header_comments(self):
@@ -525,14 +524,14 @@ class WrapEmitter(ModuleEmitter):
                 self.report.add("todo", "wrap:unknown-base")
             final = " final" if not t.children and not t.abstract else ""
             base = f" : public {prog.type_name(t.parent, mod)}" if t.parent else ""
+            self.wrap_from_c(t, name, ht, hpp, cpp)
             hpp.emit(0, f"class {name}{final}{base}")
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
-            if self.is_root(t):
-                hpp.emit(1, f"explicit {name}({ht}* handle = nullptr) : handle_(handle) {{}}  "
-                            "//!< object created in Fortran (nullptr: empty object)")
-            else:                               # no added members: the parent's constructor
-                hpp.emit(1, f"using {prog.type_name(t.parent, mod)}::{prog.type_name(t.parent, mod).split('::')[-1]};")
+            hpp.emit(1, f"{name}() = default;  //!< empty object")
+            if not self.is_root(t):             # no added members: the parent's constructors
+                parent = prog.type_name(t.parent, mod)
+                hpp.emit(1, f"using {parent}::{parent.split('::')[-1]};")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
             hpp.emit(1, f"{name}({name}&&) = default;")
@@ -562,13 +561,16 @@ class WrapEmitter(ModuleEmitter):
             for v, kind in getters:
                 self.getter(t, v, kind, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-getter")
+            hpp.emit(0, "")
+            hpp.emit(0, "protected:")
             if self.is_root(t):
-                hpp.emit(0, "")
-                hpp.emit(0, "protected:")
+                hpp.emit(1, f"explicit {name}({ht}& c) : handle_(&c) {{}}  //!< the object created in Fortran")
+            cls = name.split("::")[-1]
+            hpp.emit(1, f"friend std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c);")
+            if self.is_root(t):
                 hpp.emit(1, f"{ht}* handle_ = nullptr;  //!< the Fortran object (C binding: {stem_h})")
             hpp.emit(0, "};")
             hpp.emit(0, "")
-            self.wrap_from_c(t, name, ht, hpp)
         from .prepass import CPP_MARK
         for p in mod.procs.values():
             for c in p.doc:                             # #ifdef ... around procedures: in all three files
@@ -614,7 +616,7 @@ class WrapEmitter(ModuleEmitter):
             self.doc(aliases, p, 0)
             aliases.emit(0, f"using {p.cname} = std::function<{ret}({params})>;")
             aliases.emit(0, "")
-        if classes and (len(classes) > 1 or aliases.out):
+        if classes:
             h += [f"class {prog.type_name(t.name)};" for t in classes] + [""]
         h += aliases.out
         h += strip_blank(hpp.out) + ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]

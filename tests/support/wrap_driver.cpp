@@ -1,5 +1,6 @@
 // C++ counterpart of tests/corpus/wrapped/ref_driver.F90: the solver is a wrapped Fortran object.
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 
 #include "mysolver_mod.hpp"
@@ -11,7 +12,8 @@ using namespace project;
 
 int main()
 {
-  MySolver s(project_MySolver_create(3));
+  std::unique_ptr<MySolver> ps = MySolver_private::wrapFromC(*project_MySolver_create(3));
+  MySolver& s = *ps;
   vec x(3), y;
   x << 1.0, -2.0, 0.5;
   std::printf("%24.15E\n", run_solver(s, x));
