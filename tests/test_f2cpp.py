@@ -815,3 +815,52 @@ end module cache_mod
     assert "tmp(0) = tmp(0) + 1.0;" in cpp and "scalar s = tmp.sum();" in cpp
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "cache_mod.cpp"],
         str(tmp_path))
+
+
+@needs_cxx
+@pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
+def test_wrapped_module_end_to_end(tmp_path):
+    """mysolver_mod stays in Fortran (bind(C) layer + C++ glue), solver_user_mod is translated and uses it;
+    the result equals the pure Fortran program"""
+    d = str(tmp_path)
+    w = os.path.join(CORPUS, "wrapped")
+    translate([os.path.join(w, "solver_user_mod.F90")], cfg(), d, wrap=[os.path.join(w, "mysolver_mod.F90")])
+    hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
+    binding = read((d,), "mysolver_mod_c_binding.F90")
+    assert "void project_MySolver_apply(MySolver mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, int* ierr);" in h
+    assert "typedef void* MySolver;" in h and "int* project_MySolver_n(MySolver mySolver);" in h
+    assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
+    assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
+    assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
+    assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
+    assert "  void apply(const vec& x, vec& y) const;" in hpp and "  int& n() const;" in hpp
+    assert "  Eigen::Map<mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
+           "std::optional<scalar> tol = std::nullopt) const;" in hpp
+    assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
+           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
+           '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
+    user = read((d,), "solver_user_mod.cpp")
+    assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user
+    os.makedirs(os.path.join(d, "f"))
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    for src, obj in ((os.path.join(SUPPORT, "project_str.F90"), "f/str.o"),
+                     (os.path.join(w, "mysolver_mod.F90"), "f/mysolver.o"),
+                     ("mysolver_mod_c_binding.F90", "f/binding.o"),
+                     (os.path.join(SUPPORT, "mysolver_factory.F90"), "f/factory.o")):
+        run(ff + [src, "-o", obj], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for src, obj in (("mysolver_mod.cpp", "glue.o"), ("solver_user_mod.cpp", "user.o"),
+                     (os.path.join(SUPPORT, "wrap_driver.cpp"), "drv.o")):
+        run(gxx + [src, "-o", obj], d)
+    run(["g++", "glue.o", "user.o", "drv.o", "f/str.o", "f/mysolver.o", "f/binding.o", "f/factory.o",
+         "-lgfortran", "-o", "cdrv"], d)
+    res = run(["./cdrv"], d).split("\n")
+    run(ff + [os.path.join(w, "solver_user_mod.F90"), "-o", "ref_user.o"], d)
+    run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
+         "ref_user.o", "-o", "fdrv"], d)
+    ref = run(["./fdrv"], d).split()
+    vals = " ".join(res[:3]).split()
+    assert len(vals) == len(ref) == 5
+    for a, b in zip(vals, ref):
+        assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
+    assert res[3] == "project_MySolver_apply: size of x"

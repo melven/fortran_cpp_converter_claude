@@ -1,6 +1,7 @@
 """Command line interface."""
 import argparse
 import os
+import re
 import sys
 import threading
 
@@ -30,9 +31,11 @@ def parse_file(path, cfg, parser):
     return mods
 
 
-def translate(paths, cfg, outdir, interface_only=(), report=None):
-    """translate all files in paths; interface_only files are parsed for their symbols only"""
+def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
+    """translate all files in paths; interface_only files are parsed for their symbols only;
+    wrap files get the C++ interface of the translation, implemented by calls of the Fortran code"""
     report = report or Report()
+    paths = list(paths) + [w for w in wrap if w not in paths]
     parser = ParserFactory().create(std="f2008")
     prog = Program(cfg)
     todo = []
@@ -66,13 +69,30 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
             if path in paths:
                 todo.append((path, m))
     prog.finish()
+    wrapped = [m for path, m in todo if path in wrap]
+    from .wrap import WrapEmitter, register_accessors, check_dependencies
+    register_accessors(prog, wrapped)
+    check_dependencies(prog, wrapped, [m for _, m in todo if m not in wrapped], report)
     os.makedirs(outdir, exist_ok=True)
     written = []
     for path, m in todo:        # analysis pass: array dummies that receive slices, uses of integer arrays
         ModuleEmitter(prog, m, Report(), path).generate()
     prog.decide_int_vectors([m for _, m in todo])
     for path, m in todo:
-        hpp, cpp = ModuleEmitter(prog, m, report, path).generate()
+        if m in wrapped:
+            hpp, cpp, binding = WrapEmitter(prog, m, report, path).generate()
+            out = os.path.join(outdir, prog.file_stem(m.name) + "_c_binding.F90")
+            with open(out, "w") as f:
+                f.write(binding)
+            written.append(out)
+            from .wrap import c_header                  # normally generated from the binding by the build
+            stem = prog.file_stem(m.name)
+            out = os.path.join(outdir, stem + ".h")
+            with open(out, "w") as f:
+                f.write(c_header(binding, re.sub(r"\W", "_", os.path.basename(stem)).upper() + "_H"))
+            written.append(out)
+        else:
+            hpp, cpp = ModuleEmitter(prog, m, report, path).generate()
         for text, ext in ((hpp, cfg["header_ext"]), (cpp, cfg["source_ext"])):
             if text is not None:
                 out = os.path.join(outdir, prog.file_stem(m.name) + ext)
@@ -85,17 +105,21 @@ def translate(paths, cfg, outdir, interface_only=(), report=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="f2cpp", description="Fortran 2003 -> C++ (Eigen, googletest)")
-    ap.add_argument("files", nargs="+", help="Fortran module files (.F90) and pFUnit tests (.pf, .pfunit)")
+    ap.add_argument("files", nargs="*", help="Fortran module files (.F90) and pFUnit tests (.pf, .pfunit)")
     ap.add_argument("-o", "--outdir", default="f2cpp_out")
     ap.add_argument("-c", "--config", action="append", metavar="TOML",
                     help="configuration file; may be given several times (later files take precedence)")
     ap.add_argument("-n", "--namespace", help="C++ namespace (overrides config)")
     ap.add_argument("-I", "--interface", action="append", default=[], metavar="FILE",
                     help="parse FILE only for its symbols (used modules), no output")
+    ap.add_argument("-W", "--wrap", action="append", default=[], metavar="FILE",
+                    help="module that stays in Fortran: generate its C++ interface, glue code and C binding")
     ap.add_argument("--keep-original", action="store_true", default=None,
                     help="emit each Fortran statement as comment above its translation")
     ap.add_argument("--report", metavar="JSON", help="write construct coverage report (no source text)")
     args = ap.parse_args(argv)
+    if not args.files and not args.wrap:
+        ap.error("no files to translate or wrap")
     cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original)
     # parsing and translation recurse over the expression trees: very long expressions (hundreds of
     # operands) need more than the default recursion limit and stack
@@ -103,7 +127,7 @@ def main(argv=None):
     sys.setrecursionlimit(100000)
     threading.stack_size(512 * 1024 * 1024)
     worker = threading.Thread(target=lambda: result.append(translate(args.files, cfg, args.outdir,
-                                                                     args.interface)))
+                                                                     args.interface, wrap=args.wrap)))
     worker.start()
     worker.join()
     if not result:
