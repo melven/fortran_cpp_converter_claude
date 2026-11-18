@@ -847,6 +847,12 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
     assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
     assert "void scale_vector(vec& x, scalar factor)\n{\n  throw std::logic_error" in cpp    # size of x unknown
+    # optional string: NULL pointer
+    assert "int project_tagged_length(const char* msg, const char* tag);" in h
+    assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
+    assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
+    assert "    if (c_associated(tag)) tag_f = str_array_ptr_to_str(tag)\n" \
+           "    res = tagged_length(msg=str_array_ptr_to_str(msg), tag=tag_f)" in binding
     user = read((d,), "solver_user_mod.cpp")
     assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
     os.makedirs(os.path.join(d, "f"))
@@ -879,3 +885,12 @@ def test_wrapped_module_without_size_checks(tmp_path):
     translate([], cfg(), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     cpp = (tmp_path / "mysolver_mod.cpp").read_text()
     assert "invalid_argument" not in cpp and "  y.resize(x.size());\n  int ierr = 0;\n" in cpp
+
+
+def test_c_names_follow_the_namespace(tmp_path):
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
+    h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
+    assert "typedef void* flow_MySolver;" in h and "#define FLOW_REAL double" in h
+    assert "void flow_MySolver_apply(flow_MySolver mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
+    assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding

@@ -4,7 +4,7 @@ module mysolver_mod
   implicit none
   private
 
-  public :: MySolver_type, residual_norm, scale_vector
+  public :: MySolver_type, residual_norm, scale_vector, tagged_length
 
   type :: MySolver_type
     integer :: n = 0                   !< problem size
@@ -144,5 +144,14 @@ contains
     PROJECT_CHK_ARGUMENT(factor > 0.0, ierr)
     x = factor * x
   end subroutine scale_vector
+
+  !> length of "tag: msg" (tag optional)
+  function tagged_length(msg, tag) result(k)
+    character(len=*), intent(in) :: msg
+    character(len=*), intent(in), optional :: tag
+    integer :: k
+    k = len_trim(msg)
+    if (present(tag)) k = k + len_trim(tag) + 2
+  end function tagged_length
 
 end module mysolver_mod

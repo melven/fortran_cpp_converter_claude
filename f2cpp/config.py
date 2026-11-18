@@ -110,12 +110,14 @@ DEFAULTS = {
     # type(MutableRealArray1d_type) :: tmp; this%tmp%v(i) -> mutable vec tmp; tmp(i - 1))
     "unwrap_types": {},
     # wrapped modules (--wrap): C binding conventions
-    "c_prefix": "project",                    # project_<Class>_<method>
+    # names derived from the (outer) namespace NS if not set: ns_<Class>_<method>, NS_REAL,
+    # NS_SINGLE_PRECISION, module ns_str
+    "c_prefix": None,                         # <ns>_<Class>_<method>
     "c_class_names": {},
     "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)                      # Fortran type -> class name in C names (shorter names)
-    "c_real": "PROJECT_REAL",                 # C type macro of real
-    "c_single_precision": "PROJECT_SINGLE_PRECISION",
-    "wrap_string_in": ["project_str", "str_array_ptr_to_str"],    # module, C string -> Fortran string
+    "c_real": None,                           # C type macro of real: <NS>_REAL
+    "c_single_precision": None,               # <NS>_SINGLE_PRECISION
+    "wrap_string_in": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}
     "wrap_sizes": {},
@@ -168,4 +170,9 @@ def load(path=None, **overrides):
     for key, val in overrides.items():
         if val is not None:
             cfg[key] = val
+    ns = cfg["namespace"].split("::")[0]
+    cfg["c_prefix"] = cfg["c_prefix"] or ns.lower()
+    cfg["c_real"] = cfg["c_real"] or f"{ns.upper()}_REAL"
+    cfg["c_single_precision"] = cfg["c_single_precision"] or f"{ns.upper()}_SINGLE_PRECISION"
+    cfg["wrap_string_in"] = cfg["wrap_string_in"] or [f"{ns.lower()}_str", "str_array_ptr_to_str"]
     return cfg

@@ -107,9 +107,9 @@ class WrapEmitter(ModuleEmitter):
             if v.base in ("procedure", "type", "complex", "unknown"):
                 return None, f"argument {v.cname} ({v.base})"
             if v.base == "character":
-                if v.rank or v.intent != "in" or opt:
+                if v.rank or v.intent != "in":
                     return None, f"argument {v.cname} (character, only intent(in) scalars)"
-                res.append((a, "string", None))
+                res.append((a, "optional-string" if opt else "string", None))
                 continue
             if v.rank == 0:
                 if opt and (v.intent != "in" or v.base == "logical"):
@@ -176,6 +176,13 @@ class WrapEmitter(ModuleEmitter):
                 c_args.append(f"const char* {a}")
                 call.append(f"{a}={self.cfg['wrap_string_in'][1]}({a})")
                 glue.append(f"{v.cname}.c_str()")
+            elif kind == "optional-string":     # NULL: absent (an unallocated actual is not present)
+                decls.append(f"type(C_PTR), value :: {a}")
+                decls.append(f"character(len=:), allocatable :: {a}_f")
+                c_args.append(f"const char* {a}")
+                pre.append(f"if (c_associated({a})) {a}_f = {self.cfg['wrap_string_in'][1]}({a})")
+                call.append(f"{a}={a}_f")
+                glue.append(f"{v.cname} ? {v.cname}->c_str() : nullptr")
             elif kind in ("scalar", "optional"):
                 intent = v.intent or "inout"
                 if kind == "optional":
@@ -405,7 +412,7 @@ class WrapEmitter(ModuleEmitter):
                 if reason:
                     self.not_wrapped(t, p, reason, hpp, cpp)
                     continue
-                needs_str |= any(kind == "string" for _, kind, _ in args)
+                needs_str |= any(kind in ("string", "optional-string") for _, kind, _ in args)
                 self.method(t, bd, p, args, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-method")
             getters = self.getters(t)
@@ -426,7 +433,7 @@ class WrapEmitter(ModuleEmitter):
             if reason:
                 self.not_wrapped(None, p, reason, hpp, cpp)
                 continue
-            needs_str |= any(kind == "string" for _, kind, _ in args)
+            needs_str |= any(kind in ("string", "optional-string") for _, kind, _ in args)
             self.method(None, None, p, args, fb, hpp, cpp)
             self.report.add("translated", "wrapped-procedure")
 

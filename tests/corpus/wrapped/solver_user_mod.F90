@@ -1,6 +1,6 @@
 !> Translated module that uses the wrapped (Fortran) class.
 module solver_user_mod
-  use mysolver_mod, only: MySolver_type, residual_norm
+  use mysolver_mod, only: MySolver_type, residual_norm, tagged_length
   implicit none
   private
   public :: run_solver
@@ -29,5 +29,6 @@ contains
       r = r + s%coupling(i, 2) * i
     end do
     r = r + residual_norm(y, x, size(x))
+    r = r + 1000 * tagged_length('abc') + 10000 * tagged_length('abc', tag='de')
   end function run_solver
 end module solver_user_mod
