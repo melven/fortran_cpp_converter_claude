@@ -71,8 +71,8 @@ DEFAULTS = {
     # Fortran type -> component names (["*"]: all components): obj%models -> obj.models();
     # renamed accessor: "coupling_manager=couplingManager"
     "accessors": {},
-    # parts of modules that are not emitted (stay in Fortran only): "module:name" with glob patterns;
-    # name: module procedure, type, module variable, or "type%binding" for a method
+    # parts of modules that are not emitted (stay in Fortran only), glob patterns; in the config file
+    # [exclude] module = ["name", ...] (name: module procedure, type, module variable, "type%binding")
     "exclude": [],
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
@@ -152,7 +152,10 @@ def load(path=None, **overrides):
         for key, val in user.items():
             if key not in cfg:
                 raise SystemExit(f"f2cpp: unknown config key '{key}' in {p}")
-            if isinstance(cfg[key], dict):
+            if key == "exclude":            # [exclude] module = ["name", ...] or ["module:name", ...]
+                items = [f"{m}:{n}" for m, names in val.items() for n in names] if isinstance(val, dict) else val
+                cfg[key] = cfg[key] + [v for v in items if v not in cfg[key]]
+            elif isinstance(cfg[key], dict):
                 cfg[key].update(val)
             elif isinstance(cfg[key], list) and key in ("extra_includes", "test_includes", "ignore_modules",
                                                          "pre_patches", "namespace_map"):

@@ -24,7 +24,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 | `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults; may be repeated, later files take precedence (tables and include lists are merged) |
 | `-n NS` | C++ namespace |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
-| `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`; glob patterns, e.g. `io_mod:*_records`); also config `exclude = [...]`. Applies to translated and wrapped modules |
+| `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`; glob patterns, e.g. `io_mod:*_records`); in the config file `[exclude]` with `module = ["name", ...]` (`"*" = [...]` for all modules). Applies to translated and wrapped modules |
 | `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
 
 Pass all modules that depend on each other in one call (or via `-I`): types, ranks and

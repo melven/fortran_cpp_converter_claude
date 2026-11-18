@@ -927,8 +927,10 @@ contains
   end function keep_me
 end module rec_mod
 """)
-    main([str(tmp_path / "rec_mod.F90"), "-o", str(tmp_path / "out"), "-x", "rec_mod:*_records",
-          "-x", "rec_mod:internal_type", "-x", "rec_mod:scratch", "-x", "*:record_type%show"])
+    (tmp_path / "x.toml").write_text('[exclude]\nrec_mod = ["*_records", "internal_type"]\n'
+                                     '"*" = ["record_type%show"]\n')
+    main([str(tmp_path / "rec_mod.F90"), "-o", str(tmp_path / "out"), "-c", str(tmp_path / "x.toml"),
+          "-x", "rec_mod:scratch"])
     hpp, cpp = (tmp_path / "out" / "rec_mod.hpp").read_text(), (tmp_path / "out" / "rec_mod.cpp").read_text()
     assert "class record final" in hpp and "inline const int max_count = 10;" in hpp
     # a data type without (emitted) methods keeps its members public
