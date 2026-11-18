@@ -833,7 +833,9 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
            "int* ierr);" in h
     assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
-    assert "typedef struct project_MySolver project_MySolver;" in h
+    assert "typedef struct project_MySolver {\nvoid* p_impl;\n} project_MySolver;" in h
+    assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR" in binding
+    assert "    call c_f_pointer(mySolver, this_c)\n    call c_f_pointer(this_c%p_impl, obj)" in binding
     assert "int* project_MySolver_n(const project_MySolver* mySolver);" in h
     assert "  explicit MySolver(project_MySolver* handle) : handle_(handle) {}" in hpp
     assert "protected:\n  project_MySolver* handle_ = nullptr;" in hpp
@@ -900,7 +902,7 @@ def test_c_names_follow_the_namespace(tmp_path):
     w = os.path.join(CORPUS, "wrapped")
     translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
-    assert "typedef struct flow_MySolver flow_MySolver;" in h and "#define FLOW_REAL double" in h
+    assert "typedef struct flow_MySolver {" in h and "#define FLOW_REAL double" in h
     assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
     assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
 
@@ -982,7 +984,8 @@ def test_wrapped_class_hierarchy(tmp_path):
     assert "volume" not in sh and "handle_" not in sh                  # overrides dispatch in the base class
     assert "  type, public :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
         read((d,), "body_mod_c_binding.F90")
-    assert "  use body_mod_c_binding, only: bodyWrapper_type" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
+    assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in sb
+    assert "    call c_f_pointer(sphere, this_c)\n    call c_f_pointer(this_c%p_impl, wrapper)\n" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
     assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr=dr, ierr=ierr)\n" \
            "    class default\n      ierr = -1\n    end select" in sb
     # file headers: original header, @file renamed, @brief prefixed
@@ -1019,7 +1022,13 @@ def test_wrapped_class_with_hand_wrapped_base(tmp_path):
     translate([], c, str(tmp_path), [os.path.join(w, "body_mod.F90")], wrap=[os.path.join(w, "sphere_mod.F90")])
     sh = (tmp_path / "sphere_mod.hpp").read_text()
     assert '#include "body_wrapper.hpp"' in sh and "class sphere final : public body" in sh
-    assert "  use body_mod_c_binding, only: bodyWrapper_type" in (tmp_path / "sphere_mod_c_binding.F90").read_text()
+    assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in \
+        (tmp_path / "sphere_mod_c_binding.F90").read_text()
+    c["wrap_handle"] = "direct"                 # simple case: the handle points to the wrapper itself
+    translate([], c, str(tmp_path), [os.path.join(w, "body_mod.F90")], wrap=[os.path.join(w, "sphere_mod.F90")])
+    sb = (tmp_path / "sphere_mod_c_binding.F90").read_text()
+    assert "  use body_mod_c_binding, only: bodyWrapper_type\n" in sb and "this_c" not in sb
+    assert "typedef struct project_body project_body;" not in (tmp_path / "sphere_mod.h").read_text()
     assert '#include "body_mod.h"' in (tmp_path / "sphere_mod.h").read_text()
 
 

@@ -53,14 +53,26 @@ class WrapEmitter(ModuleEmitter):
         """C typedef of the handle (one per class hierarchy): project_MySolver"""
         return f"{self.cfg['c_prefix']}_{self.c_class_name(self.root(t)[1])}"
 
+    def struct_handle(self, t):
+        return self.cfg["wrap_handle"] == "struct" and self.root(t)[1] not in self.cfg["wrap_direct_handles"]
+
+    def struct_type(self, t):
+        """bind(C) type of the C struct of the handle: <Root>_c"""
+        return f"{self.c_class_name(self.root(t)[1])}_c"
+
     def object_access(self, t, cname, handle, has_err, body):
         """binding statements: the Fortran object `obj` from the handle, around the statements body"""
+        decl, stmts, ptr = [], [""], handle
+        if self.struct_handle(t):               # handle -> bind(C) struct -> p_impl
+            decl.append(f"    type({self.struct_type(t)}), pointer :: this_c")
+            stmts.append(f"    call c_f_pointer({handle}, this_c)")
+            ptr = "this_c%p_impl"
         if not self.poly(t):
-            return [f"    type({t.spelling or t.name}), pointer :: obj"], \
-                ["", f"    call c_f_pointer({handle}, obj)"] + [f"    {x}" for x in body]
+            return decl + [f"    type({t.spelling or t.name}), pointer :: obj"], \
+                stmts + [f"    call c_f_pointer({ptr}, obj)"] + [f"    {x}" for x in body]
         root, rname = self.root(t)
-        decl = [f"    type({self.wrapper_type(t)}), pointer :: wrapper"]
-        stmts = ["", f"    call c_f_pointer({handle}, wrapper)"]
+        decl.append(f"    type({self.wrapper_type(t)}), pointer :: wrapper")
+        stmts.append(f"    call c_f_pointer({ptr}, wrapper)")
         if t.name == rname:                     # methods of the root: dynamic dispatch in Fortran
             decl.append(f"    class({t.spelling or t.name}), pointer :: obj")
             return decl, stmts + ["    obj => wrapper%ptr"] + [f"    {x}" for x in body]
@@ -451,7 +463,7 @@ class WrapEmitter(ModuleEmitter):
         stem = prog.file_stem(mod.name)
         hpp, cpp = self.tr(), self.tr()
         fb = []                                     # binding routines
-        typedefs, needs_str, wrappers, uses = [], False, [], set()
+        typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
         stem_h = os.path.basename(stem) + ".h"
         for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
             if t.name in cfg["unwrap_types"]:
@@ -460,7 +472,11 @@ class WrapEmitter(ModuleEmitter):
             ht = self.c_type_name(t)
             root, rname = self.root(t)
             if root is t or not t.parent:
-                typedefs.append(f"!typedef struct {ht} {ht};")
+                if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
+                    typedefs += [f"!typedef struct {ht} {{", "!  void* p_impl;", f"!}} {ht};"]
+                    structs.append(t)
+                else:
+                    typedefs.append(f"!typedef struct {ht} {ht};")
                 if self.poly(t):
                     wrappers.append(t)
             elif root is not None and root.module is not mod:       # hierarchy from another module
@@ -469,7 +485,8 @@ class WrapEmitter(ModuleEmitter):
                     os.path.basename(prog.file_stem(root.module.name))
                 if f'!#include "{rstem}.h"' not in typedefs:
                     typedefs.insert(0, f'!#include "{rstem}.h"')
-                uses.add(f"  use {root.module.spelling}_c_binding, only: {self.wrapper_type(t)}")
+                imported = [self.wrapper_type(t)] + ([self.struct_type(t)] if self.struct_handle(t) else [])
+                uses.add(f"  use {root.module.spelling}_c_binding, only: {', '.join(imported)}")
             elif root is None:
                 hpp.emit(0, f"// {TODO}: base type {rname} is not parsed (give its module with -I)")
                 self.report.add("todo", "wrap:unknown-base")
@@ -585,6 +602,12 @@ class WrapEmitter(ModuleEmitter):
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
         b += typedefs + ["!", "!@end_c_declaration", ""]
+        for t in structs:                           # the handle points to this struct
+            b += [f"  !> C struct {self.c_type_name(t)}: handle of {t.spelling or t.name}",
+                  f"  type, bind(C), public :: {self.struct_type(t)}",
+                  "    type(C_PTR) :: p_impl = C_NULL_PTR" +
+                  ("   !< the Fortran object" if not self.poly(t) else f"   !< {self.wrapper_type(t)}"),
+                  f"  end type {self.struct_type(t)}", ""]
         for t in wrappers:                          # the handle of a class hierarchy points to this wrapper
             b += [f"  !> handle of {t.spelling or t.name} and its extensions",
                   f"  type, public :: {self.wrapper_type(t)}",

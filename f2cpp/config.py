@@ -126,6 +126,11 @@ DEFAULTS = {
     "wrap_sizes": {},
     # check array sizes in the C++ glue before the call (the C interface has no sizes)
     "wrap_size_checks": False,
+    # handle of wrapped objects: "struct": pointer to a bind(C) struct <Class>_c whose member p_impl points
+    # to the Fortran object (class hierarchies: to <Root>Wrapper_type); "direct": pointer to the object /
+    # wrapper itself. wrap_direct_handles: root types that use "direct" anyway
+    "wrap_handle": "struct",
+    "wrap_direct_handles": [],
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
@@ -177,6 +182,7 @@ def load(path=None, **overrides):
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
+    cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     for key, val in overrides.items():
         if val is not None:
             cfg[key] = val

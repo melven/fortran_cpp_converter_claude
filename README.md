@@ -164,7 +164,12 @@ order). Several configuration files can be combined: `-c f2cpp.toml -c examples/
 | `M.cpp` | glue: `resize` of `intent(out)` arrays, call, `ierr != 0` → `std::runtime_error`; size checks of the other arrays with `wrap_size_checks = true` |
 
 Translated modules use the wrapped classes like translated ones; public components are getters
-(`n()` → `int&`, arrays → `Eigen::Map<vec>`). Class hierarchies: the handle points to `<Root>Wrapper_type` (`class(Root_type), pointer :: ptr`,
+(`n()` → `int&`, arrays → `Eigen::Map<vec>`). Handle: by default a pointer to the C struct `project_<Class>` = bind(C) type `<Class>_c` (in the
+binding module) whose member `p_impl` points to the Fortran object, for class hierarchies to
+`<Root>Wrapper_type`. `wrap_handle = "direct"` (or per root type `wrap_direct_handles`) omits the
+struct: the handle points to the object / wrapper itself.
+
+Class hierarchies: the object pointer is `<Root>Wrapper_type` (`class(Root_type), pointer :: ptr`,
 defined in the root's binding module; one C struct `project_<Root>` per hierarchy, passed as pointer, `const` for `intent(in)` objects). The C++
 classes keep their inheritance (`class sphere final : public body`); methods of the root dispatch
 in Fortran (also deferred ones), methods added in derived classes use `select type` (`ierr = -1`
