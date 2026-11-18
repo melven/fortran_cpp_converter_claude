@@ -514,10 +514,9 @@ class WrapEmitter(ModuleEmitter):
         for p in mod.procs.values():
             for c in p.doc:                             # #ifdef ... around procedures: in all three files
                 if str(c).startswith(CPP_MARK):
-                    d = str(c)[len(CPP_MARK):]
-                    hpp.out.append(d)
-                    cpp.out.append(d)
-                    fb.append(d)
+                    hpp.comment(c, 0)                   # include_map applies in C++
+                    cpp.comment(c, 0)
+                    fb.append(str(c)[len(CPP_MARK):])   # the Fortran binding keeps it
             if self.excluded_proc(p):
                 continue
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):

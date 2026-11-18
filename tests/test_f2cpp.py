@@ -1104,6 +1104,14 @@ end module ifd_mod
         assert sum(l.startswith("#if") for l in lines) == sum(l.startswith("#endif") for l in lines)
     assert "#ifdef WITH_B\nvoid b()\n{\n}\n\n#endif" in cpp and "#ifdef WITH_B\nvoid b();\n#endif" in hpp
     assert "#ifdef DEBUG\n  scalar dbg;\n#endif\n  int k;\n" in cpp          # declarations stay in their region
+    # Fortran include files: dropped / renamed with include_map
+    c = config.load()
+    c["include_map"] = {"err_macros.h": ""}
+    (tmp_path / "inc_mod.F90").write_text('#include "err_macros.h"\nmodule inc_mod\n#include "err_macros.h"\n'
+                                          "contains\n#include \"err_macros.h\"\nsubroutine s()\nend subroutine\n"
+                                          "end module\n")
+    translate([str(tmp_path / "inc_mod.F90")], c, str(tmp_path))
+    assert "err_macros" not in (tmp_path / "inc_mod.hpp").read_text() + (tmp_path / "inc_mod.cpp").read_text()
     for d in ("-DDEBUG -DWITH_B -DWITH_D -DWITH_X", ""):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN] + d.split() +
             ["-include", "project_math.hpp", "-c", "ifd_mod.cpp"], str(tmp_path))
