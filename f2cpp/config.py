@@ -71,6 +71,9 @@ DEFAULTS = {
     # Fortran type -> component names (["*"]: all components): obj%models -> obj.models();
     # renamed accessor: "coupling_manager=couplingManager"
     "accessors": {},
+    # parts of modules that are not emitted (stay in Fortran only): "module:name" with glob patterns;
+    # name: module procedure, type, module variable, or "type%binding" for a method
+    "exclude": [],
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
     # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing.
@@ -167,6 +170,7 @@ def load(path=None, **overrides):
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
+    cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
     for key, val in overrides.items():
         if val is not None:
             cfg[key] = val

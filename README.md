@@ -24,6 +24,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 | `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults; may be repeated, later files take precedence (tables and include lists are merged) |
 | `-n NS` | C++ namespace |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
+| `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`; glob patterns, e.g. `io_mod:*_records`); also config `exclude = [...]`. Applies to translated and wrapped modules |
 | `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
 
 Pass all modules that depend on each other in one call (or via `-I`): types, ranks and
@@ -41,7 +42,7 @@ with less precise output (calls are passed through unchanged).
 | binding that is overridden in a derived type / root of a hierarchy | `virtual` method / virtual destructor; other methods are not virtual |
 | binding `configure` with `intent(out)` passed object (`constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
-| components | `private:` by default; `protected:` if used by methods of derived classes; `public:` if used anywhere else in the run (free functions, other classes, tests, structure constructors). `member_access = "fortran"`: as declared in Fortran |
+| components | data types without (emitted) methods: `public:`; otherwise `private:` by default; `protected:` if used by methods of derived classes; `public:` if used anywhere else in the run (free functions, other classes, tests, structure constructors). `member_access = "fortran"`: as declared in Fortran |
 | type-bound procedure, `this%x` | member function (const if `intent(in)`), `x`; `this->x` only if a local variable or argument has the same name (`explicit_this = true`: always) |
 | `class(t)` dummy / `class(t), allocatable` | `t&` / `std::unique_ptr<t>` |
 | `select type` | `typeid` (`type is`) / `dynamic_cast` (`class is`) |

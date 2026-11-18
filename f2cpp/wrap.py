@@ -379,7 +379,7 @@ class WrapEmitter(ModuleEmitter):
         hpp, cpp = self.tr(), self.tr()
         fb = []                                     # binding routines
         typedefs, needs_str = [], False
-        for t in mod.types.values():
+        for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
             if t.name in cfg["unwrap_types"]:
                 continue
             name = self.prog.type_name(t.name)
@@ -400,7 +400,7 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(1, f"{name}& operator=({name}&&) = default;")
             hpp.emit(1, f"{ht} handle() const {{ return handle_; }}")
             hpp.emit(0, "")
-            for bd in t.bindings.values():
+            for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
                 p = prog.binding_proc(t, bd)
                 if p is None or bd.deferred or bd.nopass or p.is_ctor or p.is_dtor:
                     if p is not None and (p.is_ctor or p.is_dtor):
@@ -426,7 +426,7 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(1, f"{ht} handle_ = nullptr;")
             hpp.emit(0, "};")
             hpp.emit(0, "")
-        for p in mod.procs.values():
+        for p in [p for p in mod.procs.values() if not self.excluded_proc(p)]:
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
                 continue
             args, reason = self.wrappable(p, None)

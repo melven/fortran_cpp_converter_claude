@@ -894,3 +894,44 @@ def test_c_names_follow_the_namespace(tmp_path):
     assert "typedef void* flow_MySolver;" in h and "#define FLOW_REAL double" in h
     assert "void flow_MySolver_apply(flow_MySolver mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
     assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
+
+
+def test_exclude_parts_of_a_module(tmp_path):
+    from f2cpp.cli import main
+    (tmp_path / "rec_mod.F90").write_text("""module rec_mod
+  implicit none
+  type :: record_type
+    integer :: id = 0
+    real :: value = 0.0
+  contains
+    procedure :: show
+  end type
+  type :: internal_type
+    integer :: k
+  end type
+  integer, parameter :: max_count = 10
+  real :: scratch(3)
+contains
+  subroutine show(this)
+    class(record_type), intent(in) :: this
+  end subroutine show
+  subroutine read_records(r)
+    type(record_type), intent(out) :: r(:)
+  end subroutine read_records
+  subroutine write_records(r)
+    type(record_type), intent(in) :: r(:)
+  end subroutine write_records
+  function keep_me() result(k)
+    integer :: k
+    k = 1
+  end function keep_me
+end module rec_mod
+""")
+    main([str(tmp_path / "rec_mod.F90"), "-o", str(tmp_path / "out"), "-x", "rec_mod:*_records",
+          "-x", "rec_mod:internal_type", "-x", "rec_mod:scratch", "-x", "*:record_type%show"])
+    hpp, cpp = (tmp_path / "out" / "rec_mod.hpp").read_text(), (tmp_path / "out" / "rec_mod.cpp").read_text()
+    assert "class record final" in hpp and "inline const int max_count = 10;" in hpp
+    # a data type without (emitted) methods keeps its members public
+    assert "class record final\n{\npublic:\n\n  int id = 0;\n  scalar value = 0.0;\n};" in hpp
+    assert "int keep_me();" in hpp and "_records" not in hpp + cpp
+    assert "internal" not in hpp and "scratch" not in hpp + cpp and "show" not in hpp + cpp

@@ -228,6 +228,9 @@ class ModuleEmitter:
             prev = b
             if k == "Specific_Binding":
                 bd = t.bindings[lname(b.items[3])]
+                if self.excluded(f"{t.name}%{bd.name}"):
+                    self.excluded_names.add(f"{t.name}%{bd.name}")
+                    continue
                 p = prog.binding_proc(t, bd)
                 if p is None:
                     self.report.add("untranslated", "binding")
@@ -272,7 +275,9 @@ class ModuleEmitter:
                 tr.emit(0, "")
             # sections: 2 public, 1 protected, 0 private; each entry: comments before, statement,
             # component name (None: whole statement), comments behind
-            auto = self.cfg["member_access"] == "auto"
+            # a plain data type (no methods) keeps public members: nothing else could use them
+            methods = [b for b in t.bindings if f"{t.name}%{b}" not in self.excluded_names]
+            auto = self.cfg["member_access"] == "auto" and bool(methods or callbacks or t.parent)
             fixed = (1 if t.children else 0) if t.private_comps else 2
             sections, lead, last = {2: [], 1: [], 0: []}, [], None
             for d in comps:
@@ -363,6 +368,30 @@ class ModuleEmitter:
         for q in rest:
             self.report.add("untranslated", "recursive-internal-procedure")
             tr.fortran_comment(q.node, ind, "recursive internal procedure (a lambda cannot call itself)")
+
+    @property
+    def excluded_names(self):
+        if not hasattr(self, "_excluded_names"):
+            self._excluded_names = set()
+        return self._excluded_names
+
+    def excluded(self, name):
+        """name (lower case: procedure, type, variable or type%binding) excluded by the configuration"""
+        import fnmatch
+        for e in self.cfg["exclude"]:
+            mod, _, pat = e.rpartition(":")
+            if fnmatch.fnmatch(self.mod.name, mod or "*") and fnmatch.fnmatch(name, pat):
+                self.report.add("info", "excluded:" + name)
+                return True
+        return False
+
+    def excluded_proc(self, p):
+        """module procedure / method (by implementation name or type%binding) excluded"""
+        if p.method_of:
+            t = self.prog.find_type(p.method_of, p.module)
+            names = [f"{p.method_of}%{b.name}" for b in (t.bindings.values() if t else []) if b.impl == p.name]
+            return any(self.excluded(n) for n in names) or self.excluded(p.name)
+        return self.excluded(p.name)
 
     def declaration_plan(self, p, tr):
         """-> ({local: index of the top-level statement before which it is declared}, loop-local variables)
@@ -614,7 +643,8 @@ class ModuleEmitter:
         dirs = self.tr()
         dirs.block(cpp_directives, 0)
 
-        types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types if t not in cfg["unwrap_types"]]
+        types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types
+                     if t not in cfg["unwrap_types"] and not self.excluded(t)]
         aliases = self.tr()     # std::function aliases: before the classes, which use them as arguments
         # a test module used by other (test) modules provides shared helpers: it gets a header
         shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
@@ -634,6 +664,8 @@ class ModuleEmitter:
             if k == "Type_Declaration_Stmt":
                 names = [lname(e.items[0]) for e in items_of(s.items[2])]
                 for n in names:
+                    if self.excluded(n):
+                        continue
                     v = mod.vars[n]
                     public = mod.is_public(n, v.access) or mod.is_test
                     sink = hpp if public and (shared or not mod.is_test) else cpp_priv
@@ -645,8 +677,9 @@ class ModuleEmitter:
                     one = type("S", (), {"items": (s.items[0], s.items[1], _One(s, n))})()
                     self.decl_stmt(sink, one, mod.vars, 1 if sink is cpp_priv else 0,
                                    prefix="inline " if sink is hpp else "")
-            elif k == "Derived_Type_Def" and lname(s.content[0].items[1]) in cfg["unwrap_types"]:
-                pending = []                            # wrapper type: replaced by its component
+            elif k == "Derived_Type_Def" and (lname(s.content[0].items[1]) in cfg["unwrap_types"] or
+                                              self.excluded(lname(s.content[0].items[1]))):
+                pending = []                            # wrapper type: replaced by its component; excluded
             elif k == "Derived_Type_Def":
                 sink = cpp_priv if mod.is_test and not shared else hpp   # tests have a header only if shared
                 sink.block(pending, 0)
@@ -697,6 +730,8 @@ class ModuleEmitter:
             if k not in ("Subroutine_Subprogram", "Function_Subprogram"):
                 continue
             p = mod.procs[lname([c for c in s.content if cls(c) != "Comment"][0].items[1])]
+            if self.excluded_proc(p):
+                continue
             ptr = self.tr(p)
             if mod.is_test:
                 role = pf_role(p)

@@ -112,6 +112,8 @@ def main(argv=None):
     ap.add_argument("-n", "--namespace", help="C++ namespace (overrides config)")
     ap.add_argument("-I", "--interface", action="append", default=[], metavar="FILE",
                     help="parse FILE only for its symbols (used modules), no output")
+    ap.add_argument("-x", "--exclude", action="append", default=[], metavar="MODULE:NAME",
+                    help="do not emit NAME of MODULE (procedure, type, variable, type%%binding; glob patterns)")
     ap.add_argument("-W", "--wrap", action="append", default=[], metavar="FILE",
                     help="module that stays in Fortran: generate its C++ interface, glue code and C binding")
     ap.add_argument("--keep-original", action="store_true", default=None,
@@ -121,6 +123,7 @@ def main(argv=None):
     if not args.files and not args.wrap:
         ap.error("no files to translate or wrap")
     cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original)
+    cfg["exclude"] += [e.lower().replace(" ", "") for e in args.exclude]
     # parsing and translation recurse over the expression trees: very long expressions (hundreds of
     # operands) need more than the default recursion limit and stack
     result = []
