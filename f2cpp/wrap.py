@@ -84,7 +84,7 @@ class WrapEmitter(ModuleEmitter):
         hpp.emit(0, "")
         cpp.emit(0, f"std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c)")
         cpp.emit(0, "{")
-        cpp.emit(1, f"return std::unique_ptr<{cls}>(new {cls}(c));")
+        cpp.emit(1, f"return std::unique_ptr<{cls}>(new {cls}(c));  // new: protected constructor, make_unique has no access")
         cpp.emit(0, "}")
         cpp.emit(0, "")
 

@@ -843,7 +843,7 @@ def test_wrapped_module_end_to_end(tmp_path):
            "  friend std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c);\n" \
            "  project_MySolver* handle_ = nullptr;" in hpp
     assert "std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c)\n{\n" \
-           "  return std::unique_ptr<MySolver>(new MySolver(c));" in cpp
+           "  return std::unique_ptr<MySolver>(new MySolver(c));  // new: protected constructor, make_unique has no access" in cpp
     assert '#ifdef DLLEXPORT\n  DLLEXPORT :: project_MySolver_apply\n#endif' in binding
     # the C interface is only included in the glue; the header declares the handle type itself
     assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
