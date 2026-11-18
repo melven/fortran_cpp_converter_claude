@@ -164,7 +164,16 @@ order). Several configuration files can be combined: `-c f2cpp.toml -c examples/
 | `M.cpp` | glue: `resize` of `intent(out)` arrays, call, `ierr != 0` → `std::runtime_error`; size checks of the other arrays with `wrap_size_checks = true` |
 
 Translated modules use the wrapped classes like translated ones; public components are getters
-(`n()` → `int&`, arrays → `Eigen::Map<vec>`). Supported so far: non-polymorphic classes and public module procedures (C name
+(`n()` → `int&`, arrays → `Eigen::Map<vec>`). Class hierarchies: the handle points to `<Root>Wrapper_type` (`class(Root_type), pointer :: ptr`,
+defined in the root's binding module; one C typedef `project_<Root>` per hierarchy). The C++
+classes keep their inheritance (`class sphere final : public body`); methods of the root dispatch
+in Fortran (also deferred ones), methods added in derived classes use `select type` (`ierr = -1`
+or `error stop` for another dynamic type). The base may be wrapped in the same run or by hand
+(its module given with `-I`, its C++ header with `module_headers`). The binding and the glue keep
+the original file header with `@file` renamed and `@brief` prefixed by `C binding: ` /
+`C++ wrapper: `.
+
+Supported so far: classes and class hierarchies, public module procedures (C name
 `project_<procedure>`, `c_procedure_names` for others), methods
 with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, explicit shapes or
 `wrap_sizes`), input string (`str_array_ptr_to_str`), optional scalar and optional string (`NULL`) arguments, scalar

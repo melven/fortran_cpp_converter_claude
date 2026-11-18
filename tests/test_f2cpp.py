@@ -842,7 +842,7 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "  Eigen::Map<mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
-           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
+           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle(), x.data(), y.data(), &ierr);\n" \
            '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
     # module procedures
     assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
@@ -958,3 +958,59 @@ def test_includes_only_where_needed(tmp_path):
     assert '#include "a_mod.hpp"' in hpp                               # pt in the signature
     assert '#include "b_mod.hpp"' in cpp and "b_mod" not in hpp        # twice only in the body
     assert '#include "c_mod.hpp"' in hpp                               # no only-list: kept
+
+
+@needs_cxx
+@pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
+def test_wrapped_class_hierarchy(tmp_path):
+    """root (abstract, deferred method) and derived class in two wrapped modules"""
+    import math
+    d = str(tmp_path)
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], cfg(), d, wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
+    bh, sh = read((d,), "body_mod.hpp"), read((d,), "sphere_mod.hpp")
+    sb = read((d,), "sphere_mod_c_binding.F90")
+    assert "class body\n{" in bh and "  scalar volume() const;" in bh and "  project_body handle_ = nullptr;" in bh
+    assert "class sphere final : public body\n{" in sh and "explicit sphere(project_body handle) : body(handle) {}" in sh
+    assert "volume" not in sh and "handle_" not in sh                  # overrides dispatch in the base class
+    assert "  type, public :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
+        read((d,), "body_mod_c_binding.F90")
+    assert "  use body_mod_c_binding, only: bodyWrapper_type" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
+    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr=dr, ierr=ierr)\n" \
+           "    class default\n      ierr = -1\n    end select" in sb
+    # file headers: original header, @file renamed, @brief prefixed
+    assert read((d,), "body_mod_c_binding.F90").startswith(
+        "!> @file body_mod_c_binding.F90\n!> @brief C binding: Abstract bodies")
+    assert read((d,), "body_mod.cpp").startswith("//! @file body_mod.cpp\n//! @brief C++ wrapper: Abstract bodies")
+    assert bh.startswith("//! @file body_mod.hpp\n//! @brief Abstract bodies")
+    os.makedirs(os.path.join(d, "f"))
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    objs = []
+    for src in (os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90"), "body_mod_c_binding.F90",
+                "sphere_mod_c_binding.F90", os.path.join(SUPPORT, "body_factory.F90")):
+        objs.append("f/" + os.path.basename(src) + ".o")
+        run(ff + [src, "-o", objs[-1]], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for src in ("body_mod.cpp", "sphere_mod.cpp", os.path.join(SUPPORT, "body_driver.cpp")):
+        objs.append(os.path.basename(src) + ".o")
+        run(gxx + [src, "-o", objs[-1]], d)
+    run(["g++"] + objs + ["-lgfortran", "-o", "drv"], d)
+    lines = run(["./drv"], d).split("\n")
+    vol = 4.0 / 3.0 * math.pi * 8.0
+    got = [float(x) for x in (lines[0] + " " + lines[1]).split()]
+    vol2 = 4.0 / 3.0 * math.pi * 2.5 ** 3
+    for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2]):
+        assert a == pytest.approx(b, rel=1e-12)
+    assert lines[2] == "ierr!=0 returned from project_sphere_grow"
+
+
+def test_wrapped_class_with_hand_wrapped_base(tmp_path):
+    """only the derived class is wrapped; the base module (wrapped by hand) is given with -I"""
+    w = os.path.join(CORPUS, "wrapped")
+    c = cfg()
+    c["module_headers"] = {"body_mod": "body_wrapper.hpp"}
+    translate([], c, str(tmp_path), [os.path.join(w, "body_mod.F90")], wrap=[os.path.join(w, "sphere_mod.F90")])
+    sh = (tmp_path / "sphere_mod.hpp").read_text()
+    assert '#include "body_wrapper.hpp"' in sh and "class sphere final : public body" in sh
+    assert "  use body_mod_c_binding, only: bodyWrapper_type" in (tmp_path / "sphere_mod_c_binding.F90").read_text()
+    assert '#include "body_mod.h"' in (tmp_path / "sphere_mod.h").read_text()

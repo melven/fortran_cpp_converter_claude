@@ -28,12 +28,45 @@ class WrapEmitter(ModuleEmitter):
     """emits header, glue code and C binding of a wrapped module"""
 
     # ------------------------------------------------------------------ names
+    def c_class_name(self, tname):
+        return self.cfg["c_class_names"].get(tname) or self.prog.type_name(tname).split("::")[-1]
+
     def c_class(self, t):
-        return self.cfg["c_class_names"].get(t.name) or self.prog.type_name(t.name).split("::")[-1]
+        return self.c_class_name(t.name)
+
+    def root(self, t):
+        """(root type of the hierarchy or None if not parsed, its name)"""
+        name, cur = t.name, t
+        while cur is not None and cur.parent:
+            name = cur.parent
+            cur = self.prog.find_type(cur.parent, cur.module)
+        return cur, name
+
+    def poly(self, t):
+        """class hierarchy: the handle points to <Root>Wrapper_type with class(Root_type), pointer :: ptr"""
+        return self.prog.polymorphic(t)
+
+    def wrapper_type(self, t):
+        return f"{self.c_class_name(self.root(t)[1])}Wrapper_type"
 
     def c_type_name(self, t):
-        """C typedef of the handle: project_MySolver"""
-        return f"{self.cfg['c_prefix']}_{self.c_class(t)}"
+        """C typedef of the handle (one per class hierarchy): project_MySolver"""
+        return f"{self.cfg['c_prefix']}_{self.c_class_name(self.root(t)[1])}"
+
+    def object_access(self, t, cname, handle, has_err, body):
+        """binding statements: the Fortran object `obj` from the handle, around the statements body"""
+        if not self.poly(t):
+            return [f"    type({t.spelling or t.name}), pointer :: obj"], \
+                ["", f"    call c_f_pointer({handle}, obj)"] + [f"    {x}" for x in body]
+        root, rname = self.root(t)
+        decl = [f"    type({self.wrapper_type(t)}), pointer :: wrapper"]
+        stmts = ["", f"    call c_f_pointer({handle}, wrapper)"]
+        if t.name == rname:                     # methods of the root: dynamic dispatch in Fortran
+            decl.append(f"    class({t.spelling or t.name}), pointer :: obj")
+            return decl, stmts + ["    obj => wrapper%ptr"] + [f"    {x}" for x in body]
+        fail = "ierr = -1" if has_err else f'error stop "{cname}: object of another type"'
+        return decl, stmts + ["    select type (obj => wrapper%ptr)", f"    class is ({t.spelling or t.name})"] + \
+            [f"      {x}" for x in body] + ["    class default", f"      {fail}", "    end select"]
 
     def c_name(self, t, what):
         return f"{self.cfg['c_prefix']}_{self.c_class(t)}_{what}"
@@ -261,25 +294,22 @@ class WrapEmitter(ModuleEmitter):
         if r is not None:
             fb.append(f"    {self.f_type(r)} :: res")
         if t is not None:
-            fb.append(f"    type({t.spelling or t.name}), pointer :: obj")
-            fb.append("")
-            fb.append(f"    call c_f_pointer({handle}, obj)")
-        else:
-            fb.append("")
-        fb.extend(f"    {s}" for s in pre)
-        if t is not None:
             target = f"obj%{bd.generic or bd.name}" if bd.access == "private" else f"obj%{bd.name}"
         else:                       # private specific of a public generic interface: through the generic
             target = p.cname if self.mod.is_public(p.name) or not p.generic else p.generic
-        if r is not None:
-            fb.append(f"    res = {target}({', '.join(call)})")
+        body = list(pre) + [f"res = {target}({', '.join(call)})" if r is not None else
+                            f"call {target}({', '.join(call)})"] + list(post)
+        if t is not None:
+            odecl, ostmts = self.object_access(t, cname, handle, has_err, body)
+            fb.extend(odecl)
+            fb.extend(ostmts)
         else:
-            fb.append(f"    call {target}({', '.join(call)})")
-        fb.extend(f"    {s}" for s in post)
+            fb.append("")
+            fb.extend(f"    {x}" for x in body)
         fb.append(f"  end {kw} {cname}")
         # --- glue
-        ind, qual, name = (1, self.prog.type_name(t.name) + "::", p.bind_name) if t is not None else \
-            (0, "", self.signature(tr, p, False)[1])
+        ind, qual, name = (1, self.prog.type_name(t.name) + "::", bd.spelling if bd.deferred else p.bind_name) \
+            if t is not None else (0, "", self.signature(tr, p, False)[1])
         self.doc(hdecl, p, ind)
         hdecl.emit(ind, f"{ret} {name}({decl_params}){const};")
         cpp.emit(0, f"{ret} {qual}{name}({params}){const}")
@@ -287,7 +317,7 @@ class WrapEmitter(ModuleEmitter):
         for g in glue:
             if isinstance(g, tuple):
                 cpp.emit(1, g[1])
-        cargs = ", ".join((["handle_"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+        cargs = ", ".join((["handle()"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
         if r is not None and has_err:
@@ -303,11 +333,12 @@ class WrapEmitter(ModuleEmitter):
         cpp.emit(0, "}")
         cpp.emit(0, "")
 
-    def not_wrapped(self, t, p, reason, hdecl, cpp):
+    def not_wrapped(self, t, p, reason, hdecl, cpp, bname=None):
         tr = self.tr(p)
         ret, fname, params, const = self.signature(tr, p, False)
         self.report.add("untranslated", "wrap:" + reason.split(" (")[0].split(" ")[0])
-        ind, qual, name = (1, self.prog.type_name(t.name) + "::", p.bind_name) if t is not None else (0, "", fname)
+        ind, qual, name = (1, self.prog.type_name(t.name) + "::", bname or p.bind_name) if t is not None \
+            else (0, "", fname)
         self.doc(hdecl, p, ind)
         hdecl.emit(ind, f"{ret} {name}({self.signature(tr, p, True)[2]}){const};")
         cpp.emit(0, f"// {TODO}: not wrapped: {reason}")
@@ -322,26 +353,25 @@ class WrapEmitter(ModuleEmitter):
         cname = self.c_name(t, v.name)
         handle = lower_camel(self.c_class(t))
         cls_name = self.prog.type_name(t.name)
-        ftype = t.spelling or t.name
         fb.append("")
         fb.append("  !@c_declaration")
         if kind == "scalar":
             ct = self.c_type(v)
             fb.append(f"  !  {ct}* {cname}({self.c_type_name(t)} {handle});")
             fb.append("  !@end_c_declaration")
+            odecl, ostmts = self.object_access(t, cname, handle, False, [f"res = c_loc(obj%{v.name})"])
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")",
-                   f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res",
-                   f"    type({ftype}), pointer :: obj", "", f"    call c_f_pointer({handle}, obj)",
-                   f"    res = c_loc(obj%{v.name})", f"  end function {cname}"]
-            decl, body = f"{tr.cpp_type(v)}& {v.cname}() const", f"return *{cname}(handle_);"
+                   f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
+                [f"  end function {cname}"]
+            decl, body = f"{tr.cpp_type(v)}& {v.cname}() const", f"return *{cname}(handle());"
         elif kind == "logical":
             fb.append(f"  !  bool {cname}({self.c_type_name(t)} {handle});")
             fb.append("  !@end_c_declaration")
+            odecl, ostmts = self.object_access(t, cname, handle, False, [f"res = obj%{v.name}"])
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")",
-                   f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res",
-                   f"    type({ftype}), pointer :: obj", "", f"    call c_f_pointer({handle}, obj)",
-                   f"    res = obj%{v.name}", f"  end function {cname}"]
-            decl, body = f"bool {v.cname}() const", f"return {cname}(handle_);"
+                   f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
+                [f"  end function {cname}"]
+            decl, body = f"bool {v.cname}() const", f"return {cname}(handle());"
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
@@ -349,18 +379,18 @@ class WrapEmitter(ModuleEmitter):
                       + ", ".join(f"int* {d}" for d in dims) + ");")
             fb.append("  !@end_c_declaration")
             test = "associated" if v.has("pointer") else "allocated"
+            inner = ["data = C_NULL_PTR"] + [f"{d} = 0" for d in dims] + \
+                [f"if ({test}(obj%{v.name})) then", f"  data = c_loc(obj%{v.name})"] + \
+                [f"  {d} = size(obj%{v.name}, {k + 1})" for k, d in enumerate(dims)] + ["end if"]
+            odecl, ostmts = self.object_access(t, cname, handle, False, inner)
             fb += [f"  subroutine {cname}({handle}, data, {', '.join(dims)}) bind(C, name=\"{cname}\")",
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR), intent(out) :: data",
-                   f"    integer(C_INT), intent(out) :: {', '.join(dims)}",
-                   f"    type({ftype}), pointer :: obj", "", f"    call c_f_pointer({handle}, obj)",
-                   "    data = C_NULL_PTR"] + [f"    {d} = 0" for d in dims] + \
-                  [f"    if ({test}(obj%{v.name})) then", f"      data = c_loc(obj%{v.name})"] + \
-                  [f"      {d} = size(obj%{v.name}, {k + 1})" for k, d in enumerate(dims)] + \
-                  ["    end if", f"  end subroutine {cname}"]
+                   f"    integer(C_INT), intent(out) :: {', '.join(dims)}"] + odecl + ostmts + \
+                [f"  end subroutine {cname}"]
             et = tr.eigen_type(v, v.rank)
             decl = f"Eigen::Map<{et}> {v.cname}() const"
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
-                    f" {cname}(handle_, &data, " + ", ".join(f"&{d}" for d in dims) +
+                    f" {cname}(handle(), &data, " + ", ".join(f"&{d}" for d in dims) +
                     f"); return Eigen::Map<{et}>(data, " + ", ".join(dims) + ");")
         hdecl.emit(1, decl + ";")
         cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
@@ -370,6 +400,43 @@ class WrapEmitter(ModuleEmitter):
         cpp.emit(0, "}")
         cpp.emit(0, "")
 
+    # ------------------------------------------------------------------ file headers
+    def header_comments(self):
+        """comment nodes of the file header (first comment block before the module statement)"""
+        from .prepass import CPP_MARK, BLANK_MARK
+        parent = getattr(self.mod.node, "parent", None)
+        blocks = [[]]
+        for c in (parent.content if parent is not None else []):
+            if c is self.mod.node:
+                break
+            if cls(c) != "Comment":
+                continue
+            if str(c).startswith((CPP_MARK, BLANK_MARK)):
+                blocks.append([])
+            else:
+                blocks[-1].append(c)
+        return next((b for b in blocks if b), [])
+
+    def brief(self, lines, prefix):
+        return [re.sub(r"(@brief:?\s*)", lambda m: m.group(1) + prefix, line, count=1) for line in lines]
+
+    def cpp_file_header(self, ext, prefix=None):
+        from .emit import plain_comment
+        top = self.tr()
+        top.block(self.header_comments(), 0)
+        if not any("@file" in line for line in top.out):
+            top.out = [plain_comment(line) for line in top.out]
+        lines = self.file_header(top, ext)
+        return self.brief(lines, prefix) if prefix else lines
+
+    def fortran_file_header(self, name, prefix):
+        lines = []
+        for c in self.header_comments():
+            line = re.sub(re.escape(os.path.basename(self.src)), name, str(c), flags=re.I)
+            line = re.sub(r"(@file:?\s*)\S+\.(f90|f|pfunit|pf)\b", lambda m: m.group(1) + name, line, flags=re.I)
+            lines.append(line)
+        return self.brief(lines, prefix)
+
     # ------------------------------------------------------------------ module
     def generate(self):
         """-> (header, glue source, binding source)"""
@@ -378,31 +445,47 @@ class WrapEmitter(ModuleEmitter):
         stem = prog.file_stem(mod.name)
         hpp, cpp = self.tr(), self.tr()
         fb = []                                     # binding routines
-        typedefs, needs_str = [], False
+        typedefs, needs_str, wrappers, uses = [], False, [], set()
         for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
             if t.name in cfg["unwrap_types"]:
                 continue
             name = self.prog.type_name(t.name)
-            cc = self.c_class(t)
             ht = self.c_type_name(t)
-            typedefs.append(f"!typedef void* {ht};")
-            if prog.polymorphic(t):
-                self.report.add("todo", "wrap:polymorphic")
-                hpp.emit(0, f"// {TODO}: polymorphic class: wrapping of class hierarchies is not supported yet")
-            hpp.emit(0, f"class {name} final")
+            root, rname = self.root(t)
+            if root is t or not t.parent:
+                typedefs.append(f"!typedef void* {ht};")
+                if self.poly(t):
+                    wrappers.append(t)
+            elif root is not None and root.module is not mod:       # hierarchy from another module
+                # C header of the base's binding: named after its module (also if its C++ header is mapped)
+                rstem = root.module.spelling if root.module.name in cfg["module_headers"] else \
+                    os.path.basename(prog.file_stem(root.module.name))
+                if f'!#include "{rstem}.h"' not in typedefs:
+                    typedefs.insert(0, f'!#include "{rstem}.h"')
+                uses.add(f"  use {root.module.spelling}_c_binding, only: {self.wrapper_type(t)}")
+            elif root is None:
+                hpp.emit(0, f"// {TODO}: base type {rname} is not parsed (give its module with -I)")
+                self.report.add("todo", "wrap:unknown-base")
+            final = " final" if not t.children and not t.abstract else ""
+            base = f" : public {prog.type_name(t.parent, mod)}" if t.parent else ""
+            hpp.emit(0, f"class {name}{final}{base}")
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
             hpp.emit(1, f"{name}() = default;  //!< empty object (tests)")
-            hpp.emit(1, f"explicit {name}({ht} handle) : handle_(handle) {{}}  //!< object created in Fortran")
+            init = f"{prog.type_name(t.parent, mod)}(handle)" if t.parent else "handle_(handle)"
+            hpp.emit(1, f"explicit {name}({ht} handle) : {init} {{}}  //!< object created in Fortran")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
             hpp.emit(1, f"{name}({name}&&) = default;")
             hpp.emit(1, f"{name}& operator=({name}&&) = default;")
-            hpp.emit(1, f"{ht} handle() const {{ return handle_; }}")
+            if not t.parent:
+                hpp.emit(1, f"{ht} handle() const {{ return handle_; }}")
             hpp.emit(0, "")
             for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
                 p = prog.binding_proc(t, bd)
-                if p is None or bd.deferred or bd.nopass or p.is_ctor or p.is_dtor:
+                if prog.overrides(t, bd.name):
+                    continue            # the method of the base class dispatches in Fortran
+                if p is None or bd.nopass or p.is_ctor or p.is_dtor:
                     if p is not None and (p.is_ctor or p.is_dtor):
                         hpp.emit(1, f"// {bd.name}: object created / destroyed in Fortran")
                     continue
@@ -410,7 +493,7 @@ class WrapEmitter(ModuleEmitter):
                     continue
                 args, reason = self.wrappable(p, t)
                 if reason:
-                    self.not_wrapped(t, p, reason, hpp, cpp)
+                    self.not_wrapped(t, p, reason, hpp, cpp, bd.spelling if bd.deferred else None)
                     continue
                 needs_str |= any(kind in ("string", "optional-string") for _, kind, _ in args)
                 self.method(t, bd, p, args, fb, hpp, cpp)
@@ -421,9 +504,10 @@ class WrapEmitter(ModuleEmitter):
             for v, kind in getters:
                 self.getter(t, v, kind, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-getter")
-            hpp.emit(0, "")
-            hpp.emit(0, "private:")
-            hpp.emit(1, f"{ht} handle_ = nullptr;")
+            if not t.parent:
+                hpp.emit(0, "")
+                hpp.emit(0, "private:")
+                hpp.emit(1, f"{ht} handle_ = nullptr;")
             hpp.emit(0, "};")
             hpp.emit(0, "")
         for p in [p for p in mod.procs.values() if not self.excluded_proc(p)]:
@@ -438,29 +522,40 @@ class WrapEmitter(ModuleEmitter):
             self.report.add("translated", "wrapped-procedure")
 
         # header
-        h = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)"] + self.guard()[0] + [""]
+        h = self.cpp_file_header(cfg["header_ext"]) + \
+            [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)"] + self.guard()[0] + [""]
         h += self.std_includes("\n".join(hpp.out), self.HEADER_INCLUDES)
         inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
         h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
         h += [f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
         h += strip_blank(hpp.out) + ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]
-        c = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
+        c = self.cpp_file_header(cfg["source_ext"], "C++ wrapper: ") + \
+            [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
              self.open_ns(), ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
 
         # binding module
         single, real = cfg["c_single_precision"], cfg["c_real"]
-        b = [f"!> C binding of module {mod.spelling} (generated by f2cpp)",
-             f"module {mod.spelling}_c_binding",
+        b = self.fortran_file_header(f"{os.path.basename(stem)}_c_binding.F90", "C binding: ") or \
+            [f"!> C binding of module {mod.spelling}"]
+        b += [f"! Generated by f2cpp from {os.path.basename(self.src)}",
+              f"module {mod.spelling}_c_binding",
              "  use, intrinsic :: iso_c_binding",
              f"  use {mod.spelling}"]
         if needs_str:
             b.append(f"  use {cfg['wrap_string_in'][0]}, only: {cfg['wrap_string_in'][1]}")
+        b += sorted(uses)
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
-        b += typedefs + ["!", "!@end_c_declaration", "", "contains"] + fb + ["", f"end module {mod.spelling}_c_binding", ""]
+        b += typedefs + ["!", "!@end_c_declaration", ""]
+        for t in wrappers:                          # the handle of a class hierarchy points to this wrapper
+            b += [f"  !> handle of {t.spelling or t.name} and its extensions",
+                  f"  type, public :: {self.wrapper_type(t)}",
+                  f"    class({t.spelling or t.name}), pointer :: ptr => null()",
+                  f"  end type {self.wrapper_type(t)}", ""]
+        b += ["contains"] + fb + ["", f"end module {mod.spelling}_c_binding", ""]
         return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
 
 
