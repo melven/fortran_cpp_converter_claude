@@ -403,6 +403,10 @@ class ModuleEmitter:
         execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
         if not execs or p.internal or walk(execs[0], (F.Goto_Stmt, F.Computed_Goto_Stmt)):
             return {}, set()
+        if any(str(c).startswith(CPP_MARK) for c in walk(p.node, F.Comment)):
+            moved_ok = False            # #ifdef regions: declarations stay at the top (scopes of the regions)
+        else:
+            moved_ok = True
         top = [c for c in execs[0].content if cls(c) != "Comment"]
         uses = {}                       # name -> [(top index, Name node or None for return)]
         for k, st in enumerate(top):
@@ -426,9 +430,10 @@ class ModuleEmitter:
             loops = [d for st in top for d in walk(st, F.Block_Nonlabel_Do_Construct)
                      if loop_var(d) == n]
             inside = {id(nm) for d in loops for nm in walk(d, F.Name)}
-            if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]):
+            if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]) \
+                    and moved_ok:
                 loop_local.add(n)
-            else:
+            elif moved_ok:
                 moved[n] = min(k for k, _ in uses[n])
         return moved, loop_local
 
@@ -692,11 +697,15 @@ class ModuleEmitter:
         spec = [p for p in mod.node.content if cls(p) == "Specification_Part"]
         for s in (spec[0].content if spec else []):
             k = cls(s)
-            if k == "Implicit_Part":
-                pending += [c for c in s.content if cls(c) == "Comment"]
-                continue
-            if k == "Comment":
-                pending.append(s)
+            if k in ("Implicit_Part", "Comment"):
+                for c in (s.content if k == "Implicit_Part" else [s]):
+                    if cls(c) != "Comment":
+                        continue
+                    if str(c).startswith(CPP_MARK):     # #ifdef ...: in the header and in the source (balanced)
+                        hpp.comment(c, 0)
+                        cpp_priv.comment(c, 0)
+                    else:
+                        pending.append(c)
                 continue
             if k in ("Use_Stmt", "Access_Stmt"):
                 pending = [c for c in pending if str(c).startswith(BLANK_MARK)][:1]
@@ -766,10 +775,16 @@ class ModuleEmitter:
             k = cls(s)
             if k == "Comment":
                 cpp.comment(s, 0)
+                if str(s).startswith(CPP_MARK):         # e.g. #endif after a procedure: also around prototypes
+                    protos_pub.comment(s, 0)
                 continue
             if k not in ("Subroutine_Subprogram", "Function_Subprogram"):
                 continue
             p = mod.procs[lname([c for c in s.content if cls(c) != "Comment"][0].items[1])]
+            for c in p.doc:                             # #ifdef ... around procedures: in both files
+                if str(c).startswith(CPP_MARK):
+                    cpp.comment(c, 0)
+                    protos_pub.comment(c, 0)
             if self.excluded_proc(p):
                 continue
             ptr = self.tr(p)

@@ -510,7 +510,16 @@ class WrapEmitter(ModuleEmitter):
                 hpp.emit(1, f"{ht} handle_ = nullptr;")
             hpp.emit(0, "};")
             hpp.emit(0, "")
-        for p in [p for p in mod.procs.values() if not self.excluded_proc(p)]:
+        from .prepass import CPP_MARK
+        for p in mod.procs.values():
+            for c in p.doc:                             # #ifdef ... around procedures: in all three files
+                if str(c).startswith(CPP_MARK):
+                    d = str(c)[len(CPP_MARK):]
+                    hpp.out.append(d)
+                    cpp.out.append(d)
+                    fb.append(d)
+            if self.excluded_proc(p):
+                continue
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
                 continue
             args, reason = self.wrappable(p, None)

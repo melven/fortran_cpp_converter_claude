@@ -1047,3 +1047,63 @@ end module pair_mod
     assert "class node;\nclass edge;\n" in hpp and hpp.index("class edge;") < hpp.index("class node final")
     assert "using cost_iface = std::function<scalar(const edge& e)>;" in hpp and "#include <functional>" in hpp
     assert "void link(const edge& e, const cost_iface& f);" in hpp       # not wrapped (objects): declared
+
+
+def test_preprocessor_lines_stay_balanced(tmp_path):
+    src = """module ifd_mod
+  implicit none
+#ifdef WITH_X
+  real, parameter :: x0 = 1.0
+#else
+  real, private :: x0 = 2.0
+#endif
+contains
+  subroutine a(x)
+    real, intent(inout) :: x
+#ifdef DEBUG
+    real :: dbg
+#endif
+    integer :: k
+#ifdef DEBUG
+    dbg = x
+#endif
+    do k = 1, 3
+      x = x + k
+    end do
+#ifdef DEBUG
+    x = x + dbg
+#endif
+  end subroutine a
+
+#ifdef WITH_B
+  subroutine b()
+  end subroutine b
+#endif
+
+  function c(x) result(y)
+    real, intent(in) :: x
+    real :: y
+    y = x + x0
+#ifdef DEBUG
+    y = 2 * y
+#else
+    y = 3 * y
+#endif
+  end function c
+#ifdef WITH_D
+  subroutine d()
+  end subroutine d
+#endif
+end module ifd_mod
+"""
+    (tmp_path / "ifd_mod.F90").write_text(src)
+    translate([str(tmp_path / "ifd_mod.F90")], config.load(), str(tmp_path))
+    hpp, cpp = (tmp_path / "ifd_mod.hpp").read_text(), (tmp_path / "ifd_mod.cpp").read_text()
+    for text in (hpp, cpp):
+        lines = [l.strip() for l in text.split("\n")]
+        assert sum(l.startswith("#if") for l in lines) == sum(l.startswith("#endif") for l in lines)
+    assert "#ifdef WITH_B\nvoid b()\n{\n}\n\n#endif" in cpp and "#ifdef WITH_B\nvoid b();\n#endif" in hpp
+    assert "#ifdef DEBUG\n  scalar dbg;\n#endif\n  int k;\n" in cpp          # declarations stay in their region
+    for d in ("-DDEBUG -DWITH_B -DWITH_D -DWITH_X", ""):
+        run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN] + d.split() +
+            ["-include", "project_math.hpp", "-c", "ifd_mod.cpp"], str(tmp_path))

@@ -1843,6 +1843,8 @@ class Translator:
                 self.block([c], ind)
             elif guard is False and cls(c) != "Comment":
                 default.append(c)
+            elif guard is False and str(c).startswith(CPP_MARK):
+                self.comment(c, ind)                    # keep #ifdef ... balanced
         self.overrides = saved
         # class default: usually an assertion that cannot fail any more (the type is static in C++)
         trivial = ("Return_Stmt", "Stop_Stmt", "Error_Stop_Stmt", "Continue_Stmt")
