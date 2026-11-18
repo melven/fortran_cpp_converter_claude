@@ -126,6 +126,9 @@ DEFAULTS = {
     "wrap_sizes": {},
     # check array sizes in the C++ glue before the call (the C interface has no sizes)
     "wrap_size_checks": False,
+    # macro for the DLL export attribute of the bind(C) routines ("" for none):
+    # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
+    "wrap_dllexport": "DLLEXPORT",
     # abstract interface (lower case) -> C++ type of procedure arguments / components declared
     # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
     "procedure_map": {},

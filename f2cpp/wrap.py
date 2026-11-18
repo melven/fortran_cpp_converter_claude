@@ -71,6 +71,10 @@ class WrapEmitter(ModuleEmitter):
     def c_name(self, t, what):
         return f"{self.cfg['c_prefix']}_{self.c_class(t)}_{what}"
 
+    def dllexport(self, cname):
+        m = self.cfg["wrap_dllexport"]
+        return [f"#ifdef {m}", f"  {m} :: {cname}", "#endif"] if m else []
+
     # ------------------------------------------------------------------ analysis
     def array_sizes(self, p, t):
         """{(dummy, dim or None): Fortran expression node} from size checks and explicit shapes"""
@@ -199,7 +203,8 @@ class WrapEmitter(ModuleEmitter):
         f_args, c_args, decls, pre, post, call, glue = [], [], [], [], [], [], []
         if t is not None:
             f_args.append(handle)
-            c_args.append(f"{self.c_type_name(t)} {handle}")
+            const = "const " if p.pass_arg and p.vars[p.pass_arg].intent == "in" else ""
+            c_args.append(f"{const}{self.c_type_name(t)}* {handle}")
             decls.append(f"type(C_PTR), value :: {handle}")
         for a, kind, dims in args:
             v = p.vars[a]
@@ -289,6 +294,7 @@ class WrapEmitter(ModuleEmitter):
         kw = "function" if r is not None else "subroutine"
         res = " result(res)" if r is not None else ""
         fb.append(f"  {kw} {cname}({', '.join(f_args)}){res} bind(C, name=\"{cname}\")")
+        fb.extend(self.dllexport(cname))
         for d in decls:
             fb.append(f"    {d}")
         if r is not None:
@@ -317,7 +323,7 @@ class WrapEmitter(ModuleEmitter):
         for g in glue:
             if isinstance(g, tuple):
                 cpp.emit(1, g[1])
-        cargs = ", ".join((["handle()"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+        cargs = ", ".join((["handle_"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
         if r is not None and has_err:
@@ -357,25 +363,25 @@ class WrapEmitter(ModuleEmitter):
         fb.append("  !@c_declaration")
         if kind == "scalar":
             ct = self.c_type(v)
-            fb.append(f"  !  {ct}* {cname}({self.c_type_name(t)} {handle});")
+            fb.append(f"  !  {ct}* {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
             odecl, ostmts = self.object_access(t, cname, handle, False, [f"res = c_loc(obj%{v.name})"])
-            fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")",
+            fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decl, body = f"{tr.cpp_type(v)}& {v.cname}() const", f"return *{cname}(handle());"
+            decl, body = f"{tr.cpp_type(v)}& {v.cname}() const", f"return *{cname}(handle_);"
         elif kind == "logical":
-            fb.append(f"  !  bool {cname}({self.c_type_name(t)} {handle});")
+            fb.append(f"  !  bool {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
             odecl, ostmts = self.object_access(t, cname, handle, False, [f"res = obj%{v.name}"])
-            fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")",
+            fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decl, body = f"bool {v.cname}() const", f"return {cname}(handle());"
+            decl, body = f"bool {v.cname}() const", f"return {cname}(handle_);"
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
-            fb.append(f"  !  void {cname}({self.c_type_name(t)} {handle}, {ct}** data, "
+            fb.append(f"  !  void {cname}(const {self.c_type_name(t)}* {handle}, {ct}** data, "
                       + ", ".join(f"int* {d}" for d in dims) + ");")
             fb.append("  !@end_c_declaration")
             test = "associated" if v.has("pointer") else "allocated"
@@ -383,14 +389,14 @@ class WrapEmitter(ModuleEmitter):
                 [f"if ({test}(obj%{v.name})) then", f"  data = c_loc(obj%{v.name})"] + \
                 [f"  {d} = size(obj%{v.name}, {k + 1})" for k, d in enumerate(dims)] + ["end if"]
             odecl, ostmts = self.object_access(t, cname, handle, False, inner)
-            fb += [f"  subroutine {cname}({handle}, data, {', '.join(dims)}) bind(C, name=\"{cname}\")",
+            fb += [f"  subroutine {cname}({handle}, data, {', '.join(dims)}) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR), intent(out) :: data",
                    f"    integer(C_INT), intent(out) :: {', '.join(dims)}"] + odecl + ostmts + \
                 [f"  end subroutine {cname}"]
             et = tr.eigen_type(v, v.rank)
             decl = f"Eigen::Map<{et}> {v.cname}() const"
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
-                    f" {cname}(handle(), &data, " + ", ".join(f"&{d}" for d in dims) +
+                    f" {cname}(handle_, &data, " + ", ".join(f"&{d}" for d in dims) +
                     f"); return Eigen::Map<{et}>(data, " + ", ".join(dims) + ");")
         hdecl.emit(1, decl + ";")
         cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
@@ -446,6 +452,7 @@ class WrapEmitter(ModuleEmitter):
         hpp, cpp = self.tr(), self.tr()
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses = [], False, [], set()
+        stem_h = os.path.basename(stem) + ".h"
         for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
             if t.name in cfg["unwrap_types"]:
                 continue
@@ -453,7 +460,7 @@ class WrapEmitter(ModuleEmitter):
             ht = self.c_type_name(t)
             root, rname = self.root(t)
             if root is t or not t.parent:
-                typedefs.append(f"!typedef void* {ht};")
+                typedefs.append(f"!typedef struct {ht} {ht};")
                 if self.poly(t):
                     wrappers.append(t)
             elif root is not None and root.module is not mod:       # hierarchy from another module
@@ -473,13 +480,11 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(0, "public:")
             hpp.emit(1, f"{name}() = default;  //!< empty object (tests)")
             init = f"{prog.type_name(t.parent, mod)}(handle)" if t.parent else "handle_(handle)"
-            hpp.emit(1, f"explicit {name}({ht} handle) : {init} {{}}  //!< object created in Fortran")
+            hpp.emit(1, f"explicit {name}({ht}* handle) : {init} {{}}  //!< object created in Fortran")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
             hpp.emit(1, f"{name}({name}&&) = default;")
             hpp.emit(1, f"{name}& operator=({name}&&) = default;")
-            if not t.parent:
-                hpp.emit(1, f"{ht} handle() const {{ return handle_; }}")
             hpp.emit(0, "")
             for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
                 p = prog.binding_proc(t, bd)
@@ -506,8 +511,8 @@ class WrapEmitter(ModuleEmitter):
                 self.report.add("translated", "wrapped-getter")
             if not t.parent:
                 hpp.emit(0, "")
-                hpp.emit(0, "private:")
-                hpp.emit(1, f"{ht} handle_ = nullptr;")
+                hpp.emit(0, "protected:")
+                hpp.emit(1, f"{ht}* handle_ = nullptr;  //!< the Fortran object (C binding: {stem_h})")
             hpp.emit(0, "};")
             hpp.emit(0, "")
         from .prepass import CPP_MARK
@@ -540,7 +545,7 @@ class WrapEmitter(ModuleEmitter):
         handles = sorted({self.c_type_name(t) for t in mod.types.values()
                           if t.name not in cfg["unwrap_types"] and not self.excluded(t.name)})
         if handles:
-            h += [""] + [f"typedef void* {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
+            h += [""] + [f"struct {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
         h += ["", self.open_ns(), ""]
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation

@@ -830,13 +830,17 @@ def test_wrapped_module_end_to_end(tmp_path):
               wrap=[os.path.join(w, "mysolver_mod.F90")])
     hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
     binding = read((d,), "mysolver_mod_c_binding.F90")
-    assert "void project_MySolver_apply(project_MySolver mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
+    assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
            "int* ierr);" in h
-    assert "typedef void* project_MySolver;" in h and "int* project_MySolver_n(project_MySolver mySolver);" in h
-    assert "  explicit MySolver(project_MySolver handle) : handle_(handle) {}" in hpp
+    assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
+    assert "typedef struct project_MySolver project_MySolver;" in h
+    assert "int* project_MySolver_n(const project_MySolver* mySolver);" in h
+    assert "  explicit MySolver(project_MySolver* handle) : handle_(handle) {}" in hpp
+    assert "protected:\n  project_MySolver* handle_ = nullptr;" in hpp
+    assert '#ifdef DLLEXPORT\n  DLLEXPORT :: project_MySolver_apply\n#endif' in binding
     # the C interface is only included in the glue; the header declares the handle type itself
     assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
-    assert "typedef void* project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
+    assert "struct project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
     assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
     assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
@@ -845,7 +849,7 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "  Eigen::Map<mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
-           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle(), x.data(), y.data(), &ierr);\n" \
+           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
            '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
     # module procedures
     assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
@@ -896,8 +900,8 @@ def test_c_names_follow_the_namespace(tmp_path):
     w = os.path.join(CORPUS, "wrapped")
     translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
-    assert "typedef void* flow_MySolver;" in h and "#define FLOW_REAL double" in h
-    assert "void flow_MySolver_apply(flow_MySolver mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
+    assert "typedef struct flow_MySolver flow_MySolver;" in h and "#define FLOW_REAL double" in h
+    assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
     assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
 
 
@@ -973,8 +977,8 @@ def test_wrapped_class_hierarchy(tmp_path):
     translate([], cfg(), d, wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
     bh, sh = read((d,), "body_mod.hpp"), read((d,), "sphere_mod.hpp")
     sb = read((d,), "sphere_mod_c_binding.F90")
-    assert "class body\n{" in bh and "  scalar volume() const;" in bh and "  project_body handle_ = nullptr;" in bh
-    assert "class sphere final : public body\n{" in sh and "explicit sphere(project_body handle) : body(handle) {}" in sh
+    assert "class body\n{" in bh and "  scalar volume() const;" in bh and "  project_body* handle_ = nullptr;" in bh
+    assert "class sphere final : public body\n{" in sh and "explicit sphere(project_body* handle) : body(handle) {}" in sh
     assert "volume" not in sh and "handle_" not in sh                  # overrides dispatch in the base class
     assert "  type, public :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
         read((d,), "body_mod_c_binding.F90")

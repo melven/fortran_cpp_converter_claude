@@ -5,7 +5,7 @@
 #include "mysolver_mod.hpp"
 #include "solver_user_mod.hpp"
 
-extern "C" project_MySolver project_MySolver_create(int n);
+extern "C" project_MySolver* project_MySolver_create(int n);
 
 using namespace project;
 

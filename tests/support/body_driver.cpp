@@ -4,7 +4,7 @@
 
 #include "sphere_mod.hpp"
 
-extern "C" project_body project_body_create_sphere(double r, double m);
+extern "C" project_body* project_body_create_sphere(double r, double m);
 
 using namespace project;
 
