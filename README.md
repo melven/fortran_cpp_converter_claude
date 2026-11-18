@@ -196,7 +196,13 @@ originals are still built (noted as `wrap-uses-translated` in the report).
 `method_templates` rewrites calls of type-bound procedures of a type that is mapped with
 `type_map`: `"lu_type%solve" = "{1} = {self}.solve({0});"` turns `call lu%solve(b, x, ierr)`
 into `x = lu.solve(b);`. `{self}` is the object, `{0}`, `{1}` are the arguments (without the
-error flag); a template may contain several statements. An empty template (`""`) drops the call. `examples/eigen_solvers.toml` shows
+error flag); a template may contain several statements. An empty template (`""`) drops the call.
+Keys may be glob patterns (`"*_config_type%read"`); `{module}` / `{module_base}` give the module name
+with / without the prefix `<namespace>_`; an expanded argument (`expand_args`) gives all its
+parameters. A template that declares the object (`"Type {self}(...);"`) replaces its declaration:
+`call config%read(abstractConfig, ierr)` with
+`"*_config_type%read" = "project::config::{module_base}Config_wrapper {self}({0});"` becomes
+`project::config::solverXConfig_wrapper config(tixiHandle, xml_path);`. `examples/eigen_solvers.toml` shows
 an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
 (`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
 

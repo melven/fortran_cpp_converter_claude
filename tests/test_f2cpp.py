@@ -1240,3 +1240,29 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     assert "  void write_state() const;" in bh and "protected:\n  project_B* handle_ = nullptr;" in bh
     assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
     assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
+
+
+def test_method_template_declaring_the_object(tmp_path):
+    (tmp_path / "project_solverX.F90").write_text("""module project_solverX
+  use project_config, only: solverX_config_type
+  use tixi_node, only: ConfigNode_type
+  implicit none
+contains
+  subroutine setup(abstractConfig, n, ierr)
+    type(ConfigNode_type), intent(in) :: abstractConfig
+    integer, intent(out) :: n
+    integer, intent(out) :: ierr
+    type(solverX_config_type) :: config
+    n = 0
+    call config%read(abstractConfig, ierr)
+    n = config%size
+  end subroutine setup
+end module project_solverX
+""")
+    (tmp_path / "x.toml").write_text(
+        '[expand_args]\nConfigNode_type = ["int tixiHandle = tixiHandle", "const std::string& xml_path = xml_path"]\n'
+        '[method_templates]\n"*_config_type%read" = "project::config::{module_base}Config_wrapper {self}({0});"\n')
+    translate([str(tmp_path / "project_solverX.F90")], config.load(str(tmp_path / "x.toml")), str(tmp_path))
+    cpp = (tmp_path / "project_solverX.cpp").read_text()
+    assert "  project::config::solverXConfig_wrapper config(tixiHandle, xml_path);\n" in cpp
+    assert "solverX_config config" not in cpp and "n = config.size;" in cpp

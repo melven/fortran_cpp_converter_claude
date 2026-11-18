@@ -468,15 +468,24 @@ class Translator:
         return self.fill_template(fn, args, n)
 
     def fill_template(self, template, args, what, obj=None):
-        """{0}, {1:cstr}, {2:ptr}, {3:data}: translated arguments; {self}: the object of a method call"""
-        xs = [self.expr(node) for _, node in map(self.split_arg, args)
+        """{0}, {1:cstr}, {2:ptr}, {3:data}: translated arguments; {self}: the object of a method call;
+        {module}: module name, {module_base}: without the prefix <namespace>_"""
+        xs = [X(", ".join(n for _, n, _ in self.expanded_name(node))) if self.expanded_name(node) else
+              self.expr(node) for _, node in map(self.split_arg, args)
               if not self.is_err(node) and not self.is_dropped(node)]
+        modname = self.mod.spelling or self.mod.name
+        prefix = self.cfg["c_prefix"] + "_"
+        base = modname[len(prefix):] if modname.lower().startswith(prefix.lower()) else modname
 
         def sub(m):
+            if m.group(0) == "{module}":
+                return modname
+            if m.group(0) == "{module_base}":
+                return base
             if m.group(0) == "{self}":
                 if obj is None:
                     raise Untranslatable("template-self:" + what)
-                return par(obj)
+                return obj.raw or par(obj) if obj.raw != "this" else "*this"
             i, conv = int(m.group(1)), m.group(2)
             if i >= len(xs):
                 raise Untranslatable("template-arguments:" + what)
@@ -489,15 +498,24 @@ class Translator:
             if conv == "data":
                 return par(x) + ".data()"
             return code
-        return re.sub(r"\{self\}|\{(\d+)(?::(\w+))?\}", sub, template)
+        return re.sub(r"\{self\}|\{module\}|\{module_base\}|\{(\d+)(?::(\w+))?\}", sub, template)
 
     def method_template(self, tname, binding):
         """template configured for a type-bound procedure of the type or one of its base types"""
+        import fnmatch
         t = self.find_type(tname)
         for name in [tname] + ([a.name for a in self.prog.ancestors(t)] if t is not None else []):
             if f"{name}%{binding}" in self.cfg["method_templates"]:
                 return self.cfg["method_templates"][f"{name}%{binding}"]
+            for key, template in self.cfg["method_templates"].items():     # glob patterns: "*_config_type%read"
+                if fnmatch.fnmatch(f"{name}%{binding}", key):
+                    return template
         return None
+
+    @staticmethod
+    def declares_self(template):
+        """the template declares the object itself: "Type {self}(...);" -> no separate declaration"""
+        return re.match(r"^\s*[\w:<>,{}]+\s+\{self\}\s*[({;]", template) is not None
 
     def unknown_ref(self, base, subs, array=False):
         """name(...) of unknown kind: an array section if it has a triplet (or array: known to be an

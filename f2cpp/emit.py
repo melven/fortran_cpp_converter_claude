@@ -423,8 +423,19 @@ class ModuleEmitter:
             if cls(c) == "Specification_Part":
                 for nm in walk(c, F.Name):
                     spec_uses[lname(nm)] = spec_uses.get(lname(nm), 0) + 1
+        # objects declared by a method template ("Type {self}(...);") at the top level: no declaration
+        self.template_declared = set()
+        for st in top:
+            if cls(st) == "Call_Stmt" and cls(st.items[0]) == "Procedure_Designator" and \
+                    cls(st.items[0].items[0]) == "Name":
+                v = p.vars.get(lname(st.items[0].items[0]))
+                tpl = tr.method_template(v.tname, lname(st.items[0].items[2])) if v is not None and v.tname else None
+                if tpl and tr.declares_self(tpl) and not v.is_dummy:
+                    self.template_declared.add(v.name)
         moved, loop_local = {}, set()
         for n, v in p.vars.items():
+            if n in self.template_declared:
+                continue
             if v.is_dummy or n == tr.err or n not in uses or v.alias or v.base == "procedure" or \
                     v.has("save") or v.has("parameter") or v.init is not None:
                 continue
@@ -527,7 +538,9 @@ class ModuleEmitter:
         tr.emit(ind, "{")
         self.warn_lower_bounds(tr, [p.vars[a] for a in p.args if a in p.vars], ind + 1)
         skip = set(p.args)
+        self.template_declared = set()
         moved, loop_local = self.declaration_plan(p, tr)
+        skip |= self.template_declared
         tr.loop_local = loop_local
         if self.cfg["declare_at_first_use"]:
             tr.loop_decl = loop_local
