@@ -254,6 +254,10 @@ Each entry is `C++ type parameter = component`; `= component` can be omitted if 
 has the parameter's name (`"int tixiHandle"`). `type(ConfigNode_type) :: configNode` becomes `int tixiHandle, const std::string& xpath`;
 `configNode%xml_path` → `xpath`; passing the argument on (`call f(configNode, x)`) → `f(tixiHandle,
 xpath, x)`. Other uses of the object are kept as commented Fortran (`expanded-argument`).
+Local and module variables of the type (e.g. a pFUnit fixture) become the variables
+`int tixiHandle; std::string xpath;` (without `const` / `&`; locals `{}`-initialised), prefixed by the
+variable name (`other_xpath`) if another variable of the type is visible. Derived-type components
+are not expanded.
 
 ## Callbacks
 

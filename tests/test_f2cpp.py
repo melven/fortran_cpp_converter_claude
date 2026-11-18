@@ -8,6 +8,7 @@ import pytest
 from f2cpp import config
 from f2cpp.cli import translate
 from f2cpp.prepass import prepass
+from f2cpp.report import Report
 
 HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
@@ -1242,6 +1243,71 @@ end module cfg_mod
     assert "read_more(tixiHandle, xpath, n);" in cpp and "external_read(tixiHandle, xpath);" in cpp
     assert "n = n + xpath.size();" in cpp
     assert "not translated (expanded-argument)" in cpp                 # copy = configNode
+
+
+def test_expanded_variables_in_tests(tmp_path):
+    """module (fixture) and local variables of an expand_args type: its C++ variables"""
+    (tmp_path / "test_cfg_mod.pf").write_text("""module test_cfg_mod
+  use funit
+  use tixi_node, only: ConfigNode_type
+  use cfg_mod, only: read_settings
+  implicit none
+  type(ConfigNode_type) :: configNode
+contains
+  @before
+  subroutine setUp
+    use funit
+    use tixi, only: SUCCESS, tixiCreateDocument
+    @assertEqual(SUCCESS, tixiCreateDocument('root', configNode%tixiHandle))
+    configNode%xml_path = '/root'
+  end subroutine
+
+  @after
+  subroutine tearDown
+    use funit
+    use tixi, only: SUCCESS, tixiCloseDocument
+    @assertEqual(SUCCESS, tixiCloseDocument(configNode%tixiHandle))
+    configNode%tixiHandle = -1
+    configNode%xml_path = ''
+  end subroutine
+
+  @test
+  subroutine test_read
+    type(ConfigNode_type) :: other
+    integer :: n, ierr
+    call read_settings(configNode, n, ierr)
+    other%xml_path = '/other'
+    @assertEqual(0, n)
+  end subroutine
+end module test_cfg_mod
+""")
+    (tmp_path / "cfg_mod.F90").write_text("""module cfg_mod
+  use tixi_node, only: ConfigNode_type
+  implicit none
+contains
+  subroutine read_settings(configNode, n, ierr)
+    type(ConfigNode_type), intent(in) :: configNode
+    integer, intent(out) :: n
+    integer, intent(out) :: ierr
+    n = 0
+    ierr = 0
+  end subroutine read_settings
+end module cfg_mod
+""")
+    (tmp_path / "x.toml").write_text('[expand_args]\nConfigNode_type = ["TixiDocumentHandle tixiHandle = tixiHandle", '
+                                     '"const std::string& xpath = xml_path"]\n')
+    rep = Report()
+    translate([str(tmp_path / "cfg_mod.F90"), str(tmp_path / "test_cfg_mod.pf")],
+              config.load(str(tmp_path / "x.toml")), str(tmp_path), report=rep)
+    cpp = (tmp_path / "test_cfg_mod.cpp").read_text()
+    assert "  TixiDocumentHandle tixiHandle;\n  std::string xpath;\n" in cpp and "ConfigNode" not in cpp
+    assert 'ASSERT_EQ(SUCCESS, tixiCreateDocument("root", tixiHandle));\n  xpath = "/root";' in cpp
+    assert "  tixiHandle = -1;\n  xpath = \"\";" in cpp
+    assert "read_settings(tixiHandle, xpath, n);" in cpp
+    # local: prefixed (the fixture's variables are visible)
+    assert 'TixiDocumentHandle other_tixiHandle{};\n  std::string other_xpath{};' in cpp
+    assert 'other_xpath = "/other";' in cpp
+    assert not any("confignode" in m for f in rep.files.values() for m in f["missing"])
 
 
 def test_wrapped_hierarchy_below_an_independent_base(tmp_path):

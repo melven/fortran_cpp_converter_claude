@@ -74,6 +74,11 @@ class ModuleEmitter:
             v = vars_[n]
             if n in skip or v.alias or (n == tr.err and v.base == "integer" and v.rank == 0):
                 continue
+            if not member and tr.expanded_variables(v):     # expand_args type: its variables
+                decls += [[prefix + d.rsplit(" ", 1)[0], [d.rsplit(" ", 1)[1] + ("{}" if tr.proc else "")]]
+                          for d in tr.expanded_variables(v)]
+                self.report.add("translated", "declaration")
+                continue
             try:
                 pre = prefix
                 if v.mutable and member:
@@ -486,6 +491,10 @@ class ModuleEmitter:
             if v is merged:
                 for c in comments.get(v.name, []):
                     new[code[0]] += "  " + tr.comment_text(c)
+                continue
+            if tr.expanded_variables(v):            # expand_args type: its variables
+                for d in tr.expanded_variables(v):
+                    tr.emit(ind, f"{d}{{}};")
                 continue
             try:
                 t, d = self.var_decl(tr, v).split("\0")
@@ -942,7 +951,7 @@ class ModuleEmitter:
             if u in self.prog.modules or u in cfg["ignore_modules"]:
                 continue
             if only is not None:
-                need = [n for n in dict.fromkeys(only) if n not in mapped]
+                need = [n for n in dict.fromkeys(only) if n not in mapped and n not in cfg["expand_args"]]
                 if need:
                     self.report.add("missing", f"{u}: needed for {', '.join(need)}")
             elif unresolved:

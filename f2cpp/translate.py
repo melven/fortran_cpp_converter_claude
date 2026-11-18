@@ -188,9 +188,26 @@ class Translator:
 
     def expansion(self, v):
         """[(C++ type, parameter name, component)] of a dummy argument expanded by expand_args, or None"""
-        if v is None or not v.is_dummy or v.base != "type" or v.rank:
+        if v is None or v.base != "type" or v.rank:
             return None
-        return self.cfg["expand_args"].get(v.tname)
+        exp = self.cfg["expand_args"].get(v.tname)
+        if not exp or v.is_dummy:
+            return exp
+        # variables: the parameter names, prefixed by the variable name if another one of the type is visible
+        same = lambda w: w is not v and w.base == "type" and not w.rank and w.tname == v.tname
+        home = next((m for m in self.prog.modules.values() if m.vars.get(v.name) is v), None)
+        if home is not None:                    # module variable: unique within its module
+            clash = any(same(w) for w in home.vars.values())
+        else:
+            clash = any(same(w) for q in self.scope_chain() for w in q.vars.values()) or \
+                any(same(w) for m in self.prog.visible(self.mod) for w in m.vars.values())
+        return [(t, f"{v.cname}_{n}", c) for t, n, c in exp] if clash else exp
+
+    def expanded_variables(self, v):
+        """local / module variable of an expand_args type: its C++ variables ["T name", ...] (no const / &)"""
+        if v.is_dummy or not self.expansion(v):
+            return None
+        return [re.sub(r"^const\s+|\s*&$", "", t).strip() + " " + n for t, n, _ in self.expansion(v)]
 
     def expanded_name(self, node):
         """Name node of an expanded dummy argument -> its expansion"""
