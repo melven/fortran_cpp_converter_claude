@@ -111,11 +111,13 @@ DEFAULTS = {
     "unwrap_types": {},
     # wrapped modules (--wrap): C binding conventions
     "c_prefix": "project",                    # project_<Class>_<method>
-    "c_class_names": {},                      # Fortran type -> class name in C names (shorter names)
+    "c_class_names": {},
+    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)                      # Fortran type -> class name in C names (shorter names)
     "c_real": "PROJECT_REAL",                 # C type macro of real
     "c_single_precision": "PROJECT_SINGLE_PRECISION",
     "wrap_string_in": ["project_str", "str_array_ptr_to_str"],    # module, C string -> Fortran string
-    # sizes of array arguments that are not given by a size check: "type%binding" -> {"x": "this%n"}
+    # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
+    # "procedure") -> {"x": "this%n", "a(2)": "3"}
     "wrap_sizes": {},
     # check array sizes in the C++ glue before the call (the C interface has no sizes)
     "wrap_size_checks": False,
@@ -159,6 +161,7 @@ def load(path=None, **overrides):
     cfg["unwrap_types"] = {k.lower(): v.lower() for k, v in cfg["unwrap_types"].items()}
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
     cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
+    cfg["c_procedure_names"] = {k.lower(): v for k, v in cfg["c_procedure_names"].items()}
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]

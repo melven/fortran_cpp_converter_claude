@@ -842,8 +842,13 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
            "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
            '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
+    # module procedures
+    assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
+    assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
+    assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
+    assert "void scale_vector(vec& x, scalar factor)\n{\n  throw std::logic_error" in cpp    # size of x unknown
     user = read((d,), "solver_user_mod.cpp")
-    assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user
+    assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
     os.makedirs(os.path.join(d, "f"))
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
     for src, obj in ((os.path.join(SUPPORT, "project_str.F90"), "f/str.o"),

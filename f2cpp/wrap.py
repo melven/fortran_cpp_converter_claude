@@ -68,7 +68,8 @@ class WrapEmitter(ModuleEmitter):
     def fortran_size(self, p, sizes, a, dim, depth=0):
         """size of dummy a (dimension dim, None: total of a rank-1 array) as Fortran code in the
         binding (this% -> obj%), None if unknown"""
-        conf = self.cfg["wrap_sizes"].get(f"{p.method_of}%{(p.bind_name or p.name).lower()}", {})
+        key = f"{p.method_of}%{(p.bind_name or p.name).lower()}" if p.method_of else p.name
+        conf = self.cfg["wrap_sizes"].get(key, {})
         key = a if dim in (None, 1) and p.vars[a].rank == 1 else f"{a}({dim})"
         if key in conf:
             text = conf[key]
@@ -79,7 +80,8 @@ class WrapEmitter(ModuleEmitter):
                 return None
             text = str(node)
         text = re.sub(r"\s*%\s*", "%", text)
-        text = re.sub(rf"\b{re.escape(p.pass_arg)}%", "obj%", text, flags=re.I)
+        if p.pass_arg:
+            text = re.sub(rf"\b{re.escape(p.pass_arg)}%", "obj%", text, flags=re.I)
 
         def size_of(m):
             other = m.group(1).lower()
@@ -150,15 +152,22 @@ class WrapEmitter(ModuleEmitter):
         return res
 
     # ------------------------------------------------------------------ method binding
+    def proc_c_name(self, p):
+        """C name of a module procedure: project_<procedure> (c_procedure_names: other names)"""
+        return self.cfg["c_procedure_names"].get(p.name) or f"{self.cfg['c_prefix']}_{p.cname}"
+
     def method(self, t, bd, p, args, fb, hdecl, cpp):
-        """emit the binding, the declaration and the glue of one method"""
+        """emit the binding, the declaration and the glue of one method (t, bd None: module procedure)"""
         tr = self.tr(p)
         err = tr.err
-        cname = self.c_name(t, bd.name)
-        handle = lower_camel(self.c_class(t))
+        cname = self.c_name(t, bd.name) if t is not None else self.proc_c_name(p)
+        handle = lower_camel(self.c_class(t)) if t is not None else None
         has_err = err in p.args
-        f_args, c_args, decls, pre, post, call, glue = [handle], [f"{self.c_type_name(t)} {handle}"], [], [], [], [], []
-        decls.append(f"type(C_PTR), value :: {handle}")
+        f_args, c_args, decls, pre, post, call, glue = [], [], [], [], [], [], []
+        if t is not None:
+            f_args.append(handle)
+            c_args.append(f"{self.c_type_name(t)} {handle}")
+            decls.append(f"type(C_PTR), value :: {handle}")
         for a, kind, dims in args:
             v = p.vars[a]
             f_args.append(a)
@@ -244,11 +253,17 @@ class WrapEmitter(ModuleEmitter):
             fb.append(f"    {d}")
         if r is not None:
             fb.append(f"    {self.f_type(r)} :: res")
-        fb.append(f"    type({t.spelling or t.name}), pointer :: obj")
-        fb.append("")
-        fb.append(f"    call c_f_pointer({handle}, obj)")
+        if t is not None:
+            fb.append(f"    type({t.spelling or t.name}), pointer :: obj")
+            fb.append("")
+            fb.append(f"    call c_f_pointer({handle}, obj)")
+        else:
+            fb.append("")
         fb.extend(f"    {s}" for s in pre)
-        target = f"obj%{bd.generic or bd.name}" if bd.access == "private" else f"obj%{bd.name}"
+        if t is not None:
+            target = f"obj%{bd.generic or bd.name}" if bd.access == "private" else f"obj%{bd.name}"
+        else:                       # private specific of a public generic interface: through the generic
+            target = p.cname if self.mod.is_public(p.name) or not p.generic else p.generic
         if r is not None:
             fb.append(f"    res = {target}({', '.join(call)})")
         else:
@@ -256,15 +271,16 @@ class WrapEmitter(ModuleEmitter):
         fb.extend(f"    {s}" for s in post)
         fb.append(f"  end {kw} {cname}")
         # --- glue
-        cls_name = self.prog.type_name(t.name)
-        self.doc(hdecl, p, 1)
-        hdecl.emit(1, f"{ret} {p.bind_name}({decl_params}){const};")
-        cpp.emit(0, f"{ret} {cls_name}::{p.bind_name}({params}){const}")
+        ind, qual, name = (1, self.prog.type_name(t.name) + "::", p.bind_name) if t is not None else \
+            (0, "", self.signature(tr, p, False)[1])
+        self.doc(hdecl, p, ind)
+        hdecl.emit(ind, f"{ret} {name}({decl_params}){const};")
+        cpp.emit(0, f"{ret} {qual}{name}({params}){const}")
         cpp.emit(0, "{")
         for g in glue:
             if isinstance(g, tuple):
                 cpp.emit(1, g[1])
-        cargs = ", ".join(["handle_"] + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+        cargs = ", ".join((["handle_"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
         if r is not None and has_err:
@@ -282,14 +298,15 @@ class WrapEmitter(ModuleEmitter):
 
     def not_wrapped(self, t, p, reason, hdecl, cpp):
         tr = self.tr(p)
-        ret, _, params, const = self.signature(tr, p, False)
+        ret, fname, params, const = self.signature(tr, p, False)
         self.report.add("untranslated", "wrap:" + reason.split(" (")[0].split(" ")[0])
-        self.doc(hdecl, p, 1)
-        hdecl.emit(1, f"{ret} {p.bind_name}({self.signature(tr, p, True)[2]}){const};")
+        ind, qual, name = (1, self.prog.type_name(t.name) + "::", p.bind_name) if t is not None else (0, "", fname)
+        self.doc(hdecl, p, ind)
+        hdecl.emit(ind, f"{ret} {name}({self.signature(tr, p, True)[2]}){const};")
         cpp.emit(0, f"// {TODO}: not wrapped: {reason}")
-        cpp.emit(0, f"{ret} {self.prog.type_name(t.name)}::{p.bind_name}({params}){const}")
+        cpp.emit(0, f"{ret} {qual}{name}({params}){const}")
         cpp.emit(0, "{")
-        cpp.emit(1, f'throw std::logic_error("not wrapped: {self.prog.type_name(t.name)}::{p.bind_name}");')
+        cpp.emit(1, f'throw std::logic_error("not wrapped: {qual}{name}");')
         cpp.emit(0, "}")
         cpp.emit(0, "")
 
@@ -403,9 +420,15 @@ class WrapEmitter(ModuleEmitter):
             hpp.emit(0, "};")
             hpp.emit(0, "")
         for p in mod.procs.values():
-            if not p.method_of and mod.is_public(p.name):
-                self.report.add("untranslated", "wrap:module-procedure")
-                hpp.emit(0, f"// {TODO}: module procedure {p.cname} is not wrapped yet")
+            if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
+                continue
+            args, reason = self.wrappable(p, None)
+            if reason:
+                self.not_wrapped(None, p, reason, hpp, cpp)
+                continue
+            needs_str |= any(kind == "string" for _, kind, _ in args)
+            self.method(None, None, p, args, fb, hpp, cpp)
+            self.report.add("translated", "wrapped-procedure")
 
         # header
         h = [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)"] + self.guard()[0] + [""]

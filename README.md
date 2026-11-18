@@ -163,7 +163,8 @@ order). Several configuration files can be combined: `-c f2cpp.toml -c examples/
 | `M.cpp` | glue: `resize` of `intent(out)` arrays, call, `ierr != 0` → `std::runtime_error`; size checks of the other arrays with `wrap_size_checks = true` |
 
 Translated modules use the wrapped classes like translated ones; public components are getters
-(`n()` → `int&`, arrays → `Eigen::Map<vec>`). Supported so far: non-polymorphic classes, methods
+(`n()` → `int&`, arrays → `Eigen::Map<vec>`). Supported so far: non-polymorphic classes and public module procedures (C name
+`project_<procedure>`, `c_procedure_names` for others), methods
 with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, explicit shapes or
 `wrap_sizes`), input string (`str_array_ptr_to_str`) and optional scalar arguments, scalar
 function results. Other methods are declared and throw `std::logic_error` (TODO). Configuration:

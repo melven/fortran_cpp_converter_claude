@@ -4,7 +4,7 @@ module mysolver_mod
   implicit none
   private
 
-  public :: MySolver_type
+  public :: MySolver_type, residual_norm, scale_vector
 
   type :: MySolver_type
     integer :: n = 0                   !< problem size
@@ -127,5 +127,22 @@ contains
       b(:, k) = this%diag * a(:, k)
     end do
   end subroutine mysolver_apply_block
+
+  !> maximum norm of r - b
+  function residual_norm(r, b, n) result(res)
+    integer, intent(in) :: n
+    real, intent(in) :: r(n), b(n)
+    real :: res
+    res = maxval(abs(r - b))
+  end function residual_norm
+
+  subroutine scale_vector(x, factor, ierr)
+    real, intent(inout) :: x(:)
+    real, intent(in) :: factor
+    integer, intent(out) :: ierr
+    ierr = 0
+    PROJECT_CHK_ARGUMENT(factor > 0.0, ierr)
+    x = factor * x
+  end subroutine scale_vector
 
 end module mysolver_mod
