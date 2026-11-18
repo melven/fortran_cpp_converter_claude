@@ -229,7 +229,8 @@ emitted.
 confignode_type = ["int tixiHandle = tixiHandle", "const std::string& xpath = xml_path"]
 ```
 
-`type(ConfigNode_type) :: configNode` becomes `int tixiHandle, const std::string& xpath`;
+Each entry is `C++ type parameter = component`; `= component` can be omitted if the component
+has the parameter's name (`"int tixiHandle"`). `type(ConfigNode_type) :: configNode` becomes `int tixiHandle, const std::string& xpath`;
 `configNode%xml_path` → `xpath`; passing the argument on (`call f(configNode, x)`) → `f(tixiHandle,
 xpath, x)`. Other uses of the object are kept as commented Fortran (`expanded-argument`).
 

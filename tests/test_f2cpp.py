@@ -1260,7 +1260,7 @@ contains
 end module project_solverX
 """)
     (tmp_path / "x.toml").write_text(
-        '[expand_args]\nConfigNode_type = ["int tixiHandle = tixiHandle", "const std::string& xml_path = xml_path"]\n'
+        '[expand_args]\nConfigNode_type = ["int tixiHandle", "const std::string& xml_path"]\n'
         '[method_templates]\n"*_config_type%read" = "project::config::{module_base}Config_wrapper {self}({0});"\n')
     translate([str(tmp_path / "project_solverX.F90")], config.load(str(tmp_path / "x.toml")), str(tmp_path))
     cpp = (tmp_path / "project_solverX.cpp").read_text()

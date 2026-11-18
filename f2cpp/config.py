@@ -183,8 +183,9 @@ def load(path=None, **overrides):
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
     cfg["unwrap_types"] = {k.lower(): v.lower() for k, v in cfg["unwrap_types"].items()}
     import re as _re
-    cfg["expand_args"] = {k.lower(): [(m.group(1), m.group(2), m.group(3).lower()) for m in
-                                      (_re.match(r"^\s*(.*\S)\s+(\w+)\s*=\s*(\w+)\s*$", e) for e in v) if m]
+    # "C++ type name = component"; without "= component" the component has the parameter's name
+    cfg["expand_args"] = {k.lower(): [(m.group(1), m.group(2), (m.group(3) or m.group(2)).lower()) for m in
+                                      (_re.match(r"^\s*(.*\S)\s+(\w+)\s*(?:=\s*(\w+))?\s*$", e) for e in v) if m]
                           for k, v in cfg["expand_args"].items()}
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
     cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
