@@ -1249,6 +1249,9 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     assert "  void write_state() const;" in bh and "  friend std::unique_ptr<B> B_private::wrapFromC(project_B& c);\n  project_B* handle_ = nullptr;" in bh
     assert "  int& someInteger();\n  const int& someInteger() const;" in bh and "scale" not in bh.replace("rescale", "")
     assert "res = c_loc(obj%someinteger)" in bb
+    assert "  // TODO(f2cpp): no getter for component listOfOther (type(A_type), rank 1, allocatable;" in bh
+    assert "  // TODO(f2cpp): binding version not wrapped: nopass" in bh
+    assert "// TODO(f2cpp): module variable b_count not wrapped" in bh
     assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
     assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
 

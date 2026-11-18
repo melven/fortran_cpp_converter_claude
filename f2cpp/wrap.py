@@ -226,7 +226,20 @@ class WrapEmitter(ModuleEmitter):
                 res.append((v, "array"))
             else:
                 self.report.add("todo", f"wrap-component:{v.name}")
+                res.append((v, self.component_kind(v)))
         return res
+
+    def component_kind(self, v):
+        """description of a component without getter (the reason)"""
+        td = self.prog.find_type(v.tname, self.mod) if v.base == "type" else None
+        tname = (td.spelling if td is not None and td.spelling else v.tname)
+        kind = f"{'class' if v.polymorphic else 'type'}({tname})" if v.base == "type" else v.base
+        alloc = [a for a in ("allocatable", "pointer") if v.has(a)]
+        if v.rank:
+            kind += f", rank {v.rank}" + (f", {alloc[0]}" if alloc else ", fixed size")
+        elif "pointer" in alloc:
+            kind += ", pointer"
+        return kind
 
     def component_docs(self, t):
         """{component: [comment text]}: comments before the statement and behind it on the same line"""
@@ -420,6 +433,7 @@ class WrapEmitter(ModuleEmitter):
         self.report.add("untranslated", "wrap:" + reason.split(" (")[0].split(" ")[0])
         ind, qual, name = (1, self.prog.type_name(t.name) + "::", bname or p.bind_name) if t is not None \
             else (0, "", fname)
+        hdecl.emit(ind, f"// {TODO}: not wrapped (throws std::logic_error): {reason}")
         self.doc(hdecl, p, ind)
         hdecl.emit(ind, f"{ret} {name}({self.signature(tr, p, True)[2]}){const};")
         cpp.emit(0, f"// {TODO}: not wrapped: {reason}")
@@ -583,9 +597,13 @@ class WrapEmitter(ModuleEmitter):
                 p = prog.binding_proc(t, bd)
                 if bd.name in inherited:
                     continue            # the method of the base class dispatches in Fortran
-                if p is None or bd.nopass or p.is_ctor or p.is_dtor:
-                    if p is not None and (p.is_ctor or p.is_dtor):
-                        hpp.emit(1, f"// {bd.name}: object created / destroyed in Fortran")
+                if p is None or bd.nopass:
+                    why = "nopass" if p is not None else "procedure not found (module not parsed?)"
+                    hpp.emit(1, f"// {TODO}: binding {bd.spelling} not wrapped: {why}")
+                    self.report.add("untranslated", "wrap:" + ("nopass" if p is not None else "binding-procedure"))
+                    continue
+                if p.is_ctor or p.is_dtor:
+                    hpp.emit(1, f"// {bd.name}: object created / destroyed in Fortran")
                     continue
                 if bd.access == "private" and not bd.generic:
                     continue
@@ -600,8 +618,12 @@ class WrapEmitter(ModuleEmitter):
             if getters:
                 hpp.emit(0, "")
             for v, kind in getters:
-                self.getter(t, v, kind, fb, hpp, cpp)
-                self.report.add("translated", "wrapped-getter")
+                if kind in ("scalar", "logical", "array"):
+                    self.getter(t, v, kind, fb, hpp, cpp)
+                    self.report.add("translated", "wrapped-getter")
+                else:
+                    hpp.emit(1, f"// {TODO}: no getter for component {v.cname} ({kind}; getters: real / integer / "
+                                "logical scalars, real / integer allocatable / pointer arrays of rank 1 / 2)")
             hpp.emit(0, "")
             hpp.emit(0, "protected:")
             if self.is_root(t):
@@ -630,6 +652,12 @@ class WrapEmitter(ModuleEmitter):
             needs_str |= any(kind in ("string", "optional-string") for _, kind, _ in args)
             self.method(None, None, p, args, fb, hpp, cpp)
             self.report.add("translated", "wrapped-procedure")
+
+        for v in mod.vars.values():                     # public module variables / constants: not wrapped
+            if mod.is_public(v.name, v.access) and not self.excluded(v.name):
+                what = "constant" if v.has("parameter") else "variable"
+                hpp.emit(0, f"// {TODO}: module {what} {v.cname} not wrapped")
+                self.report.add("todo", f"wrap-module-{what}:{v.name}")
 
         # header
         h = self.cpp_file_header(cfg["header_ext"]) + \

@@ -189,6 +189,11 @@ inherit it from the root. A hand-written parent class must provide this protecte
 `.cpp`, reading its members from `c`). Derived classes add no members. Moving to pure C++: delete
 `wrapFromC`, the protected constructor and `handle_`; the public interface stays.
 
+Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
+methods / procedures with unsupported arguments (declared, the definition throws
+`std::logic_error`), `nopass` bindings, components without getter, public module variables and
+constants.
+
 Supported so far: classes and class hierarchies, public module procedures (C name
 `project_<procedure>`, `c_procedure_names` for others), methods
 with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, explicit shapes or
