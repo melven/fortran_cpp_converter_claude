@@ -461,7 +461,7 @@ def test_accessors(tmp_path):
     assert "system.couplingManager().step = n;" in (tmp_path / "a_mod.cpp").read_text()
     cpp = (tmp_path / "a_mod.cpp").read_text()
     assert "n = system.models().size() + system.count + system.offsets().first;" in cpp
-    assert "system.models()(2).id = n;" in cpp
+    assert "system.models()(1).id = n;" in cpp        # accessor of an array: 0-based index
     assert "obj.value() = 2.0 * obj.value();" in cpp
 
 
@@ -1169,3 +1169,17 @@ end module ce_mod
     assert "auto copyArray = [&](const vec& source, vec& dest)" in cpp
     for d in ("-DUSE_COPY", "-DNONE"):
         run(["g++", "-std=c++17", "-Wall", "-I.", "-I" + SUPPORT, "-I" + EIGEN, d, "-c", "ce_mod.cpp"], str(tmp_path))
+
+
+def test_accessors_of_unknown_types_index_from_zero(tmp_path):
+    (tmp_path / "u_mod.F90").write_text(
+        "module u_mod\nuse sys_mod, only: system_type\ncontains\nsubroutine s(system)\n"
+        "type(system_type), intent(inout) :: system\ninteger :: i\n"
+        "do i = 1, system%n\n  system%x(i) = 2.0 * system%x(i)\nend do\nsystem%x(1) = system%m(2, i)\n"
+        "end subroutine\nend module\n")
+    c = config.load()
+    c["accessors"] = {"system_type": {"x": None, "n": None}}
+    translate([str(tmp_path / "u_mod.F90")], c, str(tmp_path))
+    cpp = (tmp_path / "u_mod.cpp").read_text()
+    assert "system.x()(i - 1) = 2.0 * system.x()(i - 1);" in cpp   # accessor (array, lower bound 1)
+    assert "system.x()(0) = system.m(2, i);" in cpp                  # unknown component: passed through

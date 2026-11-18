@@ -487,12 +487,13 @@ class Translator:
                 return self.cfg["method_templates"][f"{name}%{binding}"]
         return None
 
-    def unknown_ref(self, base, subs):
-        """name(...) of unknown kind: an array section if it has a triplet, else passed through as call"""
-        if not any(cls(s) == "Subscript_Triplet" for s in subs):
+    def unknown_ref(self, base, subs, array=False):
+        """name(...) of unknown kind: an array section if it has a triplet (or array: known to be an
+        array, e.g. an accessor), else passed through as call"""
+        if not array and not any(cls(s) == "Subscript_Triplet" for s in subs):
             return X(f"{base}({', '.join(self.plain_args(subs))})")
         sc = [self.sub_code(s, None) for s in subs]
-        self.note("unknown-array", "section of an array of unknown type (assumed Eigen, lower bound 1)")
+        self.note("unknown-array", "array of unknown type (assumed Eigen, lower bound 1)")
         if all(k == "all" for k, _ in sc):
             return X(base, len(sc))
         return X(f"{base}({', '.join(c for _, c in sc)})", sum(k != "idx" for k, _ in sc))
@@ -567,8 +568,8 @@ class Translator:
                 acc = self.accessor(cur.tname, n, cname(str(pname)))
                 x = X(self.member(cur, acc, cur.qual) + "()" if acc else
                       self.member(cur, cname(str(pname)), cur.qual))
-                if subs is not None:
-                    x = self.unknown_ref(x.code, subs)
+                if subs is not None:            # an accessor is data: subscripts are array indices
+                    x = self.unknown_ref(x.code, subs, array=bool(acc))
             else:
                 self.used_member(td, n, comp)
                 acc = self.accessor(cur.tname, n, comp.cname)
