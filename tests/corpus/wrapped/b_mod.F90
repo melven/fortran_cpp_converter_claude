@@ -2,7 +2,9 @@ module b_mod
   use a_mod, only: A_type
   implicit none
   type, extends(A_type) :: B_type
+    private
     real :: scale = 1.0
+    integer, public :: someInteger = 0
   contains
     procedure :: write_state => b_write_state
     procedure :: rescale => b_rescale

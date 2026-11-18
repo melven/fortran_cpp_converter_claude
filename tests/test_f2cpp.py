@@ -1245,6 +1245,8 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     bh, bb = (tmp_path / "b_wrapper.hpp").read_text(), (tmp_path / "b_wrapper_c_binding.F90").read_text()
     assert "class B : public A" in bh and "explicit B(project_B& c) : handle_(&c) {}" in bh
     assert "  void write_state() const;" in bh and "  friend std::unique_ptr<B> B_private::wrapFromC(project_B& c);\n  project_B* handle_ = nullptr;" in bh
+    assert "  int& someInteger();\n  const int& someInteger() const;" in bh and "scale" not in bh.replace("rescale", "")
+    assert "res = c_loc(obj%someinteger)" in bb
     assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
     assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
 

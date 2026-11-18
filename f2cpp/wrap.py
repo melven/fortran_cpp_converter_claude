@@ -216,7 +216,7 @@ class WrapEmitter(ModuleEmitter):
         """public components with a getter: [(var, kind)] kind scalar | array | logical"""
         res = []
         for v in t.comps.values():
-            if t.private_comps or v.access == "private":
+            if not comp_public(t, v):
                 continue
             if v.base in ("real", "integer") and v.rank == 0 and not v.has("pointer"):
                 res.append((v, "scalar"))
@@ -676,15 +676,18 @@ def c_header(binding, guard):
     return "\n".join(res)
 
 
+def comp_public(t, v):
+    """explicit public / private attribute, else the type's default (private statement)"""
+    return v.access == "public" if v.access else not t.private_comps
+
+
 def register_accessors(prog, wrapped):
     """components of wrapped classes are getters in C++: obj%n -> obj.n()"""
     for m in wrapped:
         for t in m.types.values():
-            if t.private_comps:
-                continue
             acc = prog.cfg["accessors"].setdefault(t.name, {})
             for v in t.comps.values():
-                if v.access != "private":
+                if comp_public(t, v):
                     acc.setdefault(v.name, None)
 
 
