@@ -1773,3 +1773,31 @@ def test_named_elements(tmp_path):
     cpp = (tmp_path / "test_var_mod.cpp").read_text()
     assert "  model.assignVariables(VariableVector{}, VariableVector{inputs_1, inputs_2}, " \
            "VariableVector{outputs_1});" in cpp
+    # allocatable with a literal allocate: the size; deallocate: nothing
+    assert '  Variable params_1("p", "kg", 0);' in cpp and "  model.assignVariables(VariableVector{params_1}, " in cpp
+    assert "params.resize" not in cpp and "params.clear" not in cpp
+    # constructor function (generic interface with the type's name)
+    (tmp_path / "vc_mod.F90").write_text("""module vc_mod
+  implicit none
+  type :: Var_type
+    character(len=:), allocatable :: name
+  end type Var_type
+  interface Var_type
+    module procedure new_var
+  end interface
+contains
+  function new_var(name) result(v)
+    character(len=*), intent(in) :: name
+    type(Var_type) :: v
+    v%name = name
+  end function new_var
+  subroutine use_vars()
+    type(Var_type) :: vs(1)
+    vs(1) = Var_type('a')
+  end subroutine use_vars
+end module vc_mod
+""")
+    (tmp_path / "z.toml").write_text('[named_elements]\nVar_type = ""\n')
+    translate([str(tmp_path / "vc_mod.F90")], config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "z.toml")]),
+              str(tmp_path))
+    assert '  Var vs_1("a");' in (tmp_path / "vc_mod.cpp").read_text()

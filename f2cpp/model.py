@@ -60,6 +60,7 @@ class Var:
     elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
     companion_of: tuple = None   # companion variable: (unwrapped variable, component) in Fortran
     named_elements: bool = False # local array of a named_elements type: one C++ variable per element
+    named_size: int = None       # its size from a literal allocate (allocatable arrays)
     unwrapped_type: str = None   # unwrapped variable / companion: the original (wrapper) type
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference

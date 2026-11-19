@@ -457,6 +457,8 @@ class Translator:
                 self.plain_args(items_of(args))
             callee = f"(*{v.cname})" if v.opt_kind else v.cname
             return self.result_x(f"{callee}({', '.join(argc)})", iface)
+        if v is not None and v.named_elements:
+            return self.named_element(v, items_of(args))
         if v is not None and cls(node) != "Intrinsic_Function_Reference" or (v is not None and v.rank > 0):
             return self.subscript(self.x_Name(name_node), v, items_of(args))
         if n in self.cfg["function_map"]:
@@ -765,6 +767,8 @@ class Translator:
     def named_count(self, v):
         """number of elements of a named_elements array (literal size, lower bound 1)"""
         lo, hi = v.dims[0] if v.dims else (None, None)
+        if hi is None and v.named_size is not None:         # allocate(x(2)) before
+            return v.named_size
         if hi is None or not str(hi).strip().isdigit() or (lo is not None and str(lo).strip() != "1"):
             raise Untranslatable("named-elements-size")
         return int(str(hi).strip())
@@ -1342,12 +1346,13 @@ class Translator:
             if cls(rhs_n) not in ("Structure_Constructor", "Part_Ref", "Function_Reference") or \
                     lname(rhs_n.items[0]) != v.tname:
                 raise Untranslatable("named-elements-assignment")
-            rhs = self.expr(rhs_n)
+            rhs = self.expr(rhs_n)              # structure constructor T{...} or constructor function f(...)
             t = self.elem_type(v)
-            if not (rhs.code.startswith(t + "{") and rhs.code.endswith("}")):
+            m = re.fullmatch(r"([\w:<>]+)([({])(.*)([)}])", rhs.code, re.S)
+            if m is None or "({"[")}".index(m.group(4))] != m.group(2):
                 raise Untranslatable("named-elements-assignment")
             cpp_cls = self.cfg["named_elements"].get(v.tname) or t
-            self.emit(ind, f"{cpp_cls} {el.code}({rhs.code[len(t) + 1:-1]});")
+            self.emit(ind, f"{cpp_cls} {el.code}({m.group(3)});")
             return
         lhs = self.ref(lhs_n)
         v = lhs.var
@@ -1690,6 +1695,18 @@ class Translator:
 
     def s_Allocate_Stmt(self, node, ind):
         tspec, allocs, opts = node.items
+        named = [a for a in items_of(allocs) if cls(a) == "Allocation" and cls(a.items[0]) == "Name"
+                 and getattr(self.lookup(lname(a.items[0])), "named_elements", False)]
+        if named:                               # named_elements: only the size (elements declared later)
+            if len(named) != len(items_of(allocs)):
+                raise Untranslatable("named-elements-allocate")
+            for a in named:
+                shape = items_of(a.items[1])
+                lo, hi = shape[0].items if cls(shape[0]) == "Allocate_Shape_Spec" else (None, shape[0])
+                if len(shape) != 1 or not str(hi).strip().isdigit() or (lo is not None and str(lo).strip() != "1"):
+                    raise Untranslatable("named-elements-size")
+                self.lookup(lname(a.items[0])).named_size = int(str(hi).strip())
+            return
         for o in items_of(opts):
             if lname(o.items[0]) != "stat":
                 raise Untranslatable("allocate-option:" + lname(o.items[0]))
@@ -1728,6 +1745,9 @@ class Translator:
                 self.emit(ind, f"{name}.assign({self.nested_ctor(v, dims)});")
 
     def s_Deallocate_Stmt(self, node, ind):
+        if all(cls(a) == "Name" and getattr(self.lookup(lname(a)), "named_elements", False)
+               for a in items_of(node.items[0])):
+            return                              # named_elements: end of scope
         for a in items_of(node.items[0]):
             x = self.ref(a)
             st = "uptr" if x.uptr_elem else self.storage(x.var) if x.var is not None else None

@@ -262,7 +262,8 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 variable per element. `inputs(1) = Variable_type('a', '', rank=0)` → `Variable inputs_1("a", "", 0);`,
 `inputs(2)%rank` → `inputs_2.rank`, the whole array as argument → `{inputs_1, inputs_2}` (`{}` for
 size 0). With `[named_element_lists] variable_type = "VariableVector"` the list is typed:
-`VariableVector{inputs_1, inputs_2}` (needed where arguments are forwarded, e.g. `std::make_unique<T>(...)`). Only literal sizes and indices; other uses (loops, copies, `size`, reassignment) are TODOs.
+`VariableVector{inputs_1, inputs_2}` (needed where arguments are forwarded, e.g. `std::make_unique<T>(...)`). Sizes from the declaration or a literal `allocate` (then no code; `deallocate`: nothing), literal indices; the
+right-hand side a structure constructor or a constructor function (generic interface named like the type); other uses (loops, copies, `size`, reassignment) are TODOs.
 
 ## Wrapper types
 

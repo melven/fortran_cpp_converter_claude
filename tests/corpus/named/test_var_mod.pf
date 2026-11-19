@@ -18,6 +18,18 @@ contains
   end subroutine test_assign
 
   @test
+  subroutine test_allocatable
+    type(Model_type) :: model
+    type(Variable_type), allocatable :: params(:)
+    integer :: ierr
+    allocate(params(1))
+    params(1) = Variable_type('p', 'kg', rank=0)
+    call model%assignVariables(params, params, params, ierr)
+    @assertEqual(3, model%n)
+    deallocate(params)
+  end subroutine test_allocatable
+
+  @test
   subroutine test_loop
     type(Variable_type) :: vars(2)
     integer :: i
