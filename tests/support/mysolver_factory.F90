@@ -2,17 +2,15 @@
 module mysolver_factory
   use, intrinsic :: iso_c_binding
   use mysolver_mod
-  use mysolver_mod_c_binding, only: MySolver_c
+  use mysolver_mod_c_binding, only: project_MySolver_setup
   implicit none
   type(MySolver_type), target, save :: solver
-  type(MySolver_c), target, save :: solver_c
 contains
   function project_MySolver_create(n) result(h) bind(C, name="project_MySolver_create")
     integer(C_INT), value :: n
     type(C_PTR) :: h
     integer :: ierr
     call solver%init(n, ierr)
-    solver_c%p_impl = c_loc(solver)
-    h = c_loc(solver_c)
+    h = project_MySolver_setup(solver)      ! released never: lives until the program ends
   end function project_MySolver_create
 end module mysolver_factory

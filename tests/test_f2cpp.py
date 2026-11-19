@@ -827,7 +827,7 @@ def test_wrapped_module_end_to_end(tmp_path):
     the result equals the pure Fortran program"""
     d = str(tmp_path)
     w = os.path.join(CORPUS, "wrapped")
-    consts = {"mysolver_type": ["n", "diag", "weights", "label"]}
+    consts = {"mysolver_type": ["n", "diag", "weights", "params", "label"]}
     translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True, wrap_constants=consts), d,
               wrap=[os.path.join(w, "mysolver_mod.F90")])
     hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
@@ -836,16 +836,29 @@ def test_wrapped_module_end_to_end(tmp_path):
            "int* ierr);" in h
     assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
     assert "typedef struct project_MySolver {\nvoid* p_impl;\nint n;\nPROJECT_REAL* diag;\nint diag_size;\n" \
-           "PROJECT_REAL weights[3];\n} project_MySolver;" in h
+           "PROJECT_REAL weights[3];\nproject_SolverParams params;\n} project_MySolver;" in h
+    assert "typedef struct project_SolverParams {\nint maxit;\nPROJECT_REAL tol;\nbool restart;\nPROJECT_REAL w[2];\n" \
+           "} project_SolverParams;" in h
     assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
            "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
-           "    real(C_REAL) :: weights(3) = 0\n  end type MySolver_c" in binding
-    # constants: copied into the C struct (wrapFromC), const getters only
-    assert "    this_c%n = obj%n\n    this_c%diag = C_NULL_PTR\n    this_c%diag_size = 0\n    if (allocated(obj%diag)) then\n" \
+           "    real(C_REAL) :: weights(3) = 0\n    type(SolverParams_c) :: params\n  end type MySolver_c" in binding
+    assert "  type, bind(C), public :: SolverParams_c\n    integer(C_INT) :: maxit = 0\n" in binding
+    # setup / destroy (Fortran only): C struct with the constants, const getters only
+    assert "  function project_MySolver_setup(obj) result(handle)\n    type(MySolver_type), target :: obj\n" in binding
+    assert "    allocate(this_c)\n    this_c%p_impl = c_loc(obj)\n    this_c%n = obj%n\n    this_c%diag = C_NULL_PTR\n    this_c%diag_size = 0\n    if (allocated(obj%diag)) then\n" \
            "      this_c%diag = c_loc(obj%diag)\n      this_c%diag_size = size(obj%diag)\n    end if\n" \
-           "    this_c%weights = obj%weights" in binding
-    assert "void project_MySolver_set_constants(project_MySolver* mySolver);" in h
-    assert "  project_MySolver_set_constants(&c);\n  return std::unique_ptr<MySolver>(new MySolver(c));" in cpp
+           "    this_c%weights = obj%weights\n    this_c%params%maxit = obj%params%maxit\n" \
+           "    this_c%params%tol = obj%params%tol\n    this_c%params%restart = logical(obj%params%restart, C_BOOL)\n" \
+           "    this_c%params%w = obj%params%w\n    handle = c_loc(this_c)" in binding
+    assert "  subroutine project_MySolver_destroy(handle)" in binding and "    deallocate(this_c)\n" in binding
+    assert "set_constants" not in binding + cpp
+    # struct constant: C++ copy of the class, member of the wrapper filled in the constructor
+    assert "class SolverParams final\n{\npublic:\n  int maxit = 10;  //!< maximum number of iterations\n" in hpp
+    assert "  //! iteration parameters\n  const SolverParams& params() const { return params_; }" in hpp
+    assert "  explicit MySolver(project_MySolver& c);" in hpp and "  SolverParams params_;" in hpp
+    assert "MySolver::MySolver(project_MySolver& c) : handle_(&c)\n{\n  params_.maxit = c.params.maxit;\n" in cpp
+    assert "  for (int i = 0; i < 2; ++i) params_.w[i] = c.params.w[i];" in cpp
+    assert "struct project_SolverParams;" not in hpp
     assert "  //! problem size\n  int n() const;  //!< constant (C struct)\n" \
            "  //! diagonal\n  Eigen::Map<const vec> diag() const;  //!< constant (C struct)\n" in hpp
     assert "Eigen::Map<const vec> MySolver::weights() const\n{\n  return Eigen::Map<const vec>(handle_->weights, 3);" in cpp
@@ -855,10 +868,10 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "    call c_f_pointer(mySolver, this_c)\n    call c_f_pointer(this_c%p_impl, obj)" in binding
     assert "namespace MySolver_private\n{\nstd::unique_ptr<MySolver> wrapFromC(project_MySolver& c);" in hpp
     assert "public:\n  MySolver() = default;  //!< empty object\n" in hpp
-    assert "protected:\n  explicit MySolver(project_MySolver& c) : handle_(&c) {}  //!< the object created in Fortran\n" \
+    assert "protected:\n  explicit MySolver(project_MySolver& c);  //!< the object created in Fortran\n" \
            "  friend std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c);\n" \
            "  project_MySolver* handle_ = nullptr;" in hpp
-    assert "std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c)\n{\n  project_MySolver_set_constants(&c);\n" \
+    assert "std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c)\n{\n" \
            "  return std::unique_ptr<MySolver>(new MySolver(c));  // new: protected constructor, make_unique has no access" in cpp
     assert '#ifdef DLLEXPORT\n  DLLEXPORT :: project_MySolver_apply\n#endif' in binding
     # the C interface is only included in the glue; the header declares the handle type itself
@@ -907,11 +920,11 @@ def test_wrapped_module_end_to_end(tmp_path):
     run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
          "ref_user.o", "-o", "fdrv"], d)
     ref = run(["./fdrv"], d).split()
-    vals = " ".join(res[:4]).split()
-    assert len(vals) == len(ref) == 8
+    vals = " ".join(res[:5]).split()
+    assert len(vals) == len(ref) == 11
     for a, b in zip(vals, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
-    assert res[4] == "project_MySolver_apply: size of x"
+    assert res[5] == "project_MySolver_apply: size of x"
 
 
 def test_wrapped_module_without_size_checks(tmp_path):
@@ -919,6 +932,8 @@ def test_wrapped_module_without_size_checks(tmp_path):
     translate([], cfg(), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     cpp = (tmp_path / "mysolver_mod.cpp").read_text()
     assert "invalid_argument" not in cpp and "  y.resize(x.size());\n  int ierr = 0;\n" in cpp
+    hpp = (tmp_path / "mysolver_mod.hpp").read_text()
+    assert "  explicit MySolver(project_MySolver& c) : handle_(&c) {}  //!< the object created in Fortran" in hpp
 
 
 def test_c_names_follow_the_namespace(tmp_path):

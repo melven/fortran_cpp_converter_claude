@@ -21,6 +21,7 @@ int main()
   std::printf("%24.15E%24.15E%24.15E\n", y(0), y(1), y(2));
   std::printf("%24.15E\n", s.shift());
   std::printf("%24.15E%24.15E%24.15E\n", double(s.n()), s.diag()(2), s.weights()(2));   // constants
+  std::printf("%24.15E%24.15E%24.15E\n", double(s.params().maxit), s.params().tol, s.params().w(1));
   try
   {
     vec wrong(2);

@@ -6,6 +6,14 @@ module mysolver_mod
 
   public :: MySolver_type, residual_norm, scale_vector, tagged_length
 
+  !> iteration parameters
+  type :: SolverParams_type
+    integer :: maxit = 10          !< maximum number of iterations
+    real :: tol = 1.0e-8
+    logical :: restart = .true.
+    real :: w(2) = [0.5, 0.25]
+  end type SolverParams_type
+
   type :: MySolver_type
     integer :: n = 0                   !< problem size
     !> spectral shift
@@ -15,6 +23,7 @@ module mysolver_mod
     real, allocatable :: coupling(:, :)
     character(len=32) :: label = ''
     real :: weights(3) = [1.0, 2.0, 3.0]   !< fixed weights
+    type(SolverParams_type) :: params      !< iteration parameters
   contains
     procedure :: init => mysolver_init
     procedure :: apply => mysolver_apply

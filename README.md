@@ -189,12 +189,21 @@ inherit it from the root. A hand-written parent class must provide this protecte
 `.cpp`, reading its members from `c`). Derived classes add no members. Moving to pure C++: delete
 `wrapFromC`, the protected constructor and `handle_`; the public interface stays.
 
-Constants: `[wrap_constants]` with `"mysolver_type" = ["n", "diag", "weights"]` (root types, struct
-handle): members of the C struct (`int n;`, allocatable / pointer rank 1: `PROJECT_REAL* diag; int
-diag_size;` into the Fortran object, fixed size: `PROJECT_REAL weights[3];` copied), filled by
-`project_<Class>_set_constants` (called in `wrapFromC`, usable in Fortran factories), C++ only
-`int n() const` / `Eigen::Map<const vec> diag() const` reading the struct. Changes in Fortran
-after `wrapFromC` are not seen.
+Handles are created in Fortran by the binding module's `project_<Class>_setup(obj)` (C struct, for
+hierarchies also the wrapper; copies the constants) and released by `project_<Class>_destroy(handle)`
+(not the object, which must outlive the handle). Both are plain Fortran procedures, not `bind(C)`.
+
+Constants: `[wrap_constants]` with `"mysolver_type" = ["n", "diag", "weights", "params"]` (root types,
+struct handle): members of the C struct, filled by `setup`, only const getters in C++:
+
+| Fortran | C struct | C++ |
+|---|---|---|
+| `integer :: n` | `int n;` | `int n() const` (reads the struct) |
+| `real, allocatable :: diag(:)` | `PROJECT_REAL* diag; int diag_size;` (into the Fortran object) | `Eigen::Map<const vec> diag() const` |
+| `real :: weights(3)` | `PROJECT_REAL weights[3];` | `Eigen::Map<const vec> weights() const` |
+| `type(SolverParams_type) :: params` (same module, plain scalars / fixed-size arrays) | `project_SolverParams params;` | C++ copy of the class `SolverParams`, member `params_` filled in the constructor, `const SolverParams& params() const` |
+
+Changes in Fortran after `setup` are not seen.
 
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws

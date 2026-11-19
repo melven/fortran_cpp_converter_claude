@@ -12,4 +12,5 @@ program ref_driver
   print '(3es24.15)', y
   print '(es24.15)', s%shift
   print '(3es24.15)', real(s%n), s%diag(3), s%weights(3)
+  print '(3es24.15)', real(s%params%maxit), s%params%tol, s%params%w(2)
 end program ref_driver
