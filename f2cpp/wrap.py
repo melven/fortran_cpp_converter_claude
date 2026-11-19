@@ -790,6 +790,14 @@ class WrapEmitter(ModuleEmitter):
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
             decls = [(f"bool {v.cname}() const", f"return {cname}(handle_);")]  # Fortran logical: no reference
+            setter = self.c_name(t, f"{v.name}_set")       # ... so a setter (overload of the getter name)
+            fb += ["", "  !@c_declaration", f"  !  void {setter}({self.c_type_name(t)}* {handle}, bool value);",
+                   "  !@end_c_declaration"]
+            odecl, ostmts = self.object_access(t, setter, handle, False, [f"obj%{v.name} = value"])
+            fb += [f"  subroutine {setter}({handle}, value) bind(C, name=\"{setter}\")"] + self.dllexport(setter) + [
+                   f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL), value :: value"] + odecl + ostmts + \
+                [f"  end subroutine {setter}"]
+            decls.append((f"void {v.cname}(bool value)", f"{setter}(handle_, value);"))
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
@@ -815,11 +823,11 @@ class WrapEmitter(ModuleEmitter):
         for k, (decl, body) in enumerate(decls):
             lines = list(doc)
             if lines and k == 1:
-                lines[-1] += " (const version)"
+                lines[-1] += " (setter)" if kind == "logical" else " (const version)"
             for line in lines:
                 hdecl.emit(1, f"{dox} {line}".rstrip())
             hdecl.emit(1, decl + ";")
-            cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
+            cpp.emit(0, decl.replace(f" {v.cname}(", f" {cls_name}::{v.cname}(", 1))
             cpp.emit(0, "{")
             for stmt in body.split("; "):
                 cpp.emit(1, stmt.rstrip(";") + ";")

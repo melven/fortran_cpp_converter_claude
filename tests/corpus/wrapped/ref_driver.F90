@@ -19,4 +19,6 @@ program ref_driver
   print '(es24.15)', s%weighted(x)
   call s%positive(x, pos)
   print '(3es24.15)', s%masked_sum(x), s%masked_sum(x, pos), merge(1.0, 0.0, pos(3))
+  s%verbose = .true.
+  print '(i0)', merge(1, 0, s%verbose .and. s%is_verbose())
 end program ref_driver

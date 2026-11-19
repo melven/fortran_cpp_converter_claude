@@ -167,7 +167,7 @@ order). Several configuration files can be combined: `-c f2cpp.toml -c examples/
 | `M.cpp` | glue: `resize` of `intent(out)` arrays, call, `ierr != 0` → `std::runtime_error`; size checks of the other arrays with `wrap_size_checks = true` |
 
 Translated modules use the wrapped classes like translated ones; public components are const / non-const getter pairs
-(documented like the component, the const one with " (const version)": `int& n()`, `const int& n() const`; arrays `Eigen::Map<vec>` / `Eigen::Map<const vec>`; `logical`: `bool` by value only). Handle: by default a pointer to the C struct `project_<Class>` = bind(C) type `<Class>_c` (in the
+(documented like the component, the const one with " (const version)": `int& n()`, `const int& n() const`; arrays `Eigen::Map<vec>` / `Eigen::Map<const vec>`; `logical`: `bool x() const` by value and the setter `void x(bool)`). Handle: by default a pointer to the C struct `project_<Class>` = bind(C) type `<Class>_c` (in the
 binding module) whose member `p_impl` points to the Fortran object, for class hierarchies to
 `<Root>Wrapper_type`. `wrap_handle = "direct"` (or per root type `wrap_direct_handles`) omits the
 struct: the handle points to the object / wrapper itself.

@@ -31,6 +31,8 @@ int main()
   Eigen::Array<bool, Eigen::Dynamic, 1> pos;
   s.positive(x, pos);                                               // logical out array
   std::printf("%24.15E%24.15E%24.15E\n", s.masked_sum(x), s.masked_sum(x, pos), pos(2) ? 1.0 : 0.0);
+  s.verbose(true);                                                  // logical setter
+  std::printf("%d\n", s.verbose() && s.is_verbose() ? 1 : 0);
   try
   {
     vec wrong(2);

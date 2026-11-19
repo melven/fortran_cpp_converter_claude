@@ -884,7 +884,10 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
     assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
     assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
-    assert "  bool verbose() const;\n  Eigen::Map<mat> coupling();\n" in hpp
+    assert "  bool verbose() const;\n  void verbose(bool value);\n  Eigen::Map<mat> coupling();\n" in hpp
+    assert "void project_MySolver_verbose_set(project_MySolver* mySolver, bool value);" in h
+    assert "    obj%verbose = value\n  end subroutine project_MySolver_verbose_set" in binding
+    assert "void MySolver::verbose(bool value)\n{\n  project_MySolver_verbose_set(handle_, value);\n}" in cpp
     assert "  Eigen::Map<mat> coupling();\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
@@ -925,10 +928,12 @@ def test_wrapped_module_end_to_end(tmp_path):
          "ref_user.o", "-o", "fdrv"], d)
     ref = run(["./fdrv"], d).split()
     vals = " ".join(res[:9]).split()
+    ref, ref_flag = ref[:-1], ref[-1]
     assert len(vals) == len(ref) == 20
     for a, b in zip(vals, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
-    assert res[9] == "project_MySolver_apply: size of x"
+    assert res[9] == "1" and ref_flag == "1"                         # logical setter
+    assert res[10] == "project_MySolver_apply: size of x"
     # logical arrays: bool copies; optional: NULL = absent (unallocated)
     assert "PROJECT_REAL project_MySolver_masked_sum(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "const bool* modelmask, int modelmask_n1);" in h
