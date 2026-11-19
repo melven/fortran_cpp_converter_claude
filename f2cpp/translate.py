@@ -61,6 +61,7 @@ class Translator:
     def __init__(self, program, module, proc, report):
         self.prog, self.mod, self.proc, self.report = program, module, proc, report
         self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
+        self.brace_arrays = False   # array constructors as braced lists
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -939,6 +940,8 @@ class Translator:
 
     def x_Array_Constructor(self, node):
         xs = self.ac_items(node)
+        if self.brace_arrays:                   # constructor arguments of named_elements: {1, 2} / {"a", "b"}
+            return X("{" + ", ".join(x.code for x in xs) + "}", 1, xs[0].base if xs else "unknown")
         if all(x.base == "character" for x in xs):
             return X("std::vector<std::string>{" + ", ".join(x.code for x in xs) + "}", 1, "character")
         # operands of the comma initialiser: << binds stronger than comparisons and logical operators
@@ -1359,7 +1362,11 @@ class Translator:
             if cls(rhs_n) not in ("Structure_Constructor", "Part_Ref", "Function_Reference") or \
                     lname(rhs_n.items[0]) != v.tname:
                 raise Untranslatable("named-elements-assignment")
-            rhs = self.expr(rhs_n)              # structure constructor T{...} or constructor function f(...)
+            self.brace_arrays = True
+            try:
+                rhs = self.expr(rhs_n)          # structure constructor T{...} or constructor function f(...)
+            finally:
+                self.brace_arrays = False
             t = self.elem_type(v)
             m = re.fullmatch(r"([\w:<>]+)([({])(.*)([)}])", rhs.code, re.S)
             if m is None or "({"[")}".index(m.group(4))] != m.group(2):

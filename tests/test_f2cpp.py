@@ -1760,7 +1760,8 @@ def test_named_elements(tmp_path):
     translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
     cpp = (tmp_path / "test_var_mod.cpp").read_text()
     assert '  Variable inputs_1("firstInputOutput_rank0", "", 0);' in cpp
-    assert '  Variable outputs_1("thirdInputOutput_rank3", "", 2, ' in cpp
+    assert '  Variable inputs_2("secondInputOutput_rank1", "", 1, {2}, {"2"});' in cpp
+    assert '  Variable outputs_1("thirdInputOutput_rank3", "", 2, {1, 3}, {"1", "3"});' in cpp
     assert "  model.assignVariables({}, {inputs_1, inputs_2}, {outputs_1});" in cpp
     assert "  ASSERT_EQ(1, inputs_2.rank);" in cpp
     assert "std::vector<Variable>" not in cpp
