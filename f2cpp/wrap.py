@@ -219,6 +219,10 @@ class WrapEmitter(ModuleEmitter):
         for v in t.comps.values():
             if not comp_public(t, v) or v.name in consts or self.excluded(f"{t.name}%{v.name}"):
                 continue
+            if v.companion_of:                  # unwrap_types: obj%arr(:)%comp is not contiguous
+                self.report.add("todo", f"wrap-component:{v.name}")
+                res.append((v, f"{v.companion_of[0]}(:)%{v.companion_of[1]}; as constant: wrap_constants"))
+                continue
             if v.base in ("real", "integer") and v.rank == 0 and not v.has("pointer"):
                 res.append((v, "scalar"))
             elif v.base == "logical" and v.rank == 0:
@@ -334,23 +338,28 @@ class WrapEmitter(ModuleEmitter):
         body = []
         for v, kind, extra in consts:
             n, m = f"{to}%{v.cname}", f"{frm}%{v.name}"
+            whole = m
+            if v.companion_of:                  # unwrap_types companion: component of the array elements
+                whole = f"{frm}%{v.companion_of[0]}"
+                m = f"{whole}(:)%{v.companion_of[1]}"
             if kind == "struct":
                 body += self.copy_constants(self.plain_consts(extra), n, m, decls, frees)
             elif kind == "logical" or kind == "fixed" and v.base == "logical":
                 body.append(f"{n} = logical({m}, C_BOOL)")
             elif kind == "array":
                 test = "associated" if v.has("pointer") else "allocated"
-                body += [f"{n} = C_NULL_PTR", f"{n}_size = 0", f"if ({test}({m})) then"]
-                if v.base == "logical":         # Fortran logical is not C bool: a copy
-                    buf = f"bools{len(decls) + 1}"
-                    decls.append(f"logical(C_BOOL), pointer :: {buf}(:)")
-                    body += [f"  allocate({buf}(size({m})))", f"  {buf} = logical({m}, C_BOOL)",
+                body += [f"{n} = C_NULL_PTR", f"{n}_size = 0", f"if ({test}({whole})) then"]
+                if v.base == "logical" or v.companion_of:   # not C bool / not contiguous: a copy
+                    buf = f"buf{len(decls) + 1}"
+                    decls.append(f"{self.f_type(v)}, pointer :: {buf}(:)")
+                    conv = f"logical({m}, C_BOOL)" if v.base == "logical" else m
+                    body += [f"  allocate({buf}(size({whole})))", f"  {buf} = {conv}",
                              f"  if (size({buf}) > 0) {n} = c_loc({buf}(1))"]
                     frees += [f"if (c_associated({n})) then", f"  call c_f_pointer({n}, {buf}, [{n}_size])",
                               f"  deallocate({buf})", "end if"]
                 else:
                     body.append(f"  {n} = c_loc({m})")
-                body += [f"  {n}_size = size({m})", "end if"]
+                body += [f"  {n}_size = size({whole})", "end if"]
             else:
                 body.append(f"{n} = {m}")
         return body

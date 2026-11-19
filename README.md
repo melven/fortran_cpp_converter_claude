@@ -203,7 +203,9 @@ struct handle): members of the C struct, filled by `setup`, only const getters i
 | `real :: weights(3)` | `PROJECT_REAL weights[3];` | `Eigen::Map<const vec> weights() const` |
 | `type(SolverParams_type) :: params` (plain scalars, rank-1 fixed-size / allocatable arrays; `logical` arrays are copied to `bool` in `setup`, buffer freed in `destroy`) | `project_SolverParams params;` | C++ copy of the class `SolverParams` (type of another module: its translation, give the module as input or with `-I`), member `params_` filled in the constructor, `const SolverParams& params() const` |
 
-Changes in Fortran after `setup` are not seen.
+Changes in Fortran after `setup` are not seen. Companion variables of `unwrap_types` in a wrapped type (`arr_offset1` for
+`type(Block_type), allocatable :: arr(:)`) are only available as constants: `setup` gathers
+`obj%arr(:)%offset1` into a buffer (freed in `destroy`), C++ `Eigen::Map<const Eigen::VectorXi> arr_offset1() const`.
 
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws

@@ -58,6 +58,7 @@ class Var:
     unwrapped: str = None        # variable of an unwrapped wrapper type: name of the wrapped component
     companions: dict = None      # unwrapped variable: other components -> companion variables <name>_<comp>
     elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
+    companion_of: tuple = None   # companion variable: (unwrapped variable, component) in Fortran
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
@@ -625,6 +626,7 @@ class Program:
                         cv.attrs = v.attrs & {"allocatable", "pointer", "optional", "target"}
                         cv.is_dummy, cv.intent, cv.access, cv.node, cv.mutable = \
                             v.is_dummy, v.intent, v.access, v.node, False
+                        cv.companion_of = (v.name, c)
                         v.companions = (v.companions or {}) | {c: cv}
                         added.append((scope, cv))
         for scope, cv in added:                 # companions: visible like the variable
