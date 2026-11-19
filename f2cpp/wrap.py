@@ -376,8 +376,7 @@ class WrapEmitter(ModuleEmitter):
         if kind == "struct":
             for line in self.component_docs(t).get(v.name, []):
                 hdecl.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
-            hdecl.emit(1, f"const {self.prog.type_name(v.tname)}& {n}() const {{ return {n}_; }}  "
-                          "//!< constant (C++ copy)")
+            hdecl.emit(1, f"const {self.prog.type_name(v.tname)}& {n}() const {{ return {n}_; }}")
             return
         if kind == "scalar":
             decl, body = f"{tr.cpp_type(v)} {n}() const", f"return handle_->{n};"
@@ -389,7 +388,7 @@ class WrapEmitter(ModuleEmitter):
             decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>(handle_->{n}, {size});"
         for line in self.component_docs(t).get(v.name, []):
             hdecl.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
-        hdecl.emit(1, decl + ";  //!< constant (C struct)")
+        hdecl.emit(1, decl + ";")
         cpp.emit(0, decl.replace(f" {n}()", f" {self.prog.type_name(t.name)}::{n}()", 1))
         cpp.emit(0, "{")
         cpp.emit(1, body)

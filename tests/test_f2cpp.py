@@ -859,8 +859,8 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "MySolver::MySolver(project_MySolver& c) : handle_(&c)\n{\n  params_.maxit = c.params.maxit;\n" in cpp
     assert "  params_.w = Eigen::Map<const vec>(c.params.w, 2);" in cpp
     assert "struct project_SolverParams;" not in hpp
-    assert "  //! problem size\n  int n() const;  //!< constant (C struct)\n" \
-           "  //! diagonal\n  Eigen::Map<const vec> diag() const;  //!< constant (C struct)\n" in hpp
+    assert "  //! problem size\n  int n() const;\n  //! diagonal\n  Eigen::Map<const vec> diag() const;\n" in hpp
+    assert "//!< constant" not in hpp
     assert "Eigen::Map<const vec> MySolver::weights() const\n{\n  return Eigen::Map<const vec>(handle_->weights, 3);" in cpp
     assert "Eigen::Map<const vec> MySolver::diag() const\n{\n  return Eigen::Map<const vec>(handle_->diag, handle_->diag_size);" in cpp
     assert "  // TODO(f2cpp): constant label not wrapped: character" in hpp
