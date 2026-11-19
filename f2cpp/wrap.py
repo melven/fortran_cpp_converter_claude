@@ -310,17 +310,17 @@ class WrapEmitter(ModuleEmitter):
         c, f = [], []
         for v, kind, extra in consts:
             ct, n = self.c_type(v) if kind != "struct" else "", v.cname
-            if kind == "struct":
+            if kind == "struct":                # its members are initialised
                 c.append(f"{self.cfg['c_prefix']}_{self.c_class(extra)} {n};")
                 f.append(f"type({self.c_class(extra)}_c) :: {n}")
             elif kind in ("scalar", "logical"):
-                c.append(f"{ct} {n};")
+                c.append(f"{ct} {n} = " + ("false;" if kind == "logical" else "0;"))
                 f.append(f"{self.f_type(v)} :: {n} = " + (".false." if kind == "logical" else "0"))
             elif kind == "fixed":
-                c.append(f"{ct} {n}[{extra}];")
+                c.append(f"{ct} {n}[{extra}] = {{}};")
                 f.append(f"{self.f_type(v)} :: {n}({extra}) = " + (".false." if v.base == "logical" else "0"))
             else:
-                c += [f"{ct}* {n};", f"int {n}_size;"]
+                c += [f"{ct}* {n} = nullptr;", f"int {n}_size = 0;"]
                 f += [f"type(C_PTR) :: {n} = C_NULL_PTR", f"integer(C_INT) :: {n}_size = 0"]
         return c, f
 
@@ -741,8 +741,8 @@ class WrapEmitter(ModuleEmitter):
         vstructs = []
         for td in values.values():              # struct constants: C struct, bind(C) type, C++ copy of the class
             cn = f"{cfg['c_prefix']}_{self.c_class(td)}"
-            typedefs += [f"!typedef struct {cn} {{"] + \
-                [f"!  {line}" for line in self.constants_struct(self.plain_consts(td))[0]] + [f"!}} {cn};"]
+            typedefs += [f"!typedef struct {cn}", "!{"] + \
+                [f"!  {line}" for line in self.constants_struct(self.plain_consts(td))[0]] + [f"!}} {cn};", "!"]
             vstructs += [f"  !> C struct {cn}: constant copy of {td.spelling or td.name}",
                          f"  type, bind(C), public :: {self.c_class(td)}_c"] + \
                 [f"    {line}" for line in self.constants_struct(self.plain_consts(td))[1]] + \
@@ -759,8 +759,8 @@ class WrapEmitter(ModuleEmitter):
             root, rname = self.root(t)
             if self.is_root(t):
                 if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
-                    typedefs += [f"!typedef struct {ht} {{", "!  void* p_impl;"] + \
-                        [f"!  {line}" for line in self.constants_struct(self.constants(t)[0])[0]] + [f"!}} {ht};"]
+                    typedefs += [f"!typedef struct {ht}", "!{", "!  void* p_impl = nullptr;"] + \
+                        [f"!  {line}" for line in self.constants_struct(self.constants(t)[0])[0]] + [f"!}} {ht};", "!"]
                     structs.append(t)
                 else:
                     typedefs.append(f"!typedef struct {ht} {ht};")
@@ -958,15 +958,18 @@ class WrapEmitter(ModuleEmitter):
 def c_header(binding, guard):
     """C header from the !@c_declaration blocks of a binding module"""
     out, inside = [f"#ifndef {guard}", f"#define {guard}", "", "#ifdef __cplusplus", 'extern "C" {', "#endif", ""], False
+    block = []
     for line in binding.split("\n"):
         s = line.strip()
         if s == "!@c_declaration":
-            inside = True
+            inside, block = True, []
         elif s == "!@end_c_declaration":
             inside = False
-            out.append("")
+            text = [b[1:].rstrip() for b in block]      # indentation relative to the block
+            ind = min((len(t) - len(t.lstrip()) for t in text if t.strip()), default=0)
+            out += [t[ind:] for t in text] + [""]
         elif inside and s.startswith("!"):
-            out.append(s[1:].strip())
+            block.append(s)
     out += ["#ifdef __cplusplus", "}", "#endif", "", f"#endif // {guard}", ""]
     res = []
     for line in out:

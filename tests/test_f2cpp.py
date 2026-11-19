@@ -835,10 +835,11 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
            "int* ierr);" in h
     assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
-    assert "typedef struct project_MySolver {\nvoid* p_impl;\nint n;\nPROJECT_REAL* diag;\nint diag_size;\n" \
-           "PROJECT_REAL weights[3];\nproject_SolverParams params;\n} project_MySolver;" in h
-    assert "typedef struct project_SolverParams {\nint maxit;\nPROJECT_REAL tol;\nbool restart;\nPROJECT_REAL w[2];\n" \
-           "} project_SolverParams;" in h
+    assert "typedef struct project_MySolver\n{\n  void* p_impl = nullptr;\n  int n = 0;\n  PROJECT_REAL* diag = nullptr;\n" \
+           "  int diag_size = 0;\n  PROJECT_REAL weights[3] = {};\n  project_SolverParams params;\n} project_MySolver;" in h
+    assert "typedef struct project_SolverParams\n{\n  int maxit = 0;\n  PROJECT_REAL tol = 0;\n  bool restart = false;\n" \
+           "  PROJECT_REAL w[2] = {};\n} project_SolverParams;" in h
+    assert "!typedef struct project_MySolver\n!{\n!  void* p_impl = nullptr;\n" in binding
     assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
            "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
            "    real(C_REAL) :: weights(3) = 0\n    type(SolverParams_c) :: params\n  end type MySolver_c" in binding
@@ -940,7 +941,7 @@ def test_c_names_follow_the_namespace(tmp_path):
     w = os.path.join(CORPUS, "wrapped")
     translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
-    assert "typedef struct flow_MySolver {" in h and "#define FLOW_REAL double" in h
+    assert "typedef struct flow_MySolver\n{" in h and "#define FLOW_REAL double" in h
     assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
     assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
 
@@ -1423,9 +1424,9 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
     h, b = (tmp_path / "holder_mod.h").read_text(), (tmp_path / "holder_mod_c_binding.F90").read_text()
     assert '#include "offsets_mod.hpp"' in hpp and "class Offsets" not in hpp
     assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
-    assert "typedef struct project_Offsets {\nint row;\nint col;\nPROJECT_REAL w[2];\nPROJECT_REAL* scale;\n" \
-           "int scale_size;\nint* idx;\nint idx_size;\nbool mask[2];\nbool* active;\nint active_size;\n" \
-           "} project_Offsets;" in h
+    assert "typedef struct project_Offsets\n{\n  int row = 0;\n  int col = 0;\n  PROJECT_REAL w[2] = {};\n" \
+           "  PROJECT_REAL* scale = nullptr;\n  int scale_size = 0;\n  int* idx = nullptr;\n  int idx_size = 0;\n" \
+           "  bool mask[2] = {};\n  bool* active = nullptr;\n  int active_size = 0;\n} project_Offsets;" in h
     # logical arrays: copied into logical(C_BOOL) (the buffer is released in destroy)
     assert "    this_c%offsets%mask = logical(obj%offsets%mask, C_BOOL)\n" in b
     assert "      allocate(bools1(size(obj%offsets%active)))\n      bools1 = logical(obj%offsets%active, C_BOOL)\n" in b
