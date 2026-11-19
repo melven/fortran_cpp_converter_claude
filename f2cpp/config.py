@@ -140,6 +140,9 @@ DEFAULTS = {
     # {"mysolver_type": ["n", "diag"]}: real / integer / logical scalars, rank 1 arrays (fixed size:
     # copied; allocatable / pointer: pointer + size into the Fortran object)
     "wrap_constants": {},
+    # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
+    # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
+    "wrap_owned": [],
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
@@ -206,6 +209,7 @@ def load(path=None, **overrides):
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
+    cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
     for key, val in overrides.items():
         if val is not None:

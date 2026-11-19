@@ -207,6 +207,12 @@ Changes in Fortran after `setup` are not seen. Companion variables of `unwrap_ty
 `type(Block_type), allocatable :: arr(:)`) are only available as constants: `setup` gathers
 `obj%arr(:)%offset1` into a buffer (freed in `destroy`), C++ `Eigen::Map<const Eigen::VectorXi> arr_offset1() const`.
 
+Owned objects: `wrap_owned = ["InternalStateWrapper_type"]` (root type without extensions): the C++
+object owns its Fortran object (destructor `project_<Class>_free`, move-only). Array arguments of the
+type are `std::vector<InternalStateWrapper>`: `intent(out)` (size from a check / `wrap_sizes`) creates
+one owned object per element (`allocate(e, source=arr(i))` + `setup`), `intent(in)` copies the objects
+into a Fortran array (`X_private::toC` gives the handles).
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and

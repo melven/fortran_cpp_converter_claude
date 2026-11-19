@@ -1564,3 +1564,65 @@ end module q_mod
     cpp, b = (tmp_path / "q_mod.cpp").read_text(), (tmp_path / "q_mod_c_binding.F90").read_text()
     assert "call obj%fill(y=y(1:obj%m))" in b
     assert "  // TODO(f2cpp): size of y (obj%m in Fortran) not translatable: resize y before the call" in cpp
+
+
+def test_wrapped_owned_objects_in_arrays(tmp_path):
+    """black-box objects (wrap_owned): std::vector of C++ objects that own their Fortran object"""
+    d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
+    (tmp_path / "x.toml").write_text('wrap_owned = ["InternalStateWrapper_type"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    src = os.path.join(w, "state_mod.F90")
+    translate([], c, d, wrap=[src])
+    hpp, cpp = (tmp_path / "state_mod.hpp").read_text(), (tmp_path / "state_mod.cpp").read_text()
+    b, h = (tmp_path / "state_mod_c_binding.F90").read_text(), (tmp_path / "state_mod.h").read_text()
+    assert "  ~InternalStateWrapper();  //!< frees the Fortran object\n" \
+           "  InternalStateWrapper(InternalStateWrapper&& o) noexcept;\n" in hpp
+    assert "  void save(std::vector<InternalStateWrapper>& checkpoints) const;\n" \
+           "  void restore(const std::vector<InternalStateWrapper>& checkpoints);" in hpp
+    assert "void project_Model_save(const project_Model* model, project_InternalStateWrapper** checkpoints, int* ierr);" in h
+    assert "void project_InternalStateWrapper_free(project_InternalStateWrapper* internalStateWrapper);" in h
+    assert "        allocate(checkpoints_e, source=checkpoints_f(checkpoints_i))\n" \
+           "        checkpoints(checkpoints_i) = project_InternalStateWrapper_setup(checkpoints_e)" in b
+    assert "      checkpoints_f(checkpoints_i) = checkpoints_e" in b
+    assert "  std::vector<project_InternalStateWrapper*> checkpoints_h(nCheckpoints(), nullptr);" in cpp
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""program drv
+  use, intrinsic :: iso_c_binding
+  use state_mod
+  use state_mod_c_binding, only: project_Model_setup, project_Model_destroy
+  implicit none
+  interface
+    subroutine run(h) bind(C, name="run")
+      import :: C_PTR
+      type(C_PTR), value :: h
+    end subroutine
+  end interface
+  type(Model_type), target :: m
+  type(C_PTR) :: h
+  m%x = 1.5
+  h = project_Model_setup(m)
+  call run(h)
+  call project_Model_destroy(h)
+  print '(f6.2)', m%x
+end program drv
+""")
+    (tmp_path / "run.cpp").write_text(
+        '#include "state_mod.hpp"\n#include "state_mod.h"\n#include <cstdio>\n'
+        'extern "C" void run(project_Model* h)\n{\n'
+        '  auto m = project::Model_private::wrapFromC(*h);\n'
+        '  std::vector<project::InternalStateWrapper> cp;\n'
+        '  m->save(cp);\n'
+        '  std::printf("%d\\n", static_cast<int>(cp.size()));\n'
+        '  auto moved = std::move(cp);                 // owned: moving keeps one owner\n'
+        '  m->x() = 7.0;\n'
+        '  m->restore(moved);                          // last checkpoint: 2 * 1.5\n'
+        '}\n')
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    for f in (src, "state_mod_c_binding.F90", "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f, o in (("state_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
+        run(gxx + [f, "-o", o], d)
+    run(["gfortran", "state_mod.o", "state_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
+    assert run(["./m"], d).split() == ["2", "3.00"]
