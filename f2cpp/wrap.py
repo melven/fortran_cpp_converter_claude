@@ -258,9 +258,11 @@ class WrapEmitter(ModuleEmitter):
         """(type, None) of a constant component whose type is a struct of plain components, or (None, reason)"""
         if v.base != "type" or v.rank or v.polymorphic or v.has("pointer") or v.has("allocatable"):
             return None, self.component_kind(v)
-        td = self.mod.types.get(v.tname)
+        td = self.prog.find_type(v.tname, self.mod)
         if td is None:
-            return None, self.component_kind(v) + " (type of another module)"
+            return None, self.component_kind(v) + " (type not parsed: give its module with -I)"
+        if td.module is not self.mod and td.module.name in getattr(self.prog, "wrapped", ()):
+            return None, self.component_kind(v) + " (type of a wrapped module)"
         if td.parent or td.bindings:
             return None, self.component_kind(v) + " (type with parent / methods)"
         for c in td.comps.values():
@@ -270,7 +272,8 @@ class WrapEmitter(ModuleEmitter):
         return td, None
 
     def value_types(self):
-        """types of struct constants: a C struct and a C++ copy of the class instead of a wrapper class"""
+        """types of struct constants: a C struct and a C++ copy of the class instead of a wrapper class
+        (types of other modules: their translation is the C++ class)"""
         res = {}
         for t in self.mod.types.values():
             for v, kind, td in self.constants(t)[0]:
@@ -727,8 +730,9 @@ class WrapEmitter(ModuleEmitter):
                          f"  type, bind(C), public :: {self.c_class(td)}_c"] + \
                 [f"    {line}" for line in self.constants_struct(self.plain_consts(td))[1]] + \
                 [f"  end type {self.c_class(td)}_c", ""]
-            self.emit_type(hpp, td, 0)
-            hpp.emit(0, "")
+            if td.module is self.mod:
+                self.emit_type(hpp, td, 0)
+                hpp.emit(0, "")
             self.report.add("translated", "wrapped-constant-type")
         for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
             if t.name in cfg["unwrap_types"] or t.name in values:
@@ -818,11 +822,14 @@ class WrapEmitter(ModuleEmitter):
                 hpp.emit(1, f"explicit {name}({ht}& c);  //!< the object created in Fortran")
                 cpp.emit(0, f"{name}::{name.split('::')[-1]}({ht}& c) : handle_(&c)")
                 cpp.emit(0, "{")
+                tr = self.tr()
                 for v, td in copies:
                     for w, kind, size in self.plain_consts(td):
                         dst, src = f"{v.cname}_.{w.cname}", f"c.{v.cname}.{w.cname}"
-                        if kind == "fixed":
-                            cpp.emit(1, f"for (int i = 0; i < {size}; ++i) {dst}[i] = {src}[i];")
+                        if kind == "fixed" and tr.storage(w) == "eigen":
+                            cpp.emit(1, f"{dst} = Eigen::Map<const {tr.eigen_type(w, 1)}>({src}, {size});")
+                        elif kind == "fixed":
+                            cpp.emit(1, f"{dst}.assign({src}, {src} + {size});")
                         else:
                             cpp.emit(1, f"{dst} = {src};")
                 cpp.emit(0, "}")

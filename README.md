@@ -201,7 +201,7 @@ struct handle): members of the C struct, filled by `setup`, only const getters i
 | `integer :: n` | `int n;` | `int n() const` (reads the struct) |
 | `real, allocatable :: diag(:)` | `PROJECT_REAL* diag; int diag_size;` (into the Fortran object) | `Eigen::Map<const vec> diag() const` |
 | `real :: weights(3)` | `PROJECT_REAL weights[3];` | `Eigen::Map<const vec> weights() const` |
-| `type(SolverParams_type) :: params` (same module, plain scalars / fixed-size arrays) | `project_SolverParams params;` | C++ copy of the class `SolverParams`, member `params_` filled in the constructor, `const SolverParams& params() const` |
+| `type(SolverParams_type) :: params` (plain scalars / fixed-size arrays) | `project_SolverParams params;` | C++ copy of the class `SolverParams` (type of another module: its translation, give the module as input or with `-I`), member `params_` filled in the constructor, `const SolverParams& params() const` |
 
 Changes in Fortran after `setup` are not seen.
 

@@ -70,6 +70,7 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
                 todo.append((path, m))
     prog.finish()
     wrapped = [m for path, m in todo if path in wrap]
+    prog.wrapped = {m.name for m in wrapped}
     from .wrap import WrapEmitter, register_accessors, check_dependencies
     register_accessors(prog, wrapped)
     check_dependencies(prog, wrapped, [m for _, m in todo if m not in wrapped], report)

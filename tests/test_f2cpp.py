@@ -857,7 +857,7 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "  //! iteration parameters\n  const SolverParams& params() const { return params_; }" in hpp
     assert "  explicit MySolver(project_MySolver& c);" in hpp and "  SolverParams params_;" in hpp
     assert "MySolver::MySolver(project_MySolver& c) : handle_(&c)\n{\n  params_.maxit = c.params.maxit;\n" in cpp
-    assert "  for (int i = 0; i < 2; ++i) params_.w[i] = c.params.w[i];" in cpp
+    assert "  params_.w = Eigen::Map<const vec>(c.params.w, 2);" in cpp
     assert "struct project_SolverParams;" not in hpp
     assert "  //! problem size\n  int n() const;  //!< constant (C struct)\n" \
            "  //! diagonal\n  Eigen::Map<const vec> diag() const;  //!< constant (C struct)\n" in hpp
@@ -1411,3 +1411,25 @@ def test_unwrapped_type_with_companions(tmp_path):
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "blocks_mod.cpp", "main.cpp",
          "-o", "m"], str(tmp_path))
     assert run(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
+
+
+def test_wrapped_constant_of_a_translated_type(tmp_path):
+    """struct constant whose type is in another (translated) module: its C++ class is the copy"""
+    w = os.path.join(CORPUS, "wrapped")
+    translate([os.path.join(w, "offsets_mod.F90")], cfg(wrap_constants={"holder_type": ["offsets"]}), str(tmp_path),
+              wrap=[os.path.join(w, "holder_mod.F90")])
+    hpp, cpp = (tmp_path / "holder_mod.hpp").read_text(), (tmp_path / "holder_mod.cpp").read_text()
+    h, b = (tmp_path / "holder_mod.h").read_text(), (tmp_path / "holder_mod_c_binding.F90").read_text()
+    assert '#include "offsets_mod.hpp"' in hpp and "class Offsets" not in hpp
+    assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
+    assert "typedef struct project_Offsets {\nint row;\nint col;\nPROJECT_REAL w[2];\n} project_Offsets;" in h
+    assert "    this_c%offsets%row = obj%offsets%row\n" in b
+    assert "  offsets_.row = c.offsets.row;\n  offsets_.col = c.offsets.col;\n" \
+           "  offsets_.w = Eigen::Map<const vec>(c.offsets.w, 2);" in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
+             "holder_mod.cpp"], str(tmp_path))
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+        for src in (os.path.join(w, "offsets_mod.F90"), os.path.join(w, "holder_mod.F90"), "holder_mod_c_binding.F90"):
+            run(ff + [src], str(tmp_path))
