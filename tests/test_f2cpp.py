@@ -1422,10 +1422,14 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
     h, b = (tmp_path / "holder_mod.h").read_text(), (tmp_path / "holder_mod_c_binding.F90").read_text()
     assert '#include "offsets_mod.hpp"' in hpp and "class Offsets" not in hpp
     assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
-    assert "typedef struct project_Offsets {\nint row;\nint col;\nPROJECT_REAL w[2];\n} project_Offsets;" in h
+    assert "typedef struct project_Offsets {\nint row;\nint col;\nPROJECT_REAL w[2];\nPROJECT_REAL* scale;\n" \
+           "int scale_size;\nint* idx;\nint idx_size;\n} project_Offsets;" in h
+    assert "    if (allocated(obj%offsets%scale)) then\n      this_c%offsets%scale = c_loc(obj%offsets%scale)\n" in b
     assert "    this_c%offsets%row = obj%offsets%row\n" in b
     assert "  offsets_.row = c.offsets.row;\n  offsets_.col = c.offsets.col;\n" \
-           "  offsets_.w = Eigen::Map<const vec>(c.offsets.w, 2);" in cpp
+           "  offsets_.w = Eigen::Map<const vec>(c.offsets.w, 2);\n" \
+           "  offsets_.scale = Eigen::Map<const vec>(c.offsets.scale, c.offsets.scale_size);\n" in cpp
+    assert "  offsets_.idx.assign(c.offsets.idx, c.offsets.idx + c.offsets.idx_size);" in cpp
     if shutil.which("g++") and os.path.isdir(EIGEN):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
              "holder_mod.cpp"], str(tmp_path))

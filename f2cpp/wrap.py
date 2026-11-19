@@ -267,8 +267,8 @@ class WrapEmitter(ModuleEmitter):
             return None, self.component_kind(v) + " (type with parent / methods)"
         for c in td.comps.values():
             kind, _, why = self.plain_kind(c)
-            if kind not in ("scalar", "logical", "fixed"):
-                return None, f"{self.component_kind(v)}: component {c.cname}: {why or 'allocatable / pointer'}"
+            if kind is None:
+                return None, f"{self.component_kind(v)}: component {c.cname}: {why}"
         return td, None
 
     def value_types(self):
@@ -825,9 +825,11 @@ class WrapEmitter(ModuleEmitter):
                 for v, td in copies:
                     for w, kind, size in self.plain_consts(td):
                         dst, src = f"{v.cname}_.{w.cname}", f"c.{v.cname}.{w.cname}"
-                        if kind == "fixed" and tr.storage(w) == "eigen":
+                        if kind == "array":             # pointer + size into the Fortran object
+                            size = f"{src}_size"
+                        if kind in ("fixed", "array") and tr.storage(w) == "eigen":
                             cpp.emit(1, f"{dst} = Eigen::Map<const {tr.eigen_type(w, 1)}>({src}, {size});")
-                        elif kind == "fixed":
+                        elif kind in ("fixed", "array"):
                             cpp.emit(1, f"{dst}.assign({src}, {src} + {size});")
                         else:
                             cpp.emit(1, f"{dst} = {src};")
