@@ -546,6 +546,10 @@ class WrapEmitter(ModuleEmitter):
                     codes = None
                 if intent == "out" and codes is not None and "Ref<" not in tr.param_type(v):
                     glue.append(("pre", (f"if ({present}) " if present else "") + f"{obj}.resize({', '.join(codes)});"))
+                elif intent == "out" and "Ref<" not in tr.param_type(v):    # known in Fortran only
+                    self.report.add("todo", "wrap-out-size")
+                    glue.append(("pre", f"// {TODO}: size of {v.cname} ({', '.join(dims)} in Fortran) not "
+                                        f"translatable: resize {v.cname} before the call"))
                 elif not self.cfg["wrap_size_checks"]:
                     pass
                 elif codes is None:

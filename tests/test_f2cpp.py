@@ -1541,3 +1541,26 @@ def test_unwrapped_companions_of_an_existing_class(tmp_path):
     user = (tmp_path / "blocks_user_mod.cpp").read_text()
     assert "for (int i = 0; i < static_cast<int>(b.arr().size()); ++i)" in user
     assert "sum_offsets = sum_offsets + b.arr_offset1()[i];" in user
+
+
+def test_wrapped_out_array_size_only_in_fortran(tmp_path):
+    """intent(out) array with a size from wrap_sizes (Fortran text): no silent missing resize"""
+    (tmp_path / "q_mod.F90").write_text("""module q_mod
+  implicit none
+  type :: Q_type
+    integer :: m = 0
+  contains
+    procedure :: fill => q_fill
+  end type Q_type
+contains
+  subroutine q_fill(this, y)
+    class(Q_type), intent(in) :: this
+    real, intent(out) :: y(:)
+    y = 1.0
+  end subroutine q_fill
+end module q_mod
+""")
+    translate([], cfg(wrap_sizes={"q_type%fill": {"y": "this%m"}}), str(tmp_path), wrap=[str(tmp_path / "q_mod.F90")])
+    cpp, b = (tmp_path / "q_mod.cpp").read_text(), (tmp_path / "q_mod_c_binding.F90").read_text()
+    assert "call obj%fill(y=y(1:obj%m))" in b
+    assert "  // TODO(f2cpp): size of y (obj%m in Fortran) not translatable: resize y before the call" in cpp
