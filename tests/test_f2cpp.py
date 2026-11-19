@@ -1744,7 +1744,7 @@ end module lng_mod
     translate([], cfg(), str(tmp_path), wrap=[str(tmp_path / "lng_mod.F90")])
     b = (tmp_path / "lng_mod_c_binding.F90").read_text()
     cname = "project_VeryLongClassNameForTesting_compute_something_with_a_rather_long_name"
-    assert len(cname) > 63 and f'bind(C, name="{cname}")' in b and f"  !  PROJECT_REAL {cname}(" in b
+    assert len(cname) > 63 and f'bind(C, name="{cname}")' in b and f"\n!  PROJECT_REAL {cname}(" in b and "\n!@c_declaration\n" in b and "  !@c_declaration" not in b
     names = re.findall(r"^\s*(?:end )?(?:subroutine|function)\s+(\w+)", b, flags=re.M)
     assert names and max(len(n) for n in names) <= 63
     if shutil.which("gfortran"):

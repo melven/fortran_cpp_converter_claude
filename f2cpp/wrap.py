@@ -78,31 +78,49 @@ class WrapEmitter(ModuleEmitter):
         return self.cfg["wrap_handle_member"].get(self.root(t)[1], "handle_")
 
     def use_only(self, lines):
-        """use statement of the wrapped module with the names the binding code refers to"""
+        """use statements (with only-lists) of the wrapped module and of the other parsed modules whose public
+        entities the binding code refers to (types of arguments of listeners, owned types, kinds ...)"""
         mod = self.mod
-        known = {t.name: t.spelling or t.name for t in mod.types.values()}
-        known |= {p.name: p.cname for p in mod.procs.values()}
-        known |= {g: sp for g, sp in mod.generic_spelling.items()}
-        known |= {v.name: v.cname for v in mod.vars.values()}
-        known |= {n: n for only in mod.use_only.values() if only for n in only}     # re-exported (kinds ...)
-        words = set()
+        words, local = set(), set()
         for line in lines:
             code = line.split("!")[0] if not line.lstrip().startswith(("!", "#")) else ""
             code = re.sub(r'"[^"]*"', "", code)
             code = re.sub(r"%\s*\w+", "", code)                   # components / bindings
             words |= {w.lower() for w in re.findall(r"[A-Za-z_]\w*", code)}
-        names = sorted({known[w] for w in words & set(known)
-                        if mod.is_public(w, mod.vars[w].access if w in mod.vars else None)}, key=str.lower)
-        if not names:
-            return f"  use {mod.spelling}, only:"
-        out, line = [], f"  use {mod.spelling}, only: "
-        for k, n in enumerate(names):
-            piece = n + (", " if k < len(names) - 1 else "")
-            if len(line) + len(piece) > 100:
-                out.append(line.rstrip() + " &")
-                line = "    "
-            line += piece
-        return "\n".join(out + [line])
+            m = re.match(r"\s*(?:\w+\s+)*(?:subroutine|function)\s+\w+\s*\(([^)]*)\)(?:\s*result\((\w+)\))?", code, re.I)
+            if m:                               # dummies / results of the binding procedures
+                local |= {a.strip().lower() for a in m.group(1).split(",") if a.strip()}
+                local |= {m.group(2).lower()} if m.group(2) else set()
+            if "::" in code and not re.match(r"\s*(use|procedure)\b", code, re.I):
+                rhs = re.sub(r"\([^()]*\)", "", code.split("::", 1)[1])      # declared locals
+                local |= {e.split("=")[0].strip().lower() for e in rhs.split(",") if e.strip()}
+        order = self.prog.visible(mod) + [m for m in self.prog.modules.values() if m not in self.prog.visible(mod)]
+        found = {}                              # module -> {name: spelling}
+        for w in sorted(words - local):
+            for m in order:
+                if m is not mod and m.is_test:
+                    continue
+                known = {**{t.name: t.spelling or t.name for t in m.types.values()},
+                         **{p.name: p.cname for p in m.procs.values()}, **m.generic_spelling,
+                         **{v.name: v.cname for v in m.vars.values()}}
+                if w in known and m.is_public(w, m.vars[w].access if w in m.vars else None):
+                    found.setdefault(m.name, {})[w] = known[w]
+                    break
+        res = []
+        for m in order:
+            names = sorted(found.get(m.name, {}).values(), key=str.lower)
+            if not names and m is not mod:
+                continue
+            line = f"  use {m.spelling or m.name}, only:" + (" " if names else "")
+            out = []
+            for k, n in enumerate(names):
+                piece = n + (", " if k < len(names) - 1 else "")
+                if len(line) + len(piece) > 100:
+                    out.append(line.rstrip() + " &")
+                    line = "    "
+                line += piece
+            res.append("\n".join(out + [line]))
+        return "\n".join(res)
 
     def owned(self, t):
         """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
@@ -1342,6 +1360,14 @@ class WrapEmitter(ModuleEmitter):
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
         b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
+        inside = False                              # !@c_declaration blocks in the first column
+        for k, line in enumerate(b):
+            if line.strip() == "!@c_declaration":
+                inside = True
+            if inside:
+                b[k] = line.lstrip()
+            if line.strip() == "!@end_c_declaration":
+                inside = False
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
