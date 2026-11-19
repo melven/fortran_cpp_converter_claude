@@ -73,13 +73,78 @@ class WrapEmitter(ModuleEmitter):
         """bind(C) type of the C struct of the handle: <Root>_c"""
         return f"{self.c_class_name(self.root(t)[1])}_c"
 
+    def handle_member(self, t):
+        """C++ member of the C handle (wrap_handle_member of the root type, default handle_)"""
+        return self.cfg["wrap_handle_member"].get(self.root(t)[1], "handle_")
+
+    def use_only(self, lines):
+        """use statements (with only-lists) of the wrapped module and of the other parsed modules whose public
+        entities the binding code refers to (types of arguments of listeners, owned types, kinds ...)"""
+        mod = self.mod
+        words, local = set(), set()
+        for line in lines:
+            code = line.split("!")[0] if not line.lstrip().startswith(("!", "#")) else ""
+            code = re.sub(r'"[^"]*"', "", code)
+            code = re.sub(r"%\s*\w+", "", code)                   # components / bindings
+            words |= {w.lower() for w in re.findall(r"[A-Za-z_]\w*", code)}
+            m = re.match(r"\s*(?:\w+\s+)*(?:subroutine|function)\s+\w+\s*\(([^)]*)\)(?:\s*result\((\w+)\))?", code, re.I)
+            if m:                               # dummies / results of the binding procedures
+                local |= {a.strip().lower() for a in m.group(1).split(",") if a.strip()}
+                local |= {m.group(2).lower()} if m.group(2) else set()
+            if "::" in code and not re.match(r"\s*(use|procedure)\b", code, re.I):
+                rhs = re.sub(r"\([^()]*\)", "", code.split("::", 1)[1])      # declared locals
+                local |= {e.split("=")[0].strip().lower() for e in rhs.split(",") if e.strip()}
+        order = self.prog.visible(mod) + [m for m in self.prog.modules.values() if m not in self.prog.visible(mod)]
+        found = {}                              # module -> {name: spelling}
+        for w in sorted(words - local):
+            for m in order:
+                if m is not mod and m.is_test:
+                    continue
+                known = {**{t.name: t.spelling or t.name for t in m.types.values()},
+                         **{p.name: p.cname for p in m.procs.values()}, **m.generic_spelling,
+                         **{v.name: v.cname for v in m.vars.values()}}
+                if w in known and m.is_public(w, m.vars[w].access if w in m.vars else None):
+                    found.setdefault(m.name, {})[w] = known[w]
+                    break
+        res = []
+        for m in order:
+            names = sorted(found.get(m.name, {}).values(), key=str.lower)
+            if not names and m is not mod:
+                continue
+            line = f"  use {m.spelling or m.name}, only:" + (" " if names else "")
+            out = []
+            for k, n in enumerate(names):
+                piece = n + (", " if k < len(names) - 1 else "")
+                if len(line) + len(piece) > 100:
+                    out.append(line.rstrip() + " &")
+                    line = "    "
+                line += piece
+            res.append("\n".join(out + [line]))
+        return "\n".join(res)
+
+    def owned(self, t):
+        """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
+        return t.name in self.cfg["wrap_owned"] and self.is_root(t) and not self.poly(t) and self.struct_handle(t)
+
+    def owned_type(self, v):
+        """(type, None) of an array argument of a wrap_owned type, or (None, reason)"""
+        ot = self.prog.find_type(v.tname, self.mod)
+        if ot is None or ot.module.name not in getattr(self.prog, "wrapped", ()):
+            return None, f"argument {v.cname} (wrap_owned type {v.tname} not in a wrapped module)"
+        if not self.owned(ot):
+            return None, f"argument {v.cname} (wrap_owned type {v.tname}: only root types without extensions)"
+        return ot, None
+
     def wrap_from_c(self, t, name, ht, hpp, cpp):
         """<Class>_private::wrapFromC(c): C++ object of the C object c (protected constructor; derived
         classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
+        hm = self.handle_member(t) if t is not None else "handle_"
         cls = name.split("::")[-1]
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
         hpp.emit(0, f"std::unique_ptr<{cls}> wrapFromC({ht}& c);  //!< C++ object of the C object c")
+        if self.owned(t):
+            hpp.emit(0, f"{ht}* toC(const {cls}& x);  //!< the C object of x (passed to Fortran)")
         hpp.emit(0, "}")
         hpp.emit(0, "")
         cpp.emit(0, f"std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c)")
@@ -87,6 +152,34 @@ class WrapEmitter(ModuleEmitter):
         cpp.emit(1, f"return std::unique_ptr<{cls}>(new {cls}(c));  // new: protected constructor, make_unique has no access")
         cpp.emit(0, "}")
         cpp.emit(0, "")
+        if self.owned(t):
+            free = self.c_name(t, "free")
+            cpp.emit(0, f"{ht}* {cls}_private::toC(const {cls}& x)")
+            cpp.emit(0, "{")
+            cpp.emit(1, f"return x.{hm};")
+            cpp.emit(0, "}")
+            cpp.emit(0, "")
+            cpp.emit(0, f"{name}::~{cls}()")
+            cpp.emit(0, "{")
+            cpp.emit(1, f"{free}({hm});")
+            cpp.emit(0, "}")
+            cpp.emit(0, "")
+            cpp.emit(0, f"{name}::{cls}({cls}&& o) noexcept : {hm}(o.{hm})")
+            cpp.emit(0, "{")
+            cpp.emit(1, f"o.{hm} = nullptr;")
+            cpp.emit(0, "}")
+            cpp.emit(0, "")
+            cpp.emit(0, f"{name}& {name}::operator=({cls}&& o) noexcept")
+            cpp.emit(0, "{")
+            cpp.emit(1, "if (this != &o)")
+            cpp.emit(1, "{")
+            cpp.emit(2, f"{free}({hm});")
+            cpp.emit(2, f"{hm} = o.{hm};")
+            cpp.emit(2, f"o.{hm} = nullptr;")
+            cpp.emit(1, "}")
+            cpp.emit(1, "return *this;")
+            cpp.emit(0, "}")
+            cpp.emit(0, "")
 
     def object_access(self, t, cname, handle, has_err, body):
         """binding statements: the Fortran object `obj` from the handle, around the statements body"""
@@ -134,6 +227,14 @@ class WrapEmitter(ModuleEmitter):
                     if cls(args[0]) == "Name" and lname(args[0]) in p.args:
                         dim = int(str(args[1])) if len(args) > 1 and str(args[1]).isdigit() else None
                         sizes.setdefault((lname(args[0]), dim), b)
+        for st in walk(execs, F.Allocate_Stmt) if execs else []:   # allocate(x(n)) of an allocatable dummy
+            for al in items_of(st.items[1]):
+                if cls(al) != "Allocation" or cls(al.items[0]) != "Name" or lname(al.items[0]) not in p.args:
+                    continue
+                for k, spec in enumerate(items_of(al.items[1])):
+                    lo, hi = spec.items if cls(spec) == "Allocate_Shape_Spec" else (None, spec)
+                    if hi is not None and (lo is None or str(lo).strip() == "1"):
+                        sizes.setdefault((lname(al.items[0]), k + 1), hi)
         for a in p.args:
             v = p.vars.get(a)
             if v is not None and v.rank and all(hi is not None for _, hi in v.dims):
@@ -181,6 +282,23 @@ class WrapEmitter(ModuleEmitter):
                 continue
             v = p.vars[a]
             opt = v.has("optional")
+            if v.base == "type" and v.tname in self.cfg["wrap_listeners"] and not v.rank:
+                lt = self.prog.find_type(v.tname, self.mod)
+                if lt is None or lt.module.name not in getattr(self.prog, "wrapped", ()):
+                    return None, f"argument {v.cname} (listener type {v.tname} not in a wrapped module)"
+                res.append((a, "listener", None))
+                continue
+            if v.base == "type" and v.tname in self.cfg["wrap_owned"] and v.rank == 1 and not opt:
+                ot, why = self.owned_type(v)
+                if why:
+                    return None, why
+                n = self.fortran_size(p, sizes, a, None)
+                if v.intent == "out" and n is None:
+                    return None, f"size of argument {v.cname} unknown (size check or wrap_sizes)"
+                if v.intent not in ("in", "out"):
+                    return None, f"argument {v.cname} (wrap_owned array: intent(in) / intent(out))"
+                res.append((a, "owned-" + v.intent, [n or f"{a}_n1"]))
+                continue
             if v.base in ("procedure", "type", "complex", "unknown"):
                 return None, f"argument {v.cname} ({v.base})"
             if v.base == "character":
@@ -193,12 +311,14 @@ class WrapEmitter(ModuleEmitter):
                     return None, f"argument {v.cname} (optional, only intent(in) real / integer)"
                 res.append((a, "optional" if opt else "scalar", None))
                 continue
-            if v.rank > 2 or opt or v.has("allocatable") or v.has("pointer"):
-                return None, f"argument {v.cname} (array: rank 1 / 2, not optional / allocatable)"
+            if v.rank > 2 or v.has("allocatable") or v.has("pointer"):
+                return None, f"argument {v.cname} (array: rank 1 / 2, not allocatable / pointer)"
             dims = [self.fortran_size(p, sizes, a, d + 1 if v.rank == 2 else None) for d in range(v.rank)]
-            if None in dims:
+            if None in dims and (v.intent or "inout") != "out":
+                dims = [f"{a}_n{d + 1}" for d in range(v.rank)]      # size passed from C++
+            elif None in dims:
                 return None, f"size of argument {v.cname} unknown (size check or wrap_sizes)"
-            res.append((a, "array", dims))
+            res.append((a, "optional-array" if opt else "array", dims))
         if p.kind == "function":
             r = p.vars.get(p.result)
             if r is None or r.rank or r.base not in ("real", "integer", "logical"):
@@ -297,6 +417,9 @@ class WrapEmitter(ModuleEmitter):
             v = t.comps.get(n)
             if v is None:
                 kind, extra, why = None, None, "no such component"
+            elif v.unwrapped:
+                kind, extra, why = None, None, f"objects of the unwrapped type {v.unwrapped_type} " \
+                    "(only its companions can be constants)"
             elif v.base == "type":
                 extra, why = self.value_type(v)
                 kind = "struct" if extra is not None else None
@@ -397,8 +520,18 @@ class WrapEmitter(ModuleEmitter):
         if struct:
             fb.append("    deallocate(this_c)")
         fb += ["    handle = C_NULL_PTR", f"  end subroutine {destroy}"]
+        if self.owned(t):                       # C++ owns the object: frees object and struct
+            free, h = self.c_name(t, "free"), lower_camel(self.c_class(t))
+            fb += ["", "  !@c_declaration", f"  !  void {free}({self.c_type_name(t)}* {h});", "  !@end_c_declaration",
+                   f"  !> frees the Fortran object of the handle (created by {setup} of an allocated object) and the handle",
+                   f"  subroutine {free}({h}) bind(C, name=\"{free}\")"] + self.dllexport(free) + \
+                [f"    type(C_PTR), value :: {h}", f"    type({sty}), pointer :: this_c", f"    type({ft}), pointer :: obj", "",
+                 f"    if (.not. c_associated({h})) return", f"    call c_f_pointer({h}, this_c)",
+                 "    call c_f_pointer(this_c%p_impl, obj)", "    deallocate(obj)", "    deallocate(this_c)",
+                 f"  end subroutine {free}"]
 
     def constant_getter(self, t, v, kind, hdecl, cpp):
+        hm = self.handle_member(t) if t is not None else "handle_"
         tr, n = self.tr(), v.cname
         if kind == "struct":
             for line in self.component_docs(t).get(v.name, []):
@@ -406,13 +539,13 @@ class WrapEmitter(ModuleEmitter):
             hdecl.emit(1, f"const {self.prog.type_name(v.tname)}& {n}() const {{ return {n}_; }}")
             return
         if kind == "scalar":
-            decl, body = f"{tr.cpp_type(v)} {n}() const", f"return handle_->{n};"
+            decl, body = f"{tr.cpp_type(v)} {n}() const", f"return {hm}->{n};"
         elif kind == "logical":
-            decl, body = f"bool {n}() const", f"return handle_->{n};"
+            decl, body = f"bool {n}() const", f"return {hm}->{n};"
         else:
             et = tr.eigen_type(v, 1)
-            size = f"handle_->{n}_size" if kind == "array" else next(e for w, k, e in self.consts if w is v)
-            decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>(handle_->{n}, {size});"
+            size = f"{hm}->{n}_size" if kind == "array" else next(e for w, k, e in self.consts if w is v)
+            decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>({hm}->{n}, {size});"
         for line in self.member_docs(t, v):
             hdecl.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
         hdecl.emit(1, decl + ";")
@@ -441,6 +574,7 @@ class WrapEmitter(ModuleEmitter):
 
     def method(self, t, bd, p, args, fb, hdecl, cpp):
         """emit the binding, the declaration and the glue of one method (t, bd None: module procedure)"""
+        hm = self.handle_member(t) if t is not None else "handle_"
         tr = self.tr(p)
         err = tr.err
         cname = self.c_name(t, bd.name) if t is not None else self.proc_c_name(p)
@@ -467,6 +601,29 @@ class WrapEmitter(ModuleEmitter):
                 pre.append(f"if (c_associated({a})) {a}_f = {self.cfg['wrap_string_in'][1]}({a})")
                 call.append(f"{a}={a}_f")
                 glue.append(f"{v.cname} ? {v.cname}->c_str() : nullptr")
+            elif kind == "listener":           # the C++ listener's Fortran bridge object; user: this C++ object
+                lt = self.prog.find_type(v.tname, self.mod)
+                bridge = f"{self.c_class(lt)}_cpp"
+                if lt.module is not self.mod:
+                    self.extra_uses.add(f"  use {lt.module.spelling}_c_binding, only: {bridge}")
+                f_args.append(f"{a}_user")
+                c_args += [f"{self.c_type_name(lt)}* {a}", f"void* {a}_user"]
+                decls += [f"type(C_PTR), value :: {a}", f"type(C_PTR), value :: {a}_user",
+                          f"type({bridge}), pointer :: {a}_f"]
+                pre += [f"nullify({a}_f)", f"if (c_associated({a})) then", f"  call c_f_pointer({a}, {a}_f)",
+                        f"  {a}_f%user = {a}_user"] + ([f"  {a}_f%owner => obj"] if t is not None else []) + ["end if"]
+                call.append(f"{a}={a}_f")
+                lcls = self.prog.type_name(lt.name, self.mod)
+                to_c = f"{lcls.rsplit('::', 1)[0] + '::' if '::' in lcls else ''}{lcls.split('::')[-1]}_private::toC"
+                ref = {"optref": (f"{v.cname} ? ", f"{v.cname}->get()", " : nullptr")}.get(v.opt_kind, ("", v.cname, ""))
+                glue.append(f"{ref[0]}{to_c}({ref[1]}){ref[2]}")
+                if t is not None:
+                    root = self.prog.type_name(self.root(t)[1], self.mod)
+                    glue.append(f"const_cast<void*>(static_cast<const void*>(static_cast<const {root}*>(this)))")
+                else:
+                    glue.append("nullptr")
+            elif kind in ("owned-out", "owned-in"):
+                self.owned_array(p, t, v, a, kind, dims, f_args, c_args, decls, pre, post, call, glue)
             elif kind in ("scalar", "optional"):
                 intent = v.intent or "inout"
                 if kind == "optional":
@@ -494,8 +651,35 @@ class WrapEmitter(ModuleEmitter):
                 intent = v.intent or "inout"
                 const = "const " if intent == "in" else ""
                 c_args.append(f"{const}{self.c_type(v)}* {a}")
-                glue.append(f"{v.cname}.data()")
-                if v.rank == 1:
+                # C++ object of the array and its presence (optional: NULL pointer = absent)
+                ok = v.opt_kind if kind == "optional-array" else None
+                obj = {"optref": f"{v.cname}->get()", "optional": f"(*{v.cname})"}.get(ok, v.cname)
+                present = {"optref": v.cname, "optional": v.cname, "empty": f"{v.cname}.size() > 0"}.get(ok)
+                glue.append(f"{present} ? {obj}.data() : nullptr" if present else f"{v.cname}.data()")
+                if dims[0] == f"{a}_n1":         # size unknown in Fortran: passed from C++
+                    have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
+                    for d, h in zip(dims, have):
+                        f_args.append(d)
+                        c_args.append(f"int {d}")
+                        decls.append(f"integer(C_INT), value :: {d}")
+                        glue.append(f"{present} ? static_cast<int>({h}) : 0" if present else f"static_cast<int>({h})")
+                if v.base == "logical":         # C bool -> Fortran logical: a copy (unallocated = absent)
+                    shape, colons = ", ".join(dims), ", ".join([":"] * v.rank)
+                    decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer :: {a}_c({colons})",
+                              f"logical, allocatable :: {a}_f({colons})"]
+                    pre += [f"if (c_associated({a})) then", f"  call c_f_pointer({a}, {a}_c, [{shape}])",
+                            f"  allocate({a}_f({shape}))" if intent == "out" else f"  {a}_f = {a}_c", "end if"]
+                    if intent != "in":
+                        post.append(f"if (allocated({a}_f)) {a}_c = logical({a}_f, C_BOOL)")
+                    call.append(f"{a}={a}_f")
+                elif present:                   # pointer to the data or disassociated (= absent)
+                    shape = ", ".join(dims)
+                    decls.append(f"type(C_PTR), value :: {a}")
+                    # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
+                    decls.append(f"{self.f_type(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)})")
+                    pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
+                    call.append(f"{a}={a}_f")
+                elif v.rank == 1:
                     decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
                     call.append(f"{a}={a}(1:{dims[0]})")
                 else:
@@ -513,15 +697,21 @@ class WrapEmitter(ModuleEmitter):
                 except Untranslatable:
                     codes = None
                 if intent == "out" and codes is not None and "Ref<" not in tr.param_type(v):
-                    glue.append(("pre", f"{v.cname}.resize({', '.join(codes)});"))
+                    glue.append(("pre", (f"if ({present}) " if present else "") + f"{obj}.resize({', '.join(codes)});"))
+                elif intent == "out" and "Ref<" not in tr.param_type(v):    # known in Fortran only
+                    self.report.add("todo", "wrap-out-size")
+                    glue.append(("pre", f"// {TODO}: size of {v.cname} ({', '.join(dims)} in Fortran) not "
+                                        f"translatable: resize {v.cname} before the call"))
                 elif not self.cfg["wrap_size_checks"]:
                     pass
                 elif codes is None:
                     self.report.add("todo", "wrap-size-check")
                     glue.append(("pre", f"// {TODO}: size of {v.cname} is not checked"))
                 else:
-                    have = [f"{v.cname}.size()"] if v.rank == 1 else [f"{v.cname}.rows()", f"{v.cname}.cols()"]
+                    have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
                     cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes))
+                    if present:
+                        cond = f"{present} && ({cond})"
                     glue.append(("pre", f'if ({cond}) throw std::invalid_argument("{cname}: size of {v.cname}");'))
         if has_err:
             f_args.append("ierr")
@@ -567,23 +757,244 @@ class WrapEmitter(ModuleEmitter):
         cpp.emit(0, f"{ret} {qual}{name}({params}){const}")
         cpp.emit(0, "{")
         for g in glue:
-            if isinstance(g, tuple):
+            if isinstance(g, tuple) and g[0] == "pre":
                 cpp.emit(1, g[1])
-        cargs = ", ".join((["handle_"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+        cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
-        if r is not None and has_err:
+        posts = [g[1] for g in glue if isinstance(g, tuple) and g[0] == "post"]
+        if r is not None and (has_err or posts):
             cpp.emit(1, f"const {ret} res = {cname}({cargs});")
         elif r is not None:
             cpp.emit(1, f"return {cname}({cargs});")
         else:
             cpp.emit(1, f"{cname}({cargs});")
+        for g in posts:                         # after the call (also on error: the objects are owned)
+            cpp.emit(1, g)
+        if r is not None and posts and not has_err:
+            cpp.emit(1, "return res;")
         if has_err:
             cpp.emit(1, f'if (ierr != 0) throw std::runtime_error("ierr!=0 returned from {cname}");')
             if r is not None:
                 cpp.emit(1, "return res;")
         cpp.emit(0, "}")
         cpp.emit(0, "")
+
+    def owned_array(self, p, t, v, a, kind, dims, f_args, c_args, decls, pre, post, call, glue):
+        """array of a wrap_owned type: std::vector<X> in C++, an array of handles in C"""
+        ot = self.owned_type(v)[0]
+        ht, ft, st = self.c_type_name(ot), ot.spelling or ot.name, self.struct_type(ot)
+        cls = self.prog.type_name(ot.name, self.mod)
+        priv = cls.rsplit("::", 1)
+        priv = f"{priv[0]}::{priv[1]}_private" if len(priv) == 2 else f"{cls}_private"
+        n, cn = dims[0], v.cname
+        if ot.module is not self.mod:
+            self.extra_uses.add(f"  use {ot.module.spelling}_c_binding, only: {st}, {self.c_name(ot, 'setup')}")
+        decls += [f"type({ft}), allocatable :: {a}_f(:)", f"type({ft}), pointer :: {a}_e", f"integer :: {a}_i"]
+        call.append(f"{a}={a}_f")
+        if kind == "owned-out":                 # the elements become owned C++ objects
+            c_args.append(f"{ht}** {a}")
+            decls.insert(len(decls) - 3, f"type(C_PTR), intent(out) :: {a}(*)")
+            post += [f"{a}(1:{n}) = C_NULL_PTR", f"if (allocated({a}_f)) then",
+                     f"  do {a}_i = 1, min({n}, size({a}_f))", f"    allocate({a}_e, source={a}_f({a}_i))",
+                     f"    {a}({a}_i) = {self.c_name(ot, 'setup')}({a}_e)", "  end do", "end if"]
+            node = self.array_sizes(p, t).get((a, None)) or self.array_sizes(p, t).get((a, 1))
+            try:
+                size = self.tr(p).expr(node).code if node is not None else None
+            except Untranslatable:
+                size = None
+            if size is None:
+                self.report.add("todo", "wrap-out-size")
+                glue.append(("pre", f"// {TODO}: size of {cn} ({n} in Fortran) not translatable"))
+                size = "0"
+            glue.append(("pre", f"std::vector<{ht}*> {cn}_h({size}, nullptr);"))
+            glue.append(f"{cn}_h.data()")
+            glue.append(("post", f"{cn}.clear();"))
+            glue.append(("post", f"for ({ht}* h : {cn}_h) {cn}.push_back(h ? std::move(*{priv}::wrapFromC(*h)) : {cls}());"))
+        else:                                   # copies of the objects (deep copy of their components)
+            c_args.append(f"{ht}* const* {a}")
+            decls.insert(len(decls) - 3, f"type(C_PTR), intent(in) :: {a}(*)")
+            decls.append(f"type({st}), pointer :: {a}_c")
+            pre += [f"allocate({a}_f({n}))", f"do {a}_i = 1, {n}", f"  if (.not. c_associated({a}({a}_i))) cycle",
+                    f"  call c_f_pointer({a}({a}_i), {a}_c)", f"  call c_f_pointer({a}_c%p_impl, {a}_e)",
+                    f"  {a}_f({a}_i) = {a}_e", "end do"]
+            glue.append(("pre", f"std::vector<{ht}*> {cn}_h;"))
+            glue.append(("pre", f"for (const auto& e : {cn}) {cn}_h.push_back({priv}::toC(e));"))
+            glue.append(f"{cn}_h.data()")
+            if n == f"{a}_n1":                  # size passed from C++
+                f_args.append(n)
+                c_args.append(f"int {n}")
+                decls.append(f"integer(C_INT), value :: {n}")
+                glue.append(f"static_cast<int>({cn}.size())")
+
+    def listener(self, lt, hpp, cpp, fb, typedefs):
+        """abstract listener type: C++ class with pure virtual methods; Fortran bridge type extending it
+        (in the binding) that calls the C++ object; bind(C) create / free of the bridge object"""
+        prog, ns = self.prog, self.ns
+        name = prog.type_name(lt.name)
+        cls, ht = name.split("::")[-1], self.c_type_name(lt)
+        bridge, ft = f"{self.c_class(lt)}_cpp", lt.spelling or lt.name
+        create, free = self.c_name(lt, "create"), self.c_name(lt, "free")
+        typedefs.append(f"!typedef struct {ht} {ht};")
+        # --- C++ class
+        hpp.emit(0, f"namespace {cls}_private")
+        hpp.emit(0, "{")
+        hpp.emit(0, f"{ht}* toC(const {cls}& l);  //!< the Fortran object of the listener")
+        hpp.emit(0, "}")
+        hpp.emit(0, "")
+        hpp.emit(0, f"class {name}")
+        hpp.emit(0, "{")
+        hpp.emit(0, "public:")
+        hpp.emit(1, f"{cls}();  //!< creates its Fortran object")
+        hpp.emit(1, f"virtual ~{cls}();  //!< frees it: unset the listener before")
+        hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to Fortran")
+        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;")
+        bodies, specs = [], []
+        for bd in lt.bindings.values():
+            iface = prog.binding_proc(lt, bd)
+            if not bd.deferred or iface is None:
+                continue
+            tr = self.tr(iface)
+            ret, _, params, const = self.signature(tr, iface, True)
+            hpp.emit(0, "")
+            self.doc(hpp, iface, 1)
+            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const} = 0;")
+            fb += self.listener_method(lt, bd, iface, bridge, specs)
+        hpp.emit(0, "")
+        hpp.emit(0, "private:")
+        hpp.emit(1, f"{ht}* fortran_ = nullptr;  //!< the Fortran object ({bridge}) calling this object")
+        hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& l);")
+        hpp.emit(0, "};")
+        hpp.emit(0, "")
+        for line in [f"{name}::{cls}() : fortran_({create}(this))", "{", "}", "",
+                     f"{name}::~{cls}()", "{", f"  {free}(fortran_);", "}", "",
+                     f"{ht}* {cls}_private::toC(const {cls}& l)", "{", "  return l.fortran_;", "}", ""]:
+            cpp.emit(0, line) if not line.startswith("  ") else cpp.emit(1, line.strip())
+        # --- Fortran bridge type and create / free
+        self.bridges += [f"  !> {ft} implemented in C++: forwards to the C++ object",
+                         f"  type, extends({ft}), public :: {bridge}",
+                         "    type(C_PTR) :: cpp = C_NULL_PTR      !< the C++ listener",
+                         "    type(C_PTR) :: user = C_NULL_PTR     !< C++ object of the owner (set_listener)",
+                         "    class(*), pointer :: owner => null() !< Fortran object of the owner",
+                         "  contains"] + specs + [f"  end type {bridge}", ""]
+        if not any(line.startswith("  logical function listener_same") for line in fb):
+            fb += ["", "  !> is x the Fortran object of p", "  logical function listener_same(p, x)",
+                   "    class(*), pointer, intent(in) :: p", "    class(*), target, intent(in) :: x",
+                   "    listener_same = associated(p, x)", "  end function listener_same"]
+        fb += ["", "  !@c_declaration", f"  !  {ht}* {create}(void* cpp);", f"  !  void {free}({ht}* listener);",
+               "  !@end_c_declaration", f"  !> Fortran object of the C++ listener cpp",
+               f"  function {create}(cpp) result(listener) bind(C, name=\"{create}\")"] + self.dllexport(create) + \
+            ["    type(C_PTR), value :: cpp", "    type(C_PTR) :: listener", f"    type({bridge}), pointer :: b", "",
+             "    allocate(b)", "    b%cpp = cpp", "    listener = c_loc(b)", f"  end function {create}", "",
+             f"  subroutine {free}(listener) bind(C, name=\"{free}\")"] + self.dllexport(free) + \
+            ["    type(C_PTR), value :: listener", f"    type({bridge}), pointer :: b", "",
+             "    if (.not. c_associated(listener)) return", "    call c_f_pointer(listener, b)", "    deallocate(b)",
+             f"  end subroutine {free}"]
+        self.report.add("translated", "wrapped-listener")
+
+    def listener_method(self, lt, bd, iface, bridge, specs):
+        """bridge procedure of a deferred binding: arguments to C, call of the extern "C" function that calls
+        the C++ method (C++ object of an object argument: the owner's or a temporary wrapper)"""
+        prog, ns = self.prog, self.ns
+        proc = f"{self.c_class(lt).lower()}_cpp_{bd.name}"
+        cb = self.c_name(lt, bd.name)
+        specs.append(f"    procedure :: {bd.spelling} => {proc}")
+        decl_nodes, c_dummies, c_params, f_decls, body, after, cpp_args = [], [], [], [], [], [], []
+        todo = None
+        for a in iface.args:
+            v = iface.vars[a]
+            if v.node is not None and v.node not in decl_nodes:
+                decl_nodes.append(v.node)
+            if a == iface.pass_arg:
+                continue
+            if v.intent != "in":
+                todo = f"argument {v.cname}: only intent(in)"
+                continue
+            if v.base == "type" and not v.rank:
+                xt = prog.find_type(v.tname, self.mod)
+                if xt is None or xt.module.name not in getattr(prog, "wrapped", ()) or not self.is_root(xt):
+                    todo = f"argument {v.cname}: type {v.tname} is not a wrapped root type"
+                    continue
+                xh, xcls = self.c_type_name(xt), prog.type_name(xt.name, self.mod)
+                if xt.module is not self.mod:
+                    self.extra_uses.add(f"  use {xt.module.spelling}_c_binding, only: "
+                                        f"{self.c_name(xt, 'setup')}, {self.c_name(xt, 'destroy')}")
+                c_dummies += [f"{a}_cpp", f"{a}_h"]
+                c_params += [f"void* {a}_cpp", f"{xh}* {a}"]
+                f_decls += [f"type(C_PTR), value :: {a}_cpp, {a}_h"]
+                body += [f"{a}_cpp = C_NULL_PTR", f"{a}_h = C_NULL_PTR",
+                         f"if (listener_same(this%owner, {a})) then", f"  {a}_cpp = this%user",
+                         "else", f"  {a}_h = {self.c_name(xt, 'setup')}({a})      ! temporary handle", "end if"]
+                after.append(f"if (c_associated({a}_h)) call {self.c_name(xt, 'destroy')}({a}_h)")
+                q = f"{ns}::{xcls}"
+                priv = f"{ns}::{xcls.split('::')[-1]}_private"
+                cpp_args.append((f"std::unique_ptr<{q}> {a}_tmp;", f"if (!{a}_cpp) {a}_tmp = {priv}::wrapFromC(*{a});",
+                                 f"{a}_cpp ? *static_cast<const {q}*>({a}_cpp) : *{a}_tmp"))
+            elif v.base in ("real", "integer", "logical") and not v.rank:
+                ct, fct = self.c_type(v), self.f_type(v)
+                conv = {"real": "real", "integer": "int", "logical": "logical"}[v.base]
+                kind = {"real": "C_REAL", "integer": "C_INT", "logical": "C_BOOL"}[v.base]
+                c_dummies.append(f"{a}_c")
+                c_params.append(f"{ct} {a}")
+                f_decls.append(f"{fct}, value :: {a}_c")
+                body.append(f"{a}_c = {conv}({a}, {kind})")
+                cpp_args.append(("", "", a))
+            elif v.base in ("real", "integer") and v.rank == 1:
+                ct, fct = self.c_type(v), self.f_type(v)
+                c_dummies += [f"{a}_p", f"{a}_n"]
+                c_params += [f"const {ct}* {a}", f"int {a}_n"]
+                f_decls += [f"type(C_PTR), value :: {a}_p", f"integer(C_INT), value :: {a}_n"]
+                body += [f"allocate({a}_c(size({a})))", f"{a}_c = {a}", f"{a}_p = C_NULL_PTR",
+                         f"if (size({a}_c) > 0) {a}_p = c_loc({a}_c(1))", f"{a}_n = size({a}_c)"]
+                et = self.tr(iface).eigen_type(v, 1)
+                cpp_args.append(("", "", f"{ns}::{et}(Eigen::Map<const {ns}::{et}>({a}, {a}_n))"
+                                 if not et.startswith("Eigen::") else f"{et}(Eigen::Map<const {et}>({a}, {a}_n))"))
+            else:
+                todo = f"argument {v.cname}: {self.component_kind(v)}"
+        out = ["", f"  !> {bd.spelling} of the C++ listener"]
+        if todo:                                # the C++ method cannot be called
+            self.report.add("todo", f"wrap-listener:{bd.name}")
+            out.append(f"  ! {TODO}: {todo}")
+        out.append(f"  subroutine {proc}({', '.join(iface.args)})")
+        for node in decl_nodes:                 # the interface of the deferred binding, the bridge as object
+            text = str(node)
+            if iface.pass_arg in [lname(e.items[0]) for e in items_of(node.items[2])]:
+                text = re.sub(rf"(?i)class\s*\(\s*{re.escape(lt.name)}\s*\)", f"class({bridge})", text)
+            out.append(f"    {text}")
+        if todo:
+            return out + [f'    error stop "{cb}: {todo}"', f"  end subroutine {proc}"]
+        out += ["    interface", f"      subroutine cb(cpp, {', '.join(c_dummies)}) bind(C, name=\"{cb}\")",
+                "        import", "        type(C_PTR), value :: cpp"] + [f"        {d}" for d in f_decls] + \
+            ["      end subroutine cb", "    end interface"]
+        locals_ = []
+        for a in iface.args:
+            v = iface.vars[a]
+            if a == iface.pass_arg:
+                continue
+            if v.base == "type":
+                locals_.append(f"type(C_PTR) :: {a}_cpp, {a}_h")
+            elif v.rank:
+                locals_ += [f"{self.f_type(v)}, allocatable, target :: {a}_c(:)", f"type(C_PTR) :: {a}_p",
+                            f"integer(C_INT) :: {a}_n"]
+            else:
+                locals_.append(f"{self.f_type(v)} :: {a}_c")
+        out += [f"    {d}" for d in locals_] + [""] + [f"    {x}" for x in body] + \
+            [f"    call cb(this%cpp, {', '.join(c_dummies)})".replace("this%", f"{iface.pass_arg}%")] + \
+            [f"    {x}" for x in after] + [f"  end subroutine {proc}"]
+        out = [x.replace("this%owner", f"{iface.pass_arg}%owner").replace("this%user", f"{iface.pass_arg}%user")
+               for x in out]
+        # --- C declaration (in the .h) and C++ definition of the extern "C" function
+        out = ["", "  !@c_declaration", f"  !  void {cb}(void* cpp, {', '.join(c_params)});", "  !@end_c_declaration"] + out
+        lq = f"{ns}::{prog.type_name(lt.name)}"
+        g = [f"void {cb}(void* cpp, {', '.join(c_params)})", "{", "  try", "  {"]
+        g += [f"    {x}" for pre, _, _ in cpp_args for x in [pre] if x]
+        g += [f"    {x}" for _, pre, _ in cpp_args for x in [pre] if x]
+        g += [f"    static_cast<{lq}*>(cpp)->{bd.spelling}({', '.join(c for _, _, c in cpp_args)});", "  }",
+              "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
+              f'    std::fprintf(stderr, "{cb}: %s\\n", e.what());', "    std::terminate();", "  }",
+              "  catch (...)", "  {", "    std::terminate();", "  }", "}", ""]
+        self.cpp_global += g
+        return out
 
     def not_wrapped(self, t, p, reason, hdecl, cpp, bname=None):
         tr = self.tr(p)
@@ -602,6 +1013,7 @@ class WrapEmitter(ModuleEmitter):
         cpp.emit(0, "")
 
     def getter(self, t, v, kind, fb, hdecl, cpp):
+        hm = self.handle_member(t) if t is not None else "handle_"
         tr = self.tr()
         cname = self.c_name(t, v.name)
         handle = lower_camel(self.c_class(t))
@@ -617,8 +1029,8 @@ class WrapEmitter(ModuleEmitter):
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
             ty = tr.cpp_type(v)
-            decls = [(f"{ty}& {v.cname}()", f"return *{cname}(handle_);"),
-                     (f"const {ty}& {v.cname}() const", f"return *{cname}(handle_);")]
+            decls = [(f"{ty}& {v.cname}()", f"return *{cname}({hm});"),
+                     (f"const {ty}& {v.cname}() const", f"return *{cname}({hm});")]
         elif kind == "logical":
             fb.append(f"  !  bool {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
@@ -626,7 +1038,15 @@ class WrapEmitter(ModuleEmitter):
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decls = [(f"bool {v.cname}() const", f"return {cname}(handle_);")]  # Fortran logical: no reference
+            decls = [(f"bool {v.cname}() const", f"return {cname}({hm});")]  # Fortran logical: no reference
+            setter = self.c_name(t, f"{v.name}_set")       # ... so a setter (overload of the getter name)
+            fb += ["", "  !@c_declaration", f"  !  void {setter}({self.c_type_name(t)}* {handle}, bool value);",
+                   "  !@end_c_declaration"]
+            odecl, ostmts = self.object_access(t, setter, handle, False, [f"obj%{v.name} = value"])
+            fb += [f"  subroutine {setter}({handle}, value) bind(C, name=\"{setter}\")"] + self.dllexport(setter) + [
+                   f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL), value :: value"] + odecl + ostmts + \
+                [f"  end subroutine {setter}"]
+            decls.append((f"void {v.cname}(bool value)", f"{setter}({hm}, value);"))
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
@@ -644,7 +1064,7 @@ class WrapEmitter(ModuleEmitter):
                 [f"  end subroutine {cname}"]
             et = tr.eigen_type(v, v.rank)
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
-                    f" {cname}(handle_, &data, " + ", ".join(f"&{d}" for d in dims) +
+                    f" {cname}({hm}, &data, " + ", ".join(f"&{d}" for d in dims) +
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
             decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
                      (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
@@ -652,11 +1072,11 @@ class WrapEmitter(ModuleEmitter):
         for k, (decl, body) in enumerate(decls):
             lines = list(doc)
             if lines and k == 1:
-                lines[-1] += " (const version)"
+                lines[-1] += " (setter)" if kind == "logical" else " (const version)"
             for line in lines:
                 hdecl.emit(1, f"{dox} {line}".rstrip())
             hdecl.emit(1, decl + ";")
-            cpp.emit(0, decl.replace(f" {v.cname}()", f" {cls_name}::{v.cname}()", 1))
+            cpp.emit(0, decl.replace(f" {v.cname}(", f" {cls_name}::{v.cname}(", 1))
             cpp.emit(0, "{")
             for stmt in body.split("; "):
                 cpp.emit(1, stmt.rstrip(";") + ";")
@@ -709,6 +1129,8 @@ class WrapEmitter(ModuleEmitter):
         hpp, cpp = self.tr(), self.tr()
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
+        self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
+        self.cpp_global, self.bridges = [], []      # extern "C" callbacks of listeners, their Fortran types
         stem_h = os.path.basename(stem) + ".h"
         values = self.value_types()
         vstructs = []
@@ -727,9 +1149,13 @@ class WrapEmitter(ModuleEmitter):
         for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
             if t.name in cfg["unwrap_types"] or t.name in values:
                 continue
+            if t.name in cfg["wrap_listeners"]:
+                self.listener(t, hpp, cpp, fb, typedefs)
+                continue
             name = self.prog.type_name(t.name)
             ht = self.c_type_name(t)
             root, rname = self.root(t)
+            hm = self.handle_member(t)
             if self.is_root(t):
                 if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
                     typedefs += [f"!typedef struct {ht}", "!{", "!  void* p_impl = nullptr;"] + \
@@ -765,8 +1191,13 @@ class WrapEmitter(ModuleEmitter):
                 hpp.emit(1, f"using {parent}::{parent.split('::')[-1]};")
             hpp.emit(1, f"{name}(const {name}&) = delete;")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
-            hpp.emit(1, f"{name}({name}&&) = default;")
-            hpp.emit(1, f"{name}& operator=({name}&&) = default;")
+            if self.owned(t):                  # owns the Fortran object: the moved-from object releases nothing
+                hpp.emit(1, f"~{name}();  //!< frees the Fortran object")
+                hpp.emit(1, f"{name}({name}&& o) noexcept;")
+                hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;")
+            else:
+                hpp.emit(1, f"{name}({name}&&) = default;")
+                hpp.emit(1, f"{name}& operator=({name}&&) = default;")
             hpp.emit(0, "")
             inherited = self.overrides_wrapped(t)
             for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
@@ -810,7 +1241,7 @@ class WrapEmitter(ModuleEmitter):
             copies = [(v, td) for v, kind, td in self.consts if kind == "struct"]
             if self.is_root(t) and copies:      # C++ copies of struct constants: filled in the constructor
                 hpp.emit(1, f"explicit {name}({ht}& c);  //!< the object created in Fortran")
-                cpp.emit(0, f"{name}::{name.split('::')[-1]}({ht}& c) : handle_(&c)")
+                cpp.emit(0, f"{name}::{name.split('::')[-1]}({ht}& c) : {hm}(&c)")
                 cpp.emit(0, "{")
                 tr = self.tr()
                 for v, td in copies:
@@ -827,11 +1258,13 @@ class WrapEmitter(ModuleEmitter):
                 cpp.emit(0, "}")
                 cpp.emit(0, "")
             elif self.is_root(t):
-                hpp.emit(1, f"explicit {name}({ht}& c) : handle_(&c) {{}}  //!< the object created in Fortran")
+                hpp.emit(1, f"explicit {name}({ht}& c) : {hm}(&c) {{}}  //!< the object created in Fortran")
             cls = name.split("::")[-1]
             hpp.emit(1, f"friend std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c);")
+            if self.owned(t):
+                hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& x);")
             if self.is_root(t):
-                hpp.emit(1, f"{ht}* handle_ = nullptr;  //!< the Fortran object (C binding: {stem_h})")
+                hpp.emit(1, f"{ht}* {hm} = nullptr;  //!< the Fortran object (C binding: {stem_h})")
                 for v, td in copies:
                     hpp.emit(1, f"{prog.type_name(td.name)} {v.cname}_;  //!< C++ copy of the constant {v.cname}")
             hpp.emit(0, "};")
@@ -896,6 +1329,8 @@ class WrapEmitter(ModuleEmitter):
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
              f'#include "{os.path.basename(stem)}.h"', "", self.open_ns(), ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
+        if self.cpp_global:                         # Fortran -> C++ (declared extern "C" in the .h)
+            c += ["#include <cstdio>", "#include <exception>", ""] + self.cpp_global
 
         # binding module
         single, real = cfg["c_single_precision"], cfg["c_real"]
@@ -907,11 +1342,11 @@ class WrapEmitter(ModuleEmitter):
              f"  use {mod.spelling}"]
         if needs_str:
             b.append(f"  use {cfg['wrap_string_in'][0]}, only: {cfg['wrap_string_in'][1]}")
-        b += sorted(uses)
+        b += sorted(uses | self.extra_uses)
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
-        b += typedefs + ["!", "!@end_c_declaration", ""] + vstructs
+        b += typedefs + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
         for t in structs:                           # the handle points to this struct
             b += [f"  !> C struct {self.c_type_name(t)}: handle of {t.spelling or t.name}",
                   f"  type, bind(C), public :: {self.struct_type(t)}",
@@ -924,8 +1359,55 @@ class WrapEmitter(ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
-        b += ["contains"] + fb + ["", f"end module {mod.spelling}_c_binding", ""]
+        b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
+        inside = False                              # !@c_declaration blocks in the first column
+        for k, line in enumerate(b):
+            if line.strip() == "!@c_declaration":
+                inside = True
+            if inside:
+                b[k] = line.lstrip()
+            if line.strip() == "!@end_c_declaration":
+                inside = False
+        b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
+        b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
+
+
+def short_names(fb):
+    """Fortran names are at most 63 characters: longer procedure names are shortened (prefix + hash); the C
+    name of bind(C) routines stays the binding label"""
+    import hashlib
+    long = {m.group(1) for line in fb for m in [re.match(r"\s*(?:subroutine|function)\s+(\w+)\s*\(", line)]
+            if m and len(m.group(1)) > 63}                  # also setup / destroy (called from Fortran)
+    if not long:
+        return fb
+    short = {n: f"{n[:54]}_{hashlib.sha1(n.encode()).hexdigest()[:8]}" for n in long}
+    pat = re.compile(r"\b(" + "|".join(map(re.escape, sorted(long, key=len, reverse=True))) + r")\b")
+    out = []
+    for line in fb:
+        if line.lstrip().startswith("!"):           # C declarations: the C name
+            out.append(line)
+            continue
+        parts = re.split(r'("[^"]*")', line)        # not in strings (binding label, messages)
+        out.append("".join(pt if pt.startswith('"') else pat.sub(lambda m: short[m.group(1)], pt) for pt in parts))
+    return out
+
+
+ISO_C = ["C_PTR", "C_NULL_PTR", "C_INT", "C_BOOL", "C_CHAR", "C_NULL_CHAR", "C_FLOAT", "C_DOUBLE", "c_loc",
+         "c_f_pointer", "c_associated"]
+
+
+def iso_c_only(lines):
+    """use of iso_c_binding with the names the binding code refers to (C_REAL: C_FLOAT and C_DOUBLE)"""
+    words = set()
+    for line in lines:
+        if not line.lstrip().startswith("!"):
+            words |= {w.lower() for w in re.findall(r"[A-Za-z_]\w*", line.split("!")[0])}
+    if "c_real" in words:
+        words |= {"c_float", "c_double"}
+    names = [n for n in ISO_C if n.lower() in words]
+    return "  use, intrinsic :: iso_c_binding, only: " + ", ".join(names) if names else \
+        "  use, intrinsic :: iso_c_binding, only:"
 
 
 def c_header(binding, guard):

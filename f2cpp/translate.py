@@ -619,9 +619,15 @@ class Translator:
             n = lname(pname)
             if cur.var is not None and cur.var.companions and n in cur.var.companions and subs is None:
                 cv = cur.var.companions[n]      # arr(i)%offset -> arr_offset[i - 1]
-                x = self.var_ref(cv, self.member(holder, cv.cname, holder.qual)) if holder is not None else \
-                    self.var_ref(cv, cv.cname)
+                acc = self.accessor(holder.tname, cv.name, cv.cname) if holder is not None else None
+                if acc:                         # getter (wrapped class or existing C++ class)
+                    x = X(self.member(holder, acc, holder.qual) + "()", cv.rank, cv.base, 100, cv, whole=True)
+                else:
+                    x = self.var_ref(cv, self.member(holder, cv.cname, holder.qual)) if holder is not None else \
+                        self.var_ref(cv, cv.cname)
                 cur = self.subscript(x, cv, hsubs) if hsubs is not None else x
+                if acc and cur.rank == 0 and cur.code.startswith(x.code + "(") and cur.code.endswith(")"):
+                    cur.code = f"{x.code}[{cur.code[len(x.code) + 1:-1]}]"    # Eigen vector or std::vector
                 continue
             if cur.var is not None and cur.var.unwrapped == n and (cur.whole or cur.uptr_elem):
                 if subs is not None:            # x%v(i) of an unwrapped wrapper type: x(i)
@@ -650,6 +656,18 @@ class Translator:
             else:
                 self.used_member(td, n, comp)
                 acc = self.accessor(cur.tname, n, comp.cname)
+                if comp.elem_uptr and td.module.name in getattr(self.prog, "wrapped", ()):
+                    # objects of an unwrapped type in a wrapped (Fortran) class: only the companions exist
+                    nxt = parts[parts.index(p) + 1] if p is not parts[-1] else None
+                    nn = lname(nxt.items[0] if cls(nxt) == "Part_Ref" else nxt) if nxt is not None else None
+                    if subs is None and nxt is None and comp.companions:     # size(b%arr): of a companion
+                        cv = next(iter(comp.companions.values()))
+                        acc = self.accessor(cur.tname, cv.name, cv.cname) or cv.cname
+                        self.report.add("info", f"unwrapped-shape:{n}->{cv.name}")
+                        cur = X(self.member(cur, acc, cur.qual) + "()", cv.rank, cv.base, 100, cv, whole=True)
+                        continue
+                    if not (subs is not None and nn in (comp.companions or {})):
+                        raise Untranslatable("unwrapped-object-of-wrapped-class")
                 if acc:     # the accessor returns a reference, also for pointer components
                     x = X(self.member(cur, acc, cur.qual) + "()", comp.rank, comp.base, 100, comp,
                           comp.tname, whole=True)
