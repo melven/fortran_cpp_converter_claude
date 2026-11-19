@@ -77,6 +77,33 @@ class WrapEmitter(ModuleEmitter):
         """C++ member of the C handle (wrap_handle_member of the root type, default handle_)"""
         return self.cfg["wrap_handle_member"].get(self.root(t)[1], "handle_")
 
+    def use_only(self, lines):
+        """use statement of the wrapped module with the names the binding code refers to"""
+        mod = self.mod
+        known = {t.name: t.spelling or t.name for t in mod.types.values()}
+        known |= {p.name: p.cname for p in mod.procs.values()}
+        known |= {g: sp for g, sp in mod.generic_spelling.items()}
+        known |= {v.name: v.cname for v in mod.vars.values()}
+        known |= {n: n for only in mod.use_only.values() if only for n in only}     # re-exported (kinds ...)
+        words = set()
+        for line in lines:
+            code = line.split("!")[0] if not line.lstrip().startswith(("!", "#")) else ""
+            code = re.sub(r'"[^"]*"', "", code)
+            code = re.sub(r"%\s*\w+", "", code)                   # components / bindings
+            words |= {w.lower() for w in re.findall(r"[A-Za-z_]\w*", code)}
+        names = sorted({known[w] for w in words & set(known)
+                        if mod.is_public(w, mod.vars[w].access if w in mod.vars else None)}, key=str.lower)
+        if not names:
+            return f"  use {mod.spelling}, only:"
+        out, line = [], f"  use {mod.spelling}, only: "
+        for k, n in enumerate(names):
+            piece = n + (", " if k < len(names) - 1 else "")
+            if len(line) + len(piece) > 100:
+                out.append(line.rstrip() + " &")
+                line = "    "
+            line += piece
+        return "\n".join(out + [line])
+
     def owned(self, t):
         """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
         return t.name in self.cfg["wrap_owned"] and self.is_root(t) and not self.poly(t) and self.struct_handle(t)
@@ -1315,7 +1342,26 @@ class WrapEmitter(ModuleEmitter):
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
         b += ["contains"] + fb + ["", f"end module {mod.spelling}_c_binding", ""]
+        b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
+        b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
+
+
+ISO_C = ["C_PTR", "C_NULL_PTR", "C_INT", "C_BOOL", "C_CHAR", "C_NULL_CHAR", "C_FLOAT", "C_DOUBLE", "c_loc",
+         "c_f_pointer", "c_associated"]
+
+
+def iso_c_only(lines):
+    """use of iso_c_binding with the names the binding code refers to (C_REAL: C_FLOAT and C_DOUBLE)"""
+    words = set()
+    for line in lines:
+        if not line.lstrip().startswith("!"):
+            words |= {w.lower() for w in re.findall(r"[A-Za-z_]\w*", line.split("!")[0])}
+    if "c_real" in words:
+        words |= {"c_float", "c_double"}
+    names = [n for n in ISO_C if n.lower() in words]
+    return "  use, intrinsic :: iso_c_binding, only: " + ", ".join(names) if names else \
+        "  use, intrinsic :: iso_c_binding, only:"
 
 
 def c_header(binding, guard):
