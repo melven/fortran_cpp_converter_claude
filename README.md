@@ -213,6 +213,15 @@ type are `std::vector<InternalStateWrapper>`: `intent(out)` (size from a check, 
 one owned object per element (`allocate(e, source=arr(i))` + `setup`), `intent(in)` copies the objects
 into a Fortran array (`X_private::toC` gives the handles).
 
+Listeners: `wrap_listeners = ["AbstractListener_type"]` (abstract type with deferred bindings, `intent(in)`
+arguments: wrapped objects, real / integer / logical scalars, real / integer rank-1 arrays): C++ class
+`AbstractListener` with pure virtual methods (non-copyable: its Fortran object knows its address). The
+binding defines `AbstractListener_cpp` extending the Fortran type (`cpp`: the C++ listener, `user` / `owner`:
+the C++ / Fortran object it was set on); its methods call `extern "C"` functions in the glue that call the
+C++ method. An object argument that is the owner is passed as the owner's C++ object, others as temporary
+wrappers. `set_listener(std::optional<std::reference_wrapper<AbstractListener>>)` passes the listener's
+Fortran object; unset it before the listener is destroyed. Exceptions in listeners terminate.
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and

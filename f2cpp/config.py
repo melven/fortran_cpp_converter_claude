@@ -143,6 +143,9 @@ DEFAULTS = {
     # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
     # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
     "wrap_owned": [],
+    # abstract types used as listeners (only deferred bindings with intent(in) arguments): a C++ class with
+    # pure virtual methods; its objects can be set as listener of wrapped objects
+    "wrap_listeners": [],
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
@@ -210,6 +213,7 @@ def load(path=None, **overrides):
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
+    cfg["wrap_listeners"] = [t.lower() for t in cfg["wrap_listeners"]]
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
     for key, val in overrides.items():
         if val is not None:

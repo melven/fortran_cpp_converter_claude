@@ -1631,3 +1631,78 @@ end program drv
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "state_mod.o", "state_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
     assert run(["./m"], d).split() == ["2", "3.00"]
+
+
+def test_wrapped_listener(tmp_path):
+    """abstract listener type implemented in C++: Fortran bridge type calling the C++ object"""
+    d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
+    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    src = os.path.join(w, "listen_mod.F90")
+    translate([], c, d, wrap=[src])
+    hpp, cpp = (tmp_path / "listen_mod.hpp").read_text(), (tmp_path / "listen_mod.cpp").read_text()
+    b, h = (tmp_path / "listen_mod_c_binding.F90").read_text(), (tmp_path / "listen_mod.h").read_text()
+    assert "  virtual void state_changed(const Thing& thing, scalar old, const vec& history) = 0;" in hpp
+    assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
+    assert "  type, extends(AbstractListener_type), public :: AbstractListener_cpp\n" in b
+    assert "    if (listener_same(this%owner, thing)) then\n      thing_cpp = this%user\n" in b
+    assert "      listener_f%user = listener_user\n      listener_f%owner => obj\n" in b
+    assert "void project_AbstractListener_state_changed(void* cpp, void* thing_cpp, project_Thing* thing, " \
+           "PROJECT_REAL old, const PROJECT_REAL* history, int history_n);" in h
+    assert "project_Thing_set_listener(handle_, listener ? AbstractListener_private::toC(listener->get()) : nullptr, " in cpp
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""program drv
+  use, intrinsic :: iso_c_binding
+  use listen_mod
+  use listen_mod_c_binding, only: project_Thing_setup, project_Thing_destroy
+  implicit none
+  interface
+    subroutine run(h1, h2) bind(C, name="run")
+      import :: C_PTR
+      type(C_PTR), value :: h1, h2
+    end subroutine
+  end interface
+  type(Thing_type), target :: t1, t2
+  type(C_PTR) :: h1, h2
+  h1 = project_Thing_setup(t1)
+  h2 = project_Thing_setup(t2)
+  call run(h1, h2)
+  call project_Thing_destroy(h1)
+  call project_Thing_destroy(h2)
+  print '(l1)', associated(t1%listener) .or. associated(t2%listener)
+end program drv
+""")
+    (tmp_path / "run.cpp").write_text(r"""#include "listen_mod.hpp"
+#include "listen_mod.h"
+#include <cstdio>
+struct L : project::AbstractListener
+{
+  const project::Thing* expected = nullptr;
+  void state_changed(const project::Thing& thing, project::scalar old, const project::vec& history) override
+  {
+    std::printf("%g %g %g %d\n", thing.value(), old, history(1), &thing == expected ? 1 : 0);
+  }
+};
+extern "C" void run(project_Thing* h1, project_Thing* h2)
+{
+  auto t1 = project::Thing_private::wrapFromC(*h1);
+  auto t2 = project::Thing_private::wrapFromC(*h2);
+  L l;
+  l.expected = t1.get();
+  t1->set_listener(std::ref(l));
+  t1->set_value(2.0);                 // the owner itself: 2 0 2 1
+  t2->set_listener(std::ref(l));      // owner now t2
+  t1->set_value(3.0);                 // temporary wrapper of t1: 3 2 3 0
+  t1->set_listener(std::nullopt);
+  t2->set_listener(std::nullopt);
+}
+""")
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    for f in (src, "listen_mod_c_binding.F90", "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f, o in (("listen_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
+        run(gxx + [f, "-o", o], d)
+    run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
+    assert run(["./m"], d).split("\n")[:3] == ["2 0 2 1", "3 2 3 0", "F"]
