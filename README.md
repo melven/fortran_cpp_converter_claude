@@ -259,7 +259,9 @@ others (integer / real / logical scalars, e.g. metadata) become companion variab
 `class(Op_type), allocatable :: p` → `std::vector<std::unique_ptr<Op>> arr; std::vector<int>
 arr_offset1, arr_offset2;`, `arr(i)%offset1` → `arr_offset1[i - 1]`, `arr(i)%p%f()` → `arr[i - 1]->f()`,
 `allocate(arr(n))` / `deallocate(arr)` resize / clear all of them. Not for dummy arguments; whole
-elements (`arr(i)` as an object) are not translated.
+elements (`arr(i)` as an object) are not translated. Classes that stay in Fortran or exist in C++: `b%arr(i)%offset1` → `b.arr_offset1()[i - 1]`
+(getter from `accessors` or the wrapped class); for a wrapped class without getter of `arr`,
+`size(b%arr)` uses the first companion (`b.arr_offset1().size()`).
 ## Arguments that are several parameters in C++
 
 `expand_args` turns a dummy argument of a (not translated) type into several C++ parameters:

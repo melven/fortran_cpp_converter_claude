@@ -1459,8 +1459,11 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
                                      '[wrap_constants]\nBlocks_type = ["arr_offset1", "arr_offset2"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     src = os.path.join(CORPUS, "unwrap", "blocks_mod.F90")
-    translate([], c, d, wrap=[src])
+    translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, d, wrap=[src])
     hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
+    user = (tmp_path / "blocks_user_mod.cpp").read_text()       # translated code using the wrapped class
+    assert "for (int i = 0; i < static_cast<int>(b.arr_offset1().size()); ++i)" in user
+    assert "sum_offsets = sum_offsets + b.arr_offset1()[i];" in user
     b, h = (tmp_path / "blocks_mod_c_binding.F90").read_text(), (tmp_path / "blocks_mod.h").read_text()
     assert "  int* arr_offset1 = nullptr;\n  int arr_offset1_size = 0;\n" in h
     assert "    if (allocated(obj%arr)) then\n      allocate(buf1(size(obj%arr)))\n      buf1 = obj%arr(:)%offset1\n" \
@@ -1488,16 +1491,31 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
   call project_Blocks_destroy(h)
 end program drv
 """)
-    (tmp_path / "print.cpp").write_text('#include "blocks_mod.hpp"\n#include "blocks_mod.h"\n#include <cstdio>\n'
+    (tmp_path / "print.cpp").write_text('#include "blocks_mod.hpp"\n#include "blocks_mod.h"\n#include "blocks_user_mod.hpp"\n'
+                                        '#include <cstdio>\n'
                                         'extern "C" void print_offsets(project_Blocks* h)\n{\n'
                                         '  auto b = project::Blocks_private::wrapFromC(*h);\n'
                                         '  for (int i = 0; i < b->arr_offset1().size(); ++i)\n'
-                                        '    std::printf("%d %d\\n", b->arr_offset1()(i), b->arr_offset2()(i));\n}\n')
+                                        '    std::printf("%d %d\\n", b->arr_offset1()(i), b->arr_offset2()(i));\n'
+                                        '  std::printf("%d\\n", project::sum_offsets(*b));\n}\n')
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "blocks_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
-    for f, o in (("blocks_mod.cpp", "glue.o"), ("print.cpp", "print.o")):
+    for f, o in (("blocks_mod.cpp", "glue.o"), ("print.cpp", "print.o"), ("blocks_user_mod.cpp", "user.o")):
         run(gxx + [f, "-o", o], d)
-    run(["gfortran", "blocks_mod.o", "blocks_mod_c_binding.o", "drv.o", "glue.o", "print.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["10", "11", "20", "21", "30", "31"]
+    run(["gfortran", "blocks_mod.o", "blocks_mod_c_binding.o", "drv.o", "glue.o", "print.o", "user.o", "-lstdc++",
+         "-o", "m"], d)
+    assert run(["./m"], d).split() == ["10", "11", "20", "21", "30", "31", "60"]
+
+
+def test_unwrapped_companions_of_an_existing_class(tmp_path):
+    """the class with the array of the unwrapped type exists in C++ (-I): its getters from accessors"""
+    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n'
+                                     '[accessors]\nBlocks_type = ["arr", "arr_offset1"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, str(tmp_path),
+              [os.path.join(CORPUS, "unwrap", "blocks_mod.F90")])
+    user = (tmp_path / "blocks_user_mod.cpp").read_text()
+    assert "for (int i = 0; i < static_cast<int>(b.arr().size()); ++i)" in user
+    assert "sum_offsets = sum_offsets + b.arr_offset1()[i];" in user

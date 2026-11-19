@@ -297,6 +297,9 @@ class WrapEmitter(ModuleEmitter):
             v = t.comps.get(n)
             if v is None:
                 kind, extra, why = None, None, "no such component"
+            elif v.unwrapped:
+                kind, extra, why = None, None, f"objects of the unwrapped type {v.unwrapped_type} " \
+                    "(only its companions can be constants)"
             elif v.base == "type":
                 extra, why = self.value_type(v)
                 kind = "struct" if extra is not None else None
