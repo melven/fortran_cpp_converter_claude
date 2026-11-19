@@ -222,6 +222,9 @@ C++ method. An object argument that is the owner is passed as the owner's C++ ob
 wrappers. `set_listener(std::optional<std::reference_wrapper<AbstractListener>>)` passes the listener's
 Fortran object; unset it before the listener is destroyed. Exceptions in listeners terminate.
 
+Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
+are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and

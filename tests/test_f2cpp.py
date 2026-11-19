@@ -1,5 +1,6 @@
 """End-to-end tests: translate the synthetic corpus, compile it and compare with gfortran."""
 import os
+import re
 import shutil
 import subprocess
 
@@ -1722,3 +1723,30 @@ def test_wrapped_handle_member_name(tmp_path):
         for f in ("body_mod.cpp", "sphere_mod.cpp"):
             run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only", f],
                 str(tmp_path))
+
+
+def test_wrapped_long_names(tmp_path):
+    """bind(C) routines whose C name is longer than 63 characters: shortened Fortran name, full label"""
+    (tmp_path / "lng_mod.F90").write_text("""module lng_mod
+  implicit none
+  type :: VeryLongClassNameForTesting_type
+    real :: x = 1.0
+  contains
+    procedure :: compute_something_with_a_rather_long_name => lng_compute
+  end type VeryLongClassNameForTesting_type
+contains
+  real function lng_compute(this)
+    class(VeryLongClassNameForTesting_type), intent(in) :: this
+    lng_compute = 2.0 * this%x
+  end function lng_compute
+end module lng_mod
+""")
+    translate([], cfg(), str(tmp_path), wrap=[str(tmp_path / "lng_mod.F90")])
+    b = (tmp_path / "lng_mod_c_binding.F90").read_text()
+    cname = "project_VeryLongClassNameForTesting_compute_something_with_a_rather_long_name"
+    assert len(cname) > 63 and f'bind(C, name="{cname}")' in b and f"  !  PROJECT_REAL {cname}(" in b
+    names = re.findall(r"^\s*(?:end )?(?:subroutine|function)\s+(\w+)", b, flags=re.M)
+    assert names and max(len(n) for n in names) <= 63
+    if shutil.which("gfortran"):
+        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS,
+             str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))

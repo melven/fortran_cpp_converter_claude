@@ -1341,10 +1341,30 @@ class WrapEmitter(ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
-        b += ["contains"] + fb + ["", f"end module {mod.spelling}_c_binding", ""]
+        b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
+
+
+def short_names(fb):
+    """Fortran names are at most 63 characters: longer procedure names are shortened (prefix + hash); the C
+    name of bind(C) routines stays the binding label"""
+    import hashlib
+    long = {m.group(1) for line in fb for m in [re.match(r"\s*(?:subroutine|function)\s+(\w+)\s*\(", line)]
+            if m and len(m.group(1)) > 63}                  # also setup / destroy (called from Fortran)
+    if not long:
+        return fb
+    short = {n: f"{n[:54]}_{hashlib.sha1(n.encode()).hexdigest()[:8]}" for n in long}
+    pat = re.compile(r"\b(" + "|".join(map(re.escape, sorted(long, key=len, reverse=True))) + r")\b")
+    out = []
+    for line in fb:
+        if line.lstrip().startswith("!"):           # C declarations: the C name
+            out.append(line)
+            continue
+        parts = re.split(r'("[^"]*")', line)        # not in strings (binding label, messages)
+        out.append("".join(pt if pt.startswith('"') else pat.sub(lambda m: short[m.group(1)], pt) for pt in parts))
+    return out
 
 
 ISO_C = ["C_PTR", "C_NULL_PTR", "C_INT", "C_BOOL", "C_CHAR", "C_NULL_CHAR", "C_FLOAT", "C_DOUBLE", "c_loc",
