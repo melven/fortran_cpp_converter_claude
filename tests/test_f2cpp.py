@@ -1399,7 +1399,8 @@ def test_unwrapped_type_with_companions(tmp_path):
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([os.path.join(CORPUS, "unwrap", "blocks_mod.F90")], c, str(tmp_path))
     hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
-    assert "  std::vector<std::unique_ptr<Op>> arr;\n  std::vector<int> arr_offset1;\n  std::vector<int> arr_offset2;" in hpp
+    assert "  //! the operator\n  std::vector<std::unique_ptr<Op>> arr;\n  //! first row\n  std::vector<int> arr_offset1;\n" \
+           "  //! first column\n  std::vector<int> arr_offset2;" in hpp
     assert "class Block;" not in hpp and "class Block\n" not in hpp and "mutable" not in hpp
     assert "  arr_offset1.resize(n);\n  arr_offset2.resize(n);\n  arr.resize(n);" in cpp
     assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1[i] = 10 * (i + 1);\n" \
@@ -1464,7 +1465,7 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
     assert "  int* arr_offset1 = nullptr;\n  int arr_offset1_size = 0;\n" in h
     assert "    if (allocated(obj%arr)) then\n      allocate(buf1(size(obj%arr)))\n      buf1 = obj%arr(:)%offset1\n" \
            "      if (size(buf1) > 0) this_c%arr_offset1 = c_loc(buf1(1))\n      this_c%arr_offset1_size = size(obj%arr)" in b
-    assert "obj%arr_offset" not in b and "  Eigen::Map<const Eigen::VectorXi> arr_offset1() const;" in hpp
+    assert "obj%arr_offset" not in b and "  //! first row\n  Eigen::Map<const Eigen::VectorXi> arr_offset1() const;" in hpp
     assert "Eigen::Map<Eigen::VectorXi> arr_offset1()" not in hpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return

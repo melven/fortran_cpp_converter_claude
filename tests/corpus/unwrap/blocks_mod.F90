@@ -25,8 +25,9 @@ module blocks_mod
 
   !> one block: operator and its position
   type :: Block_type
-    class(Op_type), allocatable :: p
-    integer :: offset1 = 0
+    class(Op_type), allocatable :: p   !< the operator
+    integer :: offset1 = 0             !< first row
+    !> first column
     integer :: offset2 = 0
   end type Block_type
 

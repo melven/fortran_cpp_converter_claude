@@ -413,7 +413,7 @@ class WrapEmitter(ModuleEmitter):
             et = tr.eigen_type(v, 1)
             size = f"handle_->{n}_size" if kind == "array" else next(e for w, k, e in self.consts if w is v)
             decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>(handle_->{n}, {size});"
-        for line in self.component_docs(t).get(v.name, []):
+        for line in self.member_docs(t, v):
             hdecl.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
         hdecl.emit(1, decl + ";")
         cpp.emit(0, decl.replace(f" {n}()", f" {self.prog.type_name(t.name)}::{n}()", 1))
@@ -433,42 +433,6 @@ class WrapEmitter(ModuleEmitter):
         elif "pointer" in alloc:
             kind += ", pointer"
         return kind
-
-    def component_docs(self, t):
-        """{component: [comment text]}: comments before the statement and behind it on the same line"""
-        from .prepass import CPP_MARK, BLANK_MARK, PF_MARK
-        flat = []
-        for part in t.node.content[1:-1]:       # fparser spreads components / comments over several nodes
-            k = cls(part)
-            if k == "Component_Part":
-                flat += part.content
-            elif k == "Comment":
-                flat.append(part)
-            elif k == "Type_Bound_Procedure_Part":     # comments before `contains` sit in it
-                flat += part.content[:[cls(c) for c in part.content].index("Contains_Stmt")]
-                break
-        docs, lead, last = {}, [], []
-        for d in flat:
-            if cls(d) == "Comment":
-                text = str(d)
-                if not text.strip() or text.startswith((CPP_MARK, BLANK_MARK, PF_MARK)):
-                    lead = []
-                    continue
-                text = re.sub(r"^![<>!]?\s?", "", text.strip()).rstrip()
-                prev = last[-1][1] if last else None
-                if prev is not None and d.item is not None and getattr(prev, "item", None) is not None \
-                        and prev.item.span[1] == d.item.span[0]:
-                    for n, _ in last:
-                        docs[n].append(text)        # trailing comment of the previous statement
-                else:
-                    lead.append(text)
-                continue
-            names = [lname(e.items[0]) for e in items_of(d.items[2])] if cls(d) == "Data_Component_Def_Stmt" else []
-            last = [(n, d) for n in names]
-            for n in names:
-                docs[n] = list(lead)
-            lead = []
-        return docs
 
     # ------------------------------------------------------------------ method binding
     def proc_c_name(self, p):

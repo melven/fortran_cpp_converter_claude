@@ -59,6 +59,7 @@ class Var:
     companions: dict = None      # unwrapped variable: other components -> companion variables <name>_<comp>
     elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
     companion_of: tuple = None   # companion variable: (unwrapped variable, component) in Fortran
+    unwrapped_type: str = None   # unwrapped variable / companion: the original (wrapper) type
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
@@ -606,7 +607,7 @@ class Program:
                     if inner is None or (v.rank and (inner.rank or v.rank > 1)):
                         continue
                     tname, array = v.tname, bool(v.rank)
-                    v.unwrapped = wrap[v.tname]
+                    v.unwrapped, v.unwrapped_type = wrap[v.tname], tname
                     keep = {"optional", "target", "value"}
                     if array:                   # array of the type: array of the inner object
                         v.elem_uptr = inner.base == "type" and (inner.has("allocatable") or inner.polymorphic)
@@ -626,7 +627,7 @@ class Program:
                         cv.attrs = v.attrs & {"allocatable", "pointer", "optional", "target"}
                         cv.is_dummy, cv.intent, cv.access, cv.node, cv.mutable = \
                             v.is_dummy, v.intent, v.access, v.node, False
-                        cv.companion_of = (v.name, c)
+                        cv.companion_of, cv.unwrapped_type = (v.name, c), tname
                         v.companions = (v.companions or {}) | {c: cv}
                         added.append((scope, cv))
         for scope, cv in added:                 # companions: visible like the variable

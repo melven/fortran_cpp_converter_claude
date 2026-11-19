@@ -1,5 +1,6 @@
 """Module -> header + source, pFUnit test module -> googletest source."""
 import os
+import re
 
 from .model import cls, lname, items_of, Var
 from .prepass import PF_MARK, CPP_MARK, BLANK_MARK
@@ -66,7 +67,7 @@ class ModuleEmitter:
             return code + f" /* {TODO}: fixed size ({', '.join(sizes)}) */"
         return code
 
-    def decl_stmt(self, tr, stmt, vars_, ind, prefix="", skip=(), member=False):
+    def decl_stmt(self, tr, stmt, vars_, ind, prefix="", skip=(), member=False, companions=True):
         """emit one Fortran declaration statement"""
         names = [lname(e.items[0]) for e in items_of(stmt.items[2])]
         decls = []          # [type, [declarators]]: entities of equal type share one statement
@@ -93,7 +94,7 @@ class ModuleEmitter:
                     decls[-1][1].append(d)
                 else:
                     decls.append([t, [d]])
-                for cv in (v.companions or {}).values():    # unwrapped type: its other components
+                for cv in (v.companions or {}).values() if companions else ():   # unwrapped type: other components
                     ct, cd = self.var_decl(tr, cv, member).split("\0")
                     decls.append([pre + ct, [cd]])
                 self.report.add("translated", "declaration")
@@ -329,9 +330,14 @@ class ModuleEmitter:
                         tr.comment(c, ind + 1)
                     if d is None:
                         continue
+                    v = t.comps.get(n) if n is not None else None
+                    if cls(d) == "Data_Component_Def_Stmt" and v is not None and v.unwrapped_type and \
+                            not before and not behind:  # unwrapped type: documentation of its component
+                        for line in self.member_docs(t, v):
+                            tr.emit(ind + 1, f"{self.cfg['doxygen']} {line}".rstrip())
                     if cls(d) == "Data_Component_Def_Stmt":
                         one = type("S", (), {"items": (d.items[0], d.items[1], _One(d, n))})()
-                        self.decl_stmt(tr, one, t.comps, ind + 1, member=True)
+                        self.decl_stmt(tr, one, t.comps, ind + 1, member=True, companions=False)
                     elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
                         tr.emit(ind + 1, f"{tr.cpp_type(t.comps[n])} {t.comps[n].cname};")
                     else:
@@ -339,7 +345,57 @@ class ModuleEmitter:
                         tr.fortran_comment(d, ind + 1, "component not translated")
                     for c in behind:
                         tr.comment(c, ind + 1, d)
+                    for cv in (v.companions or {}).values() if v is not None else ():
+                        for line in self.member_docs(t, cv):
+                            tr.emit(ind + 1, f"{self.cfg['doxygen']} {line}".rstrip())
+                        ct, cd = self.var_decl(tr, cv, True).split("\0")
+                        tr.emit(ind + 1, f"{ct} {cd};")
         tr.emit(ind, "};")
+
+    def component_docs(self, t):
+        """{component: [comment text]}: comments before the statement and behind it on the same line"""
+        flat = []
+        for part in t.node.content[1:-1]:       # fparser spreads components / comments over several nodes
+            k = cls(part)
+            if k == "Component_Part":
+                flat += part.content
+            elif k == "Comment":
+                flat.append(part)
+            elif k == "Type_Bound_Procedure_Part":     # comments before `contains` sit in it
+                flat += part.content[:[cls(c) for c in part.content].index("Contains_Stmt")]
+                break
+        docs, lead, last = {}, [], []
+        for d in flat:
+            if cls(d) == "Comment":
+                text = str(d)
+                if not text.strip() or text.startswith((CPP_MARK, BLANK_MARK, PF_MARK)):
+                    lead = []
+                    continue
+                text = re.sub(r"^![<>!]?\s?", "", text.strip()).rstrip()
+                prev = last[-1][1] if last else None
+                if prev is not None and d.item is not None and getattr(prev, "item", None) is not None \
+                        and prev.item.span[1] == d.item.span[0]:
+                    for n, _ in last:
+                        docs[n].append(text)        # trailing comment of the previous statement
+                else:
+                    lead.append(text)
+                continue
+            names = [lname(e.items[0]) for e in items_of(d.items[2])] if cls(d) == "Data_Component_Def_Stmt" else []
+            last = [(n, d) for n in names]
+            for n in names:
+                docs[n] = list(lead)
+            lead = []
+        return docs
+
+    def member_docs(self, t, v):
+        """documentation of component v of t; companions / unwrapped variables of unwrap_types without
+        own documentation: that of the component of the unwrapped type"""
+        own = self.component_docs(t).get(v.name) if t.node is not None else None
+        if own or not (v.companion_of or v.unwrapped_type):
+            return own or []
+        inner = v.companion_of[1] if v.companion_of else v.unwrapped
+        ut = self.prog.find_type(v.unwrapped_type, t.module)
+        return self.component_docs(ut).get(inner, []) if ut is not None else []
 
     # ------------------------------------------------------------------ procedures
     def internal_order(self, p):
