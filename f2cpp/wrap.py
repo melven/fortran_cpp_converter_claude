@@ -73,6 +73,10 @@ class WrapEmitter(ModuleEmitter):
         """bind(C) type of the C struct of the handle: <Root>_c"""
         return f"{self.c_class_name(self.root(t)[1])}_c"
 
+    def handle_member(self, t):
+        """C++ member of the C handle (wrap_handle_member of the root type, default handle_)"""
+        return self.cfg["wrap_handle_member"].get(self.root(t)[1], "handle_")
+
     def owned(self, t):
         """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
         return t.name in self.cfg["wrap_owned"] and self.is_root(t) and not self.poly(t) and self.struct_handle(t)
@@ -89,6 +93,7 @@ class WrapEmitter(ModuleEmitter):
     def wrap_from_c(self, t, name, ht, hpp, cpp):
         """<Class>_private::wrapFromC(c): C++ object of the C object c (protected constructor; derived
         classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
+        hm = self.handle_member(t) if t is not None else "handle_"
         cls = name.split("::")[-1]
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
@@ -106,26 +111,26 @@ class WrapEmitter(ModuleEmitter):
             free = self.c_name(t, "free")
             cpp.emit(0, f"{ht}* {cls}_private::toC(const {cls}& x)")
             cpp.emit(0, "{")
-            cpp.emit(1, "return x.handle_;")
+            cpp.emit(1, f"return x.{hm};")
             cpp.emit(0, "}")
             cpp.emit(0, "")
             cpp.emit(0, f"{name}::~{cls}()")
             cpp.emit(0, "{")
-            cpp.emit(1, f"{free}(handle_);")
+            cpp.emit(1, f"{free}({hm});")
             cpp.emit(0, "}")
             cpp.emit(0, "")
-            cpp.emit(0, f"{name}::{cls}({cls}&& o) noexcept : handle_(o.handle_)")
+            cpp.emit(0, f"{name}::{cls}({cls}&& o) noexcept : {hm}(o.{hm})")
             cpp.emit(0, "{")
-            cpp.emit(1, "o.handle_ = nullptr;")
+            cpp.emit(1, f"o.{hm} = nullptr;")
             cpp.emit(0, "}")
             cpp.emit(0, "")
             cpp.emit(0, f"{name}& {name}::operator=({cls}&& o) noexcept")
             cpp.emit(0, "{")
             cpp.emit(1, "if (this != &o)")
             cpp.emit(1, "{")
-            cpp.emit(2, f"{free}(handle_);")
-            cpp.emit(2, "handle_ = o.handle_;")
-            cpp.emit(2, "o.handle_ = nullptr;")
+            cpp.emit(2, f"{free}({hm});")
+            cpp.emit(2, f"{hm} = o.{hm};")
+            cpp.emit(2, f"o.{hm} = nullptr;")
             cpp.emit(1, "}")
             cpp.emit(1, "return *this;")
             cpp.emit(0, "}")
@@ -481,6 +486,7 @@ class WrapEmitter(ModuleEmitter):
                  f"  end subroutine {free}"]
 
     def constant_getter(self, t, v, kind, hdecl, cpp):
+        hm = self.handle_member(t) if t is not None else "handle_"
         tr, n = self.tr(), v.cname
         if kind == "struct":
             for line in self.component_docs(t).get(v.name, []):
@@ -488,13 +494,13 @@ class WrapEmitter(ModuleEmitter):
             hdecl.emit(1, f"const {self.prog.type_name(v.tname)}& {n}() const {{ return {n}_; }}")
             return
         if kind == "scalar":
-            decl, body = f"{tr.cpp_type(v)} {n}() const", f"return handle_->{n};"
+            decl, body = f"{tr.cpp_type(v)} {n}() const", f"return {hm}->{n};"
         elif kind == "logical":
-            decl, body = f"bool {n}() const", f"return handle_->{n};"
+            decl, body = f"bool {n}() const", f"return {hm}->{n};"
         else:
             et = tr.eigen_type(v, 1)
-            size = f"handle_->{n}_size" if kind == "array" else next(e for w, k, e in self.consts if w is v)
-            decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>(handle_->{n}, {size});"
+            size = f"{hm}->{n}_size" if kind == "array" else next(e for w, k, e in self.consts if w is v)
+            decl, body = f"Eigen::Map<const {et}> {n}() const", f"return Eigen::Map<const {et}>({hm}->{n}, {size});"
         for line in self.member_docs(t, v):
             hdecl.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
         hdecl.emit(1, decl + ";")
@@ -523,6 +529,7 @@ class WrapEmitter(ModuleEmitter):
 
     def method(self, t, bd, p, args, fb, hdecl, cpp):
         """emit the binding, the declaration and the glue of one method (t, bd None: module procedure)"""
+        hm = self.handle_member(t) if t is not None else "handle_"
         tr = self.tr(p)
         err = tr.err
         cname = self.c_name(t, bd.name) if t is not None else self.proc_c_name(p)
@@ -707,7 +714,7 @@ class WrapEmitter(ModuleEmitter):
         for g in glue:
             if isinstance(g, tuple) and g[0] == "pre":
                 cpp.emit(1, g[1])
-        cargs = ", ".join((["handle_"] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+        cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
         posts = [g[1] for g in glue if isinstance(g, tuple) and g[0] == "post"]
@@ -961,6 +968,7 @@ class WrapEmitter(ModuleEmitter):
         cpp.emit(0, "")
 
     def getter(self, t, v, kind, fb, hdecl, cpp):
+        hm = self.handle_member(t) if t is not None else "handle_"
         tr = self.tr()
         cname = self.c_name(t, v.name)
         handle = lower_camel(self.c_class(t))
@@ -976,8 +984,8 @@ class WrapEmitter(ModuleEmitter):
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
             ty = tr.cpp_type(v)
-            decls = [(f"{ty}& {v.cname}()", f"return *{cname}(handle_);"),
-                     (f"const {ty}& {v.cname}() const", f"return *{cname}(handle_);")]
+            decls = [(f"{ty}& {v.cname}()", f"return *{cname}({hm});"),
+                     (f"const {ty}& {v.cname}() const", f"return *{cname}({hm});")]
         elif kind == "logical":
             fb.append(f"  !  bool {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
@@ -985,7 +993,7 @@ class WrapEmitter(ModuleEmitter):
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decls = [(f"bool {v.cname}() const", f"return {cname}(handle_);")]  # Fortran logical: no reference
+            decls = [(f"bool {v.cname}() const", f"return {cname}({hm});")]  # Fortran logical: no reference
             setter = self.c_name(t, f"{v.name}_set")       # ... so a setter (overload of the getter name)
             fb += ["", "  !@c_declaration", f"  !  void {setter}({self.c_type_name(t)}* {handle}, bool value);",
                    "  !@end_c_declaration"]
@@ -993,7 +1001,7 @@ class WrapEmitter(ModuleEmitter):
             fb += [f"  subroutine {setter}({handle}, value) bind(C, name=\"{setter}\")"] + self.dllexport(setter) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL), value :: value"] + odecl + ostmts + \
                 [f"  end subroutine {setter}"]
-            decls.append((f"void {v.cname}(bool value)", f"{setter}(handle_, value);"))
+            decls.append((f"void {v.cname}(bool value)", f"{setter}({hm}, value);"))
         else:
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
@@ -1011,7 +1019,7 @@ class WrapEmitter(ModuleEmitter):
                 [f"  end subroutine {cname}"]
             et = tr.eigen_type(v, v.rank)
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
-                    f" {cname}(handle_, &data, " + ", ".join(f"&{d}" for d in dims) +
+                    f" {cname}({hm}, &data, " + ", ".join(f"&{d}" for d in dims) +
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
             decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
                      (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
@@ -1102,6 +1110,7 @@ class WrapEmitter(ModuleEmitter):
             name = self.prog.type_name(t.name)
             ht = self.c_type_name(t)
             root, rname = self.root(t)
+            hm = self.handle_member(t)
             if self.is_root(t):
                 if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
                     typedefs += [f"!typedef struct {ht}", "!{", "!  void* p_impl = nullptr;"] + \
@@ -1187,7 +1196,7 @@ class WrapEmitter(ModuleEmitter):
             copies = [(v, td) for v, kind, td in self.consts if kind == "struct"]
             if self.is_root(t) and copies:      # C++ copies of struct constants: filled in the constructor
                 hpp.emit(1, f"explicit {name}({ht}& c);  //!< the object created in Fortran")
-                cpp.emit(0, f"{name}::{name.split('::')[-1]}({ht}& c) : handle_(&c)")
+                cpp.emit(0, f"{name}::{name.split('::')[-1]}({ht}& c) : {hm}(&c)")
                 cpp.emit(0, "{")
                 tr = self.tr()
                 for v, td in copies:
@@ -1204,13 +1213,13 @@ class WrapEmitter(ModuleEmitter):
                 cpp.emit(0, "}")
                 cpp.emit(0, "")
             elif self.is_root(t):
-                hpp.emit(1, f"explicit {name}({ht}& c) : handle_(&c) {{}}  //!< the object created in Fortran")
+                hpp.emit(1, f"explicit {name}({ht}& c) : {hm}(&c) {{}}  //!< the object created in Fortran")
             cls = name.split("::")[-1]
             hpp.emit(1, f"friend std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c);")
             if self.owned(t):
                 hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& x);")
             if self.is_root(t):
-                hpp.emit(1, f"{ht}* handle_ = nullptr;  //!< the Fortran object (C binding: {stem_h})")
+                hpp.emit(1, f"{ht}* {hm} = nullptr;  //!< the Fortran object (C binding: {stem_h})")
                 for v, td in copies:
                     hpp.emit(1, f"{prog.type_name(td.name)} {v.cname}_;  //!< C++ copy of the constant {v.cname}")
             hpp.emit(0, "};")

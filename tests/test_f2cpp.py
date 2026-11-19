@@ -1706,3 +1706,19 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
     assert run(["./m"], d).split("\n")[:3] == ["2 0 2 1", "3 2 3 0", "F"]
+
+
+def test_wrapped_handle_member_name(tmp_path):
+    """name of the handle member per root type (hand-written base classes); derived classes use it"""
+    (tmp_path / "x.toml").write_text('[wrap_handle_member]\nbody_type = "body_c_"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], c, str(tmp_path), wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
+    bh, bc = (tmp_path / "body_mod.hpp").read_text(), (tmp_path / "body_mod.cpp").read_text()
+    sc = (tmp_path / "sphere_mod.cpp").read_text()
+    assert "  explicit body(project_body& c) : body_c_(&c) {}" in bh and "  project_body* body_c_ = nullptr;" in bh
+    assert "handle_" not in bh + bc + sc and "(body_c_" in sc
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        for f in ("body_mod.cpp", "sphere_mod.cpp"):
+            run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only", f],
+                str(tmp_path))
