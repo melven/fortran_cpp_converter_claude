@@ -147,6 +147,9 @@ DEFAULTS = {
     # variable per element (inputs(1) = T(...) -> Cls inputs_1(...); inputs -> {inputs_1, inputs_2});
     # type -> C++ class ("" = the type's class name)
     "named_elements": {},
+    # type -> C++ type of the list of elements (whole array as argument): VariableVector{inputs_1, inputs_2}
+    # (needed where the list is forwarded, e.g. std::make_unique<T>(...)); default: a plain braced list
+    "named_element_lists": {},
     # C++ member holding the C handle per root type (derived classes use their root's), default handle_:
     # {"model_type": "model_c_"} (names of hand-written base classes)
     "wrap_handle_member": {},
@@ -221,6 +224,7 @@ def load(path=None, **overrides):
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
     cfg["named_elements"] = {k.lower(): v for k, v in cfg["named_elements"].items()}
+    cfg["named_element_lists"] = {k.lower(): v for k, v in cfg["named_element_lists"].items()}
     cfg["wrap_handle_member"] = {k.lower(): v for k, v in cfg["wrap_handle_member"].items()}
     cfg["wrap_listeners"] = [t.lower() for t in cfg["wrap_listeners"]]
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]

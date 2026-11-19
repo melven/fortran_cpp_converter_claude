@@ -405,7 +405,8 @@ class Translator:
         v = self.lookup(n)
         if v is not None and v.named_elements:  # the whole array: braced list of the element variables
             k = self.named_count(v)
-            return X("{" + ", ".join(f"{v.cname}_{i}" for i in range(1, k + 1)) + "}", 1, "type", 100, v,
+            lst = self.cfg["named_element_lists"].get(v.tname, "")
+            return X(lst + "{" + ", ".join(f"{v.cname}_{i}" for i in range(1, k + 1)) + "}", 1, "type", 100, v,
                      v.tname, whole=True)
         if v is not None and n in self.shift and n not in self.overrides:
             return X(f"{v.cname} + {self.shift[n]}", 0, "integer", P_ADD, v)

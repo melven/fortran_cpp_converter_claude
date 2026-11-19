@@ -1765,3 +1765,11 @@ def test_named_elements(tmp_path):
     assert "  ASSERT_EQ(1, inputs_2.rank);" in cpp
     assert "std::vector<Variable>" not in cpp
     assert "not translated (named-elements-index)" in cpp           # vars(i) = ... in a loop
+
+    (tmp_path / "y.toml").write_text('[named_elements]\nVariable_type = ""\n'
+                                     '[named_element_lists]\nVariable_type = "VariableVector"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "y.toml")])
+    translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
+    cpp = (tmp_path / "test_var_mod.cpp").read_text()
+    assert "  model.assignVariables(VariableVector{}, VariableVector{inputs_1, inputs_2}, " \
+           "VariableVector{outputs_1});" in cpp

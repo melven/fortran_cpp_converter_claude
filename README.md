@@ -261,7 +261,8 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 `[named_elements] variable_type = ""` (or the C++ class name): local arrays of the type become one
 variable per element. `inputs(1) = Variable_type('a', '', rank=0)` → `Variable inputs_1("a", "", 0);`,
 `inputs(2)%rank` → `inputs_2.rank`, the whole array as argument → `{inputs_1, inputs_2}` (`{}` for
-size 0). Only literal sizes and indices; other uses (loops, copies, `size`, reassignment) are TODOs.
+size 0). With `[named_element_lists] variable_type = "VariableVector"` the list is typed:
+`VariableVector{inputs_1, inputs_2}` (needed where arguments are forwarded, e.g. `std::make_unique<T>(...)`). Only literal sizes and indices; other uses (loops, copies, `size`, reassignment) are TODOs.
 
 ## Wrapper types
 
