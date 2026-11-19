@@ -193,10 +193,12 @@ class WrapEmitter(ModuleEmitter):
                     return None, f"argument {v.cname} (optional, only intent(in) real / integer)"
                 res.append((a, "optional" if opt else "scalar", None))
                 continue
-            if v.rank > 2 or v.has("allocatable") or v.has("pointer") or opt and v.base == "logical":
-                return None, f"argument {v.cname} (array: rank 1 / 2, not allocatable / pointer / optional logical)"
+            if v.rank > 2 or v.has("allocatable") or v.has("pointer"):
+                return None, f"argument {v.cname} (array: rank 1 / 2, not allocatable / pointer)"
             dims = [self.fortran_size(p, sizes, a, d + 1 if v.rank == 2 else None) for d in range(v.rank)]
-            if None in dims:
+            if None in dims and (v.intent or "inout") != "out":
+                dims = [f"{a}_n{d + 1}" for d in range(v.rank)]      # size passed from C++
+            elif None in dims:
                 return None, f"size of argument {v.cname} unknown (size check or wrap_sizes)"
             res.append((a, "optional-array" if opt else "array", dims))
         if p.kind == "function":
@@ -502,7 +504,23 @@ class WrapEmitter(ModuleEmitter):
                 obj = {"optref": f"{v.cname}->get()", "optional": f"(*{v.cname})"}.get(ok, v.cname)
                 present = {"optref": v.cname, "optional": v.cname, "empty": f"{v.cname}.size() > 0"}.get(ok)
                 glue.append(f"{present} ? {obj}.data() : nullptr" if present else f"{v.cname}.data()")
-                if present:                     # pointer to the data or disassociated (= absent)
+                if dims[0] == f"{a}_n1":         # size unknown in Fortran: passed from C++
+                    have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
+                    for d, h in zip(dims, have):
+                        f_args.append(d)
+                        c_args.append(f"int {d}")
+                        decls.append(f"integer(C_INT), value :: {d}")
+                        glue.append(f"{present} ? static_cast<int>({h}) : 0" if present else f"static_cast<int>({h})")
+                if v.base == "logical":         # C bool -> Fortran logical: a copy (unallocated = absent)
+                    shape, colons = ", ".join(dims), ", ".join([":"] * v.rank)
+                    decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer :: {a}_c({colons})",
+                              f"logical, allocatable :: {a}_f({colons})"]
+                    pre += [f"if (c_associated({a})) then", f"  call c_f_pointer({a}, {a}_c, [{shape}])",
+                            f"  allocate({a}_f({shape}))" if intent == "out" else f"  {a}_f = {a}_c", "end if"]
+                    if intent != "in":
+                        post.append(f"if (allocated({a}_f)) {a}_c = logical({a}_f, C_BOOL)")
+                    call.append(f"{a}={a}_f")
+                elif present:                   # pointer to the data or disassociated (= absent)
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
                     # no `=> null()` in the declaration: that would imply SAVE (stale association next call)

@@ -36,6 +36,8 @@ module mysolver_mod
     procedure :: apply_block => mysolver_apply_block
     procedure :: set_verbose => mysolver_set_verbose
     procedure :: weighted => mysolver_weighted
+    procedure :: masked_sum => mysolver_masked_sum
+    procedure :: positive => mysolver_positive
   end type MySolver_type
 
 contains
@@ -178,4 +180,22 @@ contains
     if (present(r)) r = t
     total = sum(t)
   end function mysolver_weighted
+  !> sum of x where modelMask (all if absent)
+  real function mysolver_masked_sum(this, x, modelMask) result(total)
+    class(MySolver_type), intent(in) :: this
+    real, intent(in) :: x(this%n)
+    logical, optional, intent(in) :: modelMask(:)    !< entries to use
+    if (present(modelMask)) then
+      total = sum(x, mask=modelMask)
+    else
+      total = sum(x)
+    end if
+  end function mysolver_masked_sum
+
+  subroutine mysolver_positive(this, x, pos)
+    class(MySolver_type), intent(in) :: this
+    real, intent(in) :: x(this%n)
+    logical, intent(out) :: pos(this%n)              !< x > 0
+    pos = x > 0.0
+  end subroutine mysolver_positive
 end module mysolver_mod

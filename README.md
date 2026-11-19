@@ -215,7 +215,7 @@ constants.
 Supported so far: classes and class hierarchies, public module procedures (C name
 `project_<procedure>`, `c_procedure_names` for others), methods
 with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, explicit shapes or
-`wrap_sizes`), input string (`str_array_ptr_to_str`), optional scalar, optional string and optional (not logical) array (`NULL`; binding: disassociated pointer = absent) arguments, scalar
+`wrap_sizes`), input string (`str_array_ptr_to_str`), optional scalar, optional string and optional array (`NULL`; binding: disassociated pointer = absent) arguments, logical arrays (copied between `bool` and `logical`; optional: unallocated = absent), `intent(in)` / `inout` arrays of unknown size (extra C parameter `int x_n1` from `x.size()`), scalar
 function results. Other methods are declared and throw `std::logic_error` (TODO). Configuration:
 `c_prefix` (default: the namespace in lower case, `project_MySolver_apply`), `c_class_names`
 (shorter class names in C names), `c_real` / `c_single_precision` (default `PROJECT_REAL` /

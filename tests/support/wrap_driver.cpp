@@ -28,6 +28,9 @@ int main()
   scalar tw = s.weighted(x, std::ref(r), w);                       // present
   std::printf("%24.15E%24.15E%24.15E%24.15E\n", tw, r(0), r(1), r(2));
   std::printf("%24.15E\n", s.weighted(x));                         // absent again (no stale pointer)
+  Eigen::Array<bool, Eigen::Dynamic, 1> pos;
+  s.positive(x, pos);                                               // logical out array
+  std::printf("%24.15E%24.15E%24.15E\n", s.masked_sum(x), s.masked_sum(x, pos), pos(2) ? 1.0 : 0.0);
   try
   {
     vec wrong(2);

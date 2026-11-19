@@ -894,7 +894,10 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
     assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
     assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
-    assert "void scale_vector(vec& x, scalar factor)\n{\n  throw std::logic_error" in cpp    # size of x unknown
+    # size unknown in Fortran (x(:) without check): passed from C++
+    assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in h
+    assert "  project_scale_vector(x.data(), static_cast<int>(x.size()), factor, &ierr);" in cpp
+    assert "    integer(C_INT), value :: x_n1\n" in binding
     # optional string: NULL pointer
     assert "int project_tagged_length(const char* msg, const char* tag);" in h
     assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
@@ -921,11 +924,21 @@ def test_wrapped_module_end_to_end(tmp_path):
     run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
          "ref_user.o", "-o", "fdrv"], d)
     ref = run(["./fdrv"], d).split()
-    vals = " ".join(res[:8]).split()
-    assert len(vals) == len(ref) == 17
+    vals = " ".join(res[:9]).split()
+    assert len(vals) == len(ref) == 20
     for a, b in zip(vals, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
-    assert res[8] == "project_MySolver_apply: size of x"
+    assert res[9] == "project_MySolver_apply: size of x"
+    # logical arrays: bool copies; optional: NULL = absent (unallocated)
+    assert "PROJECT_REAL project_MySolver_masked_sum(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
+           "const bool* modelmask, int modelmask_n1);" in h
+    assert "    logical(C_BOOL), pointer :: modelmask_c(:)\n    logical, allocatable :: modelmask_f(:)\n" in binding
+    assert "    if (c_associated(modelmask)) then\n      call c_f_pointer(modelmask, modelmask_c, [modelmask_n1])\n" \
+           "      modelmask_f = modelmask_c\n    end if\n" in binding
+    assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
+           "static_cast<int>(modelMask.size()) : 0);" in cpp
+    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x=x(1:obj%n), pos=pos_f)\n" \
+           "    if (allocated(pos_f)) pos_c = logical(pos_f, C_BOOL)" in binding
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in h
