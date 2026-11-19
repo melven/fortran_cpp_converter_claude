@@ -35,6 +35,7 @@ module mysolver_mod
     procedure :: is_verbose => mysolver_is_verbose
     procedure :: apply_block => mysolver_apply_block
     procedure :: set_verbose => mysolver_set_verbose
+    procedure :: weighted => mysolver_weighted
   end type MySolver_type
 
 contains
@@ -165,4 +166,16 @@ contains
     if (present(tag)) k = k + len_trim(tag) + 2
   end function tagged_length
 
+  !> sum of (diag + shift) * x * w
+  real function mysolver_weighted(this, x, r, w) result(total)
+    class(MySolver_type), intent(in) :: this
+    real, intent(in) :: x(this%n)
+    real, optional, intent(out) :: r(this%n)     !< the terms (optional)
+    real, optional, intent(in) :: w(this%n)      !< weights (optional, default 1)
+    real :: t(this%n)
+    t = (this%diag + this%shift) * x
+    if (present(w)) t = t * w
+    if (present(r)) r = t
+    total = sum(t)
+  end function mysolver_weighted
 end module mysolver_mod

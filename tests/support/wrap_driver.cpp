@@ -22,6 +22,11 @@ int main()
   std::printf("%24.15E\n", s.shift());
   std::printf("%24.15E%24.15E%24.15E\n", double(s.n()), s.diag()(2), s.weights()(2));   // constants
   std::printf("%24.15E%24.15E%24.15E\n", double(s.params().maxit), s.params().tol, s.params().w(1));
+  std::printf("%24.15E\n", s.weighted(x));                         // optional arrays absent
+  vec w(3), r;
+  w << 1.0, 0.5, 2.0;
+  scalar tw = s.weighted(x, std::ref(r), w);                       // present
+  std::printf("%24.15E%24.15E%24.15E%24.15E\n", tw, r(0), r(1), r(2));
   try
   {
     vec wrong(2);

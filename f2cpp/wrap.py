@@ -193,12 +193,12 @@ class WrapEmitter(ModuleEmitter):
                     return None, f"argument {v.cname} (optional, only intent(in) real / integer)"
                 res.append((a, "optional" if opt else "scalar", None))
                 continue
-            if v.rank > 2 or opt or v.has("allocatable") or v.has("pointer"):
-                return None, f"argument {v.cname} (array: rank 1 / 2, not optional / allocatable)"
+            if v.rank > 2 or v.has("allocatable") or v.has("pointer") or opt and v.base == "logical":
+                return None, f"argument {v.cname} (array: rank 1 / 2, not allocatable / pointer / optional logical)"
             dims = [self.fortran_size(p, sizes, a, d + 1 if v.rank == 2 else None) for d in range(v.rank)]
             if None in dims:
                 return None, f"size of argument {v.cname} unknown (size check or wrap_sizes)"
-            res.append((a, "array", dims))
+            res.append((a, "optional-array" if opt else "array", dims))
         if p.kind == "function":
             r = p.vars.get(p.result)
             if r is None or r.rank or r.base not in ("real", "integer", "logical"):
@@ -497,8 +497,18 @@ class WrapEmitter(ModuleEmitter):
                 intent = v.intent or "inout"
                 const = "const " if intent == "in" else ""
                 c_args.append(f"{const}{self.c_type(v)}* {a}")
-                glue.append(f"{v.cname}.data()")
-                if v.rank == 1:
+                # C++ object of the array and its presence (optional: NULL pointer = absent)
+                ok = v.opt_kind if kind == "optional-array" else None
+                obj = {"optref": f"{v.cname}->get()", "optional": f"(*{v.cname})"}.get(ok, v.cname)
+                present = {"optref": v.cname, "optional": v.cname, "empty": f"{v.cname}.size() > 0"}.get(ok)
+                glue.append(f"{present} ? {obj}.data() : nullptr" if present else f"{v.cname}.data()")
+                if present:                     # pointer to the data or disassociated (= absent)
+                    shape = ", ".join(dims)
+                    decls.append(f"type(C_PTR), value :: {a}")
+                    decls.append(f"{self.f_type(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)}) => null()")
+                    pre.append(f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])")
+                    call.append(f"{a}={a}_f")
+                elif v.rank == 1:
                     decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
                     call.append(f"{a}={a}(1:{dims[0]})")
                 else:
@@ -516,15 +526,17 @@ class WrapEmitter(ModuleEmitter):
                 except Untranslatable:
                     codes = None
                 if intent == "out" and codes is not None and "Ref<" not in tr.param_type(v):
-                    glue.append(("pre", f"{v.cname}.resize({', '.join(codes)});"))
+                    glue.append(("pre", (f"if ({present}) " if present else "") + f"{obj}.resize({', '.join(codes)});"))
                 elif not self.cfg["wrap_size_checks"]:
                     pass
                 elif codes is None:
                     self.report.add("todo", "wrap-size-check")
                     glue.append(("pre", f"// {TODO}: size of {v.cname} is not checked"))
                 else:
-                    have = [f"{v.cname}.size()"] if v.rank == 1 else [f"{v.cname}.rows()", f"{v.cname}.cols()"]
+                    have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
                     cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes))
+                    if present:
+                        cond = f"{present} && ({cond})"
                     glue.append(("pre", f'if ({cond}) throw std::invalid_argument("{cname}: size of {v.cname}");'))
         if has_err:
             f_args.append("ierr")
