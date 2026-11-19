@@ -34,6 +34,7 @@ class X:
     neg: object = None       # the negated expression, if it has a simpler form than !(...)
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
+    uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -168,7 +169,8 @@ class Translator:
         if v.base == "type":
             if v.tname not in self.cfg["type_map"] and self.find_type(v.tname) is None:
                 self.report.add("info", "unknown-type:" + v.tname)
-            return self.prog.type_name(v.tname, self.mod)
+            name = self.prog.type_name(v.tname, self.mod)
+            return f"std::unique_ptr<{name}>" if v.elem_uptr and v.rank else name
         return "auto"
 
     def find_iface(self, name):
@@ -185,6 +187,33 @@ class Translator:
         if p is None:
             self.report.add("info", "unknown-interface:" + str(name))
         return p.cname if p is not None else cname(str(name))
+
+    def expansion(self, v):
+        """[(C++ type, parameter name, component)] of a dummy argument expanded by expand_args, or None"""
+        if v is None or v.base != "type" or v.rank:
+            return None
+        exp = self.cfg["expand_args"].get(v.tname)
+        if not exp or v.is_dummy:
+            return exp
+        # variables: the parameter names, prefixed by the variable name if another one of the type is visible
+        same = lambda w: w is not v and w.base == "type" and not w.rank and w.tname == v.tname
+        home = next((m for m in self.prog.modules.values() if m.vars.get(v.name) is v), None)
+        if home is not None:                    # module variable: unique within its module
+            clash = any(same(w) for w in home.vars.values())
+        else:
+            clash = any(same(w) for q in self.scope_chain() for w in q.vars.values()) or \
+                any(same(w) for m in self.prog.visible(self.mod) for w in m.vars.values())
+        return [(t, f"{v.cname}_{n}", c) for t, n, c in exp] if clash else exp
+
+    def expanded_variables(self, v):
+        """local / module variable of an expand_args type: its C++ variables ["T name", ...] (no const / &)"""
+        if v.is_dummy or not self.expansion(v):
+            return None
+        return [re.sub(r"^const\s+|\s*&$", "", t).strip() + " " + n for t, n, _ in self.expansion(v)]
+
+    def expanded_name(self, node):
+        """Name node of an expanded dummy argument -> its expansion"""
+        return self.expansion(self.lookup(lname(node))) if cls(node) == "Name" else None
 
     def dropped(self, p):
         """dummies that are removed: class(*) user data arguments named in drop_args"""
@@ -368,6 +397,8 @@ class Translator:
         n = lname(node)
         if self.is_dropped(node):
             raise Untranslatable("dropped-argument")
+        if self.expanded_name(node):
+            raise Untranslatable("expanded-argument")       # only components / passing on are translated
         local = self.overrides.get(n) or next((p.vars[n] for p in self.scope_chain() if n in p.vars), None)
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
@@ -456,15 +487,24 @@ class Translator:
         return self.fill_template(fn, args, n)
 
     def fill_template(self, template, args, what, obj=None):
-        """{0}, {1:cstr}, {2:ptr}, {3:data}: translated arguments; {self}: the object of a method call"""
-        xs = [self.expr(node) for _, node in map(self.split_arg, args)
+        """{0}, {1:cstr}, {2:ptr}, {3:data}: translated arguments; {self}: the object of a method call;
+        {module}: module name, {module_base}: without the prefix <namespace>_"""
+        xs = [X(", ".join(n for _, n, _ in self.expanded_name(node))) if self.expanded_name(node) else
+              self.expr(node) for _, node in map(self.split_arg, args)
               if not self.is_err(node) and not self.is_dropped(node)]
+        modname = self.mod.spelling or self.mod.name
+        prefix = self.cfg["c_prefix"] + "_"
+        base = modname[len(prefix):] if modname.lower().startswith(prefix.lower()) else modname
 
         def sub(m):
+            if m.group(0) == "{module}":
+                return modname
+            if m.group(0) == "{module_base}":
+                return base
             if m.group(0) == "{self}":
                 if obj is None:
                     raise Untranslatable("template-self:" + what)
-                return par(obj)
+                return obj.raw or par(obj) if obj.raw != "this" else "*this"
             i, conv = int(m.group(1)), m.group(2)
             if i >= len(xs):
                 raise Untranslatable("template-arguments:" + what)
@@ -477,22 +517,36 @@ class Translator:
             if conv == "data":
                 return par(x) + ".data()"
             return code
-        return re.sub(r"\{self\}|\{(\d+)(?::(\w+))?\}", sub, template)
+        return re.sub(r"\{self\}|\{module\}|\{module_base\}|\{(\d+)(?::(\w+))?\}", sub, template)
 
     def method_template(self, tname, binding):
         """template configured for a type-bound procedure of the type or one of its base types"""
+        import fnmatch
         t = self.find_type(tname)
         for name in [tname] + ([a.name for a in self.prog.ancestors(t)] if t is not None else []):
             if f"{name}%{binding}" in self.cfg["method_templates"]:
                 return self.cfg["method_templates"][f"{name}%{binding}"]
+            for key, template in self.cfg["method_templates"].items():     # glob patterns: "*_config_type%read"
+                if fnmatch.fnmatch(f"{name}%{binding}", key):
+                    return template
         return None
 
-    def unknown_ref(self, base, subs):
-        """name(...) of unknown kind: an array section if it has a triplet, else passed through as call"""
-        if not any(cls(s) == "Subscript_Triplet" for s in subs):
+    def call_template(self, n):
+        """call template of procedure n (exact name or glob pattern, e.g. "log_*")"""
+        return match_name(n, self.cfg["call_templates"])
+
+    @staticmethod
+    def declares_self(template):
+        """the template declares the object itself: "Type {self}(...);" -> no separate declaration"""
+        return re.match(r"^\s*[\w:<>,{}]+\s+\{self\}\s*[({;]", template) is not None
+
+    def unknown_ref(self, base, subs, array=False):
+        """name(...) of unknown kind: an array section if it has a triplet (or array: known to be an
+        array, e.g. an accessor), else passed through as call"""
+        if not array and not any(cls(s) == "Subscript_Triplet" for s in subs):
             return X(f"{base}({', '.join(self.plain_args(subs))})")
         sc = [self.sub_code(s, None) for s in subs]
-        self.note("unknown-array", "section of an array of unknown type (assumed Eigen, lower bound 1)")
+        self.note("unknown-array", "array of unknown type (assumed Eigen, lower bound 1)")
         if all(k == "all" for k, _ in sc):
             return X(base, len(sc))
         return X(f"{base}({', '.join(c for _, c in sc)})", sum(k != "idx" for k, _ in sc))
@@ -545,15 +599,43 @@ class Translator:
 
     def x_Data_Ref(self, node, parts=None):
         parts = parts or list(node.items)
+        exp = self.expanded_name(parts[0])
+        if exp:                                 # component of an expanded argument: its parameter
+            comp = parts[1]
+            n = lname(comp.items[0] if cls(comp) == "Part_Ref" else comp)
+            hit = next(((t, c) for t, c, k in exp if k == n), None)
+            if hit is None or len(parts) > 2 or cls(comp) == "Part_Ref":
+                raise Untranslatable("expanded-argument")
+            base = "character" if "string" in hit[0] else "integer" if "int" in hit[0] else \
+                "logical" if "bool" in hit[0] else "real" if any(w in hit[0] for w in ("double", "float", "scalar")) \
+                else "unknown"
+            return X(hit[1], 0, base)
         cur = self.expr(parts[0])
         on_this = cur.raw == "this"
+        # holder: the object of the last component, hsubs: its subscripts (companions of unwrapped types)
+        holder, hsubs = None, (items_of(parts[0].items[1]) if cls(parts[0]) == "Part_Ref" else None)
         for p in parts[1:]:
             pname, subs = (p.items[0], items_of(p.items[1])) if cls(p) == "Part_Ref" else (p, None)
             n = lname(pname)
+            if cur.var is not None and cur.var.companions and n in cur.var.companions and subs is None:
+                cv = cur.var.companions[n]      # arr(i)%offset -> arr_offset[i - 1]
+                x = self.var_ref(cv, self.member(holder, cv.cname, holder.qual)) if holder is not None else \
+                    self.var_ref(cv, cv.cname)
+                cur = self.subscript(x, cv, hsubs) if hsubs is not None else x
+                continue
+            if cur.var is not None and cur.var.unwrapped == n and (cur.whole or cur.uptr_elem):
+                if subs is not None:            # x%v(i) of an unwrapped wrapper type: x(i)
+                    cur = self.subscript(cur, cur.var, subs)
+                continue
+            holder, hsubs = cur, subs
             if cur.rank > 0:
                 raise Untranslatable("component-of-array")
             td = self.find_type(cur.tname)
             comp = self.prog.find_component(td, n) if td else None
+            if comp is None and td and subs is not None and p is parts[-1] and self.prog.find_binding(td, n)[1]:
+                code, proc = self.call_on(cur, pname, p.items[1])     # a%b(i)%f(x): function binding
+                cur = self.result_x(code, proc)
+                continue
             if comp is None:
                 if td and any(a.name == n for a in self.prog.ancestors(td)):
                     cur = X(cur.code, 0, "type", cur.prec, tname=n, raw=cur.raw,
@@ -563,8 +645,8 @@ class Translator:
                 acc = self.accessor(cur.tname, n, cname(str(pname)))
                 x = X(self.member(cur, acc, cur.qual) + "()" if acc else
                       self.member(cur, cname(str(pname)), cur.qual))
-                if subs is not None:
-                    x = self.unknown_ref(x.code, subs)
+                if subs is not None:            # an accessor is data: subscripts are array indices
+                    x = self.unknown_ref(x.code, subs, array=bool(acc))
             else:
                 self.used_member(td, n, comp)
                 acc = self.accessor(cur.tname, n, comp.cname)
@@ -658,6 +740,12 @@ class Translator:
         return "seq", f"Eigen::seq({a}, {b}{c})"
 
     def subscript(self, x, v, subs):
+        res = self.subscript_(x, v, subs)
+        if v.elem_uptr and res.rank == 0:      # unique_ptr element: pointer-like
+            res.raw, res.code, res.prec, res.uptr_elem = res.code, "*" + res.code, P_UNARY, True
+        return res
+
+    def subscript_(self, x, v, subs):
         st = self.storage(v)
         if st in ("scalar", "uptr", "ptr") or len(subs) != v.rank:
             raise Untranslatable("substring" if v.base == "character" else "subscript")
@@ -822,6 +910,9 @@ class Translator:
             kw, node = self.split_arg(a)
             if self.is_err(node) or self.is_dropped(node):
                 continue
+            if self.expanded_name(node):        # expanded argument passed to an unknown procedure
+                res += [n for _, n, _ in self.expanded_name(node)]
+                continue
             x = self.expr(node)
             res.append((f"/*{kw}=*/ " if kw else "") + self.matrix(x))
         return res
@@ -849,6 +940,12 @@ class Translator:
             if d not in given:
                 res.append(f"{self.cpp_type(dv)}()" if dv.opt_kind == "empty" else
                            "std::nullopt" if dv.opt_kind else "nullptr")
+                continue
+            if self.expansion(dv):              # expanded argument passed on: its parameters
+                exp = self.expanded_name(given[d])
+                if not exp or [k for _, _, k in exp] != [k for _, _, k in self.expansion(dv)]:
+                    raise Untranslatable("expanded-argument")
+                res += [n for _, n, _ in exp]
                 continue
             if self.int_array(dv):
                 x = self.ref(given[d])
@@ -952,7 +1049,10 @@ class Translator:
     def method_call(self, desig, args):
         """obj%binding(args) -> (code, procedure or None)"""
         base_node, _, bname = desig.items
-        obj = self.expr(base_node)
+        return self.call_on(self.expr(base_node), bname, args)
+
+    def call_on(self, obj, bname, args):
+        """binding bname of the translated object obj called with args -> (code, procedure or None)"""
         n = lname(bname)
         template = self.method_template(obj.tname, n) if obj.tname else None
         if template is not None:        # method of an existing C++ class with another interface
@@ -1411,14 +1511,16 @@ class Translator:
             if n in self.cfg["function_map"]:
                 self.emit(ind, self.mapped_call(n, args) + ";")
                 return
-            if n in self.cfg["call_templates"]:
+            template = self.call_template(n)
+            if template is not None:
                 codes = self.plain_args(args)
 
                 def sub(m):
                     c = codes[int(m.group(1))]
                     return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) else c
-                text = re.sub(r"\{(\d+)(:str)?\}", sub, self.cfg["call_templates"][n])
-                self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
+                text = re.sub(r"\{(\d+)(:str)?\}", sub, template)
+                if text.strip():                # an empty template drops the call
+                    self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
                 return
             if p is not None:
                 self.spelled(p, desig)
@@ -1545,9 +1647,12 @@ class Translator:
             v = x.var
             if v is None:
                 raise Untranslatable("allocate-unknown")
-            st = self.storage(v)
+            st = "uptr" if x.uptr_elem else self.storage(v)
             name = x.raw if x.raw is not None else x.code
             dims = self.alloc_dims(shape)
+            for cv in (v.companions or {}).values() if x.whole and not x.uptr_elem else ():
+                cn = self.companion_code(name, v, cv)       # companions of unwrapped types: same shape
+                self.emit(ind, f"{cn}.resize({dims[0]});")
             if st in ("uptr", "ptr"):
                 t = self.prog.type_name(lname(tspec), self.mod) if tspec is not None else self.elem_type(v)
                 self.emit(ind, f"{name} = std::make_unique<{t}>();" if st == "uptr" else f"{name} = new {t}();")
@@ -1573,8 +1678,11 @@ class Translator:
     def s_Deallocate_Stmt(self, node, ind):
         for a in items_of(node.items[0]):
             x = self.ref(a)
-            st = self.storage(x.var) if x.var is not None else None
+            st = "uptr" if x.uptr_elem else self.storage(x.var) if x.var is not None else None
             name = x.raw if x.raw is not None else x.code
+            for cv in (x.var.companions or {}).values() if x.var is not None and not x.uptr_elem else ():
+                cn = self.companion_code(name, x.var, cv)
+                self.emit(ind, f"{cn}.clear();" if self.storage(cv) == "stdvec" else f"{cn}.resize(0);")
             if st == "uptr":
                 self.emit(ind, f"{name}.reset();")
             elif st in ("eigen", "objmat"):
@@ -1586,9 +1694,18 @@ class Translator:
             else:
                 raise Untranslatable("deallocate")
 
+    def companion_code(self, name, v, cv):
+        """code of a companion variable from the code of the unwrapped variable (x.arr -> x.arr_offset)"""
+        if not name.endswith(v.cname):
+            raise Untranslatable("unwrapped-companion")
+        return name[:-len(v.cname)] + cv.cname
+
     def s_Nullify_Stmt(self, node, ind):
         for a in items_of(node.items[1]):
             x = self.expr(a)
+            if x.var is not None and x.var.unwrapped and self.storage(x.var) == "eigen":
+                self.emit(ind, f"{x.code}.resize({', '.join(['0'] * x.var.rank)});")
+                continue
             self.emit(ind, f"{x.raw or x.code} = nullptr;")
 
     def s_If_Stmt(self, node, ind):
@@ -1836,6 +1953,8 @@ class Translator:
                 self.block([c], ind)
             elif guard is False and cls(c) != "Comment":
                 default.append(c)
+            elif guard is False and str(c).startswith(CPP_MARK):
+                self.comment(c, ind)                    # keep #ifdef ... balanced
         self.overrides = saved
         # class default: usually an assertion that cannot fail any more (the type is static in C++)
         trivial = ("Return_Stmt", "Stop_Stmt", "Error_Stop_Stmt", "Continue_Stmt")
@@ -1914,6 +2033,14 @@ class _Trimmed:
 
     def __str__(self):
         return "\n".join(str(c) for c in self.content)
+
+
+def match_name(name, table):
+    """value of name in table: exact key, else the first glob pattern that matches"""
+    import fnmatch
+    if name in table:
+        return table[name]
+    return next((v for k, v in table.items() if any(ch in k for ch in "*?[") and fnmatch.fnmatch(name, k)), None)
 
 
 def postfix_only(code):

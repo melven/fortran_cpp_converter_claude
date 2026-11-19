@@ -55,6 +55,11 @@ class Var:
     empty_arrays = True          # class attribute: config optional_arrays == "empty"
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
+    unwrapped: str = None        # variable of an unwrapped wrapper type: name of the wrapped component
+    companions: dict = None      # unwrapped variable: other components -> companion variables <name>_<comp>
+    elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
+    companion_of: tuple = None   # companion variable: (unwrapped variable, component) in Fortran
+    unwrapped_type: str = None   # unwrapped variable / companion: the original (wrapper) type
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
     needs_ref: bool = False      # out/inout array dummy that receives slices -> Eigen::Ref
@@ -570,11 +575,63 @@ class Program:
                     elif b.name in self.cfg["destructor_bindings"] and \
                             not [a for a in p.args if a not in (p.pass_arg, err)]:
                         p.is_dtor, p.bind_name = True, "~"
+        self.unwrap_types()
         for m in self.modules.values():
             for t in m.types.values():
                 p = self.find_type(t.parent, m) if t.parent else None
                 if p:
                     p.children.add(t.name)
+
+    def unwrap_types(self):
+        """variables / components of wrapper types (unwrap_types) take the type of the wrapped
+        component; members become mutable (the Fortran idiom: a pointer component can be changed
+        through an intent(in) object)"""
+        wrap = self.cfg["unwrap_types"]
+        if not wrap:
+            return
+
+        def procs(ps):
+            for p in ps:
+                yield p
+                yield from procs(p.internal.values())
+        added = []
+        for m in self.modules.values():
+            scopes = [(m.vars, False)] + [(t.comps, True) for t in m.types.values()] + \
+                [(p.vars, False) for p in procs([*m.procs.values(), *m.ifaces.values()])]
+            for scope, member in scopes:
+                for v in scope.values():
+                    if v.base != "type" or v.tname not in wrap or v.unwrapped:
+                        continue
+                    t = self.find_type(v.tname, m)
+                    inner = t.comps.get(wrap[v.tname]) if t is not None else None
+                    if inner is None or (v.rank and (inner.rank or v.rank > 1)):
+                        continue
+                    tname, array = v.tname, bool(v.rank)
+                    v.unwrapped, v.unwrapped_type = wrap[v.tname], tname
+                    keep = {"optional", "target", "value"}
+                    if array:                   # array of the type: array of the inner object
+                        v.elem_uptr = inner.base == "type" and (inner.has("allocatable") or inner.polymorphic)
+                        v.attrs = (v.attrs & (keep | {"allocatable", "pointer"}))
+                    else:
+                        v.dims, v.rank = list(inner.dims), inner.rank
+                        v.attrs = (v.attrs & keep) | ({"allocatable"} if inner.rank or inner.has("allocatable")
+                                                       or inner.has("pointer") else set())
+                    v.base, v.tname, v.kind, v.polymorphic = inner.base, inner.tname, inner.kind, inner.polymorphic
+                    v.mutable = member and not array        # the wrapper idiom (pointer component), not arrays
+                    for c in self.cfg.get("unwrap_companions", {}).get(tname, []):
+                        comp = t.comps.get(c)
+                        if v.is_dummy or comp is None or comp.rank or comp.base not in ("real", "integer", "logical"):
+                            continue
+                        cv = Var(f"{v.name}_{c}", f"{v.cname}_{comp.cname}")
+                        cv.base, cv.kind, cv.dims, cv.rank = comp.base, comp.kind, list(v.dims), v.rank
+                        cv.attrs = v.attrs & {"allocatable", "pointer", "optional", "target"}
+                        cv.is_dummy, cv.intent, cv.access, cv.node, cv.mutable = \
+                            v.is_dummy, v.intent, v.access, v.node, False
+                        cv.companion_of, cv.unwrapped_type = (v.name, c), tname
+                        v.companions = (v.companions or {}) | {c: cv}
+                        added.append((scope, cv))
+        for scope, cv in added:                 # companions: visible like the variable
+            scope.setdefault(cv.name, cv)
 
     def file_stem(self, modname):
         """output file name (without extension) of a module: module name, or the name of its

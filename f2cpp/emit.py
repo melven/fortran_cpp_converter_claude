@@ -1,5 +1,6 @@
 """Module -> header + source, pFUnit test module -> googletest source."""
 import os
+import re
 
 from .model import cls, lname, items_of, Var
 from .prepass import PF_MARK, CPP_MARK, BLANK_MARK
@@ -66,13 +67,18 @@ class ModuleEmitter:
             return code + f" /* {TODO}: fixed size ({', '.join(sizes)}) */"
         return code
 
-    def decl_stmt(self, tr, stmt, vars_, ind, prefix="", skip=(), member=False):
+    def decl_stmt(self, tr, stmt, vars_, ind, prefix="", skip=(), member=False, companions=True):
         """emit one Fortran declaration statement"""
         names = [lname(e.items[0]) for e in items_of(stmt.items[2])]
         decls = []          # [type, [declarators]]: entities of equal type share one statement
         for n in names:
             v = vars_[n]
             if n in skip or v.alias or (n == tr.err and v.base == "integer" and v.rank == 0):
+                continue
+            if not member and tr.expanded_variables(v):     # expand_args type: its variables
+                decls += [[prefix + d.rsplit(" ", 1)[0], [d.rsplit(" ", 1)[1] + ("{}" if tr.proc else "")]]
+                          for d in tr.expanded_variables(v)]
+                self.report.add("translated", "declaration")
                 continue
             try:
                 pre = prefix
@@ -88,6 +94,9 @@ class ModuleEmitter:
                     decls[-1][1].append(d)
                 else:
                     decls.append([t, [d]])
+                for cv in (v.companions or {}).values() if companions else ():   # unwrapped type: other components
+                    ct, cd = self.var_decl(tr, cv, member).split("\0")
+                    decls.append([pre + ct, [cd]])
                 self.report.add("translated", "declaration")
             except Untranslatable as e:
                 self.report.add("untranslated", "declaration:" + e.category)
@@ -122,6 +131,9 @@ class ModuleEmitter:
                 break
         for i, a in enumerate(dummies):
             v = p.vars[a]
+            if tr.expansion(v):                 # one argument -> several C++ parameters (expand_args)
+                params += [f"{t} {n}" for t, n, _ in tr.expansion(v)]
+                continue
             s = f"{tr.param_type(v)} {v.cname}"
             if decl and v.opt_kind and i >= len(dummies) - n_opt:
                 s += f" = {tr.cpp_type(v)}()" if v.opt_kind == "empty" else " = std::nullopt"
@@ -228,6 +240,9 @@ class ModuleEmitter:
             prev = b
             if k == "Specific_Binding":
                 bd = t.bindings[lname(b.items[3])]
+                if self.excluded(f"{t.name}%{bd.name}"):
+                    self.excluded_names.add(f"{t.name}%{bd.name}")
+                    continue
                 p = prog.binding_proc(t, bd)
                 if p is None:
                     self.report.add("untranslated", "binding")
@@ -272,7 +287,9 @@ class ModuleEmitter:
                 tr.emit(0, "")
             # sections: 2 public, 1 protected, 0 private; each entry: comments before, statement,
             # component name (None: whole statement), comments behind
-            auto = self.cfg["member_access"] == "auto"
+            # a plain data type (no methods) keeps public members: nothing else could use them
+            methods = [b for b in t.bindings if f"{t.name}%{b}" not in self.excluded_names]
+            auto = self.cfg["member_access"] == "auto" and bool(methods or callbacks or t.parent)
             fixed = (1 if t.children else 0) if t.private_comps else 2
             sections, lead, last = {2: [], 1: [], 0: []}, [], None
             for d in comps:
@@ -313,9 +330,14 @@ class ModuleEmitter:
                         tr.comment(c, ind + 1)
                     if d is None:
                         continue
+                    v = t.comps.get(n) if n is not None else None
+                    if cls(d) == "Data_Component_Def_Stmt" and v is not None and v.unwrapped_type and \
+                            not before and not behind:  # unwrapped type: documentation of its component
+                        for line in self.member_docs(t, v):
+                            tr.emit(ind + 1, f"{self.cfg['doxygen']} {line}".rstrip())
                     if cls(d) == "Data_Component_Def_Stmt":
                         one = type("S", (), {"items": (d.items[0], d.items[1], _One(d, n))})()
-                        self.decl_stmt(tr, one, t.comps, ind + 1, member=True)
+                        self.decl_stmt(tr, one, t.comps, ind + 1, member=True, companions=False)
                     elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
                         tr.emit(ind + 1, f"{tr.cpp_type(t.comps[n])} {t.comps[n].cname};")
                     else:
@@ -323,7 +345,57 @@ class ModuleEmitter:
                         tr.fortran_comment(d, ind + 1, "component not translated")
                     for c in behind:
                         tr.comment(c, ind + 1, d)
+                    for cv in (v.companions or {}).values() if v is not None else ():
+                        for line in self.member_docs(t, cv):
+                            tr.emit(ind + 1, f"{self.cfg['doxygen']} {line}".rstrip())
+                        ct, cd = self.var_decl(tr, cv, True).split("\0")
+                        tr.emit(ind + 1, f"{ct} {cd};")
         tr.emit(ind, "};")
+
+    def component_docs(self, t):
+        """{component: [comment text]}: comments before the statement and behind it on the same line"""
+        flat = []
+        for part in t.node.content[1:-1]:       # fparser spreads components / comments over several nodes
+            k = cls(part)
+            if k == "Component_Part":
+                flat += part.content
+            elif k == "Comment":
+                flat.append(part)
+            elif k == "Type_Bound_Procedure_Part":     # comments before `contains` sit in it
+                flat += part.content[:[cls(c) for c in part.content].index("Contains_Stmt")]
+                break
+        docs, lead, last = {}, [], []
+        for d in flat:
+            if cls(d) == "Comment":
+                text = str(d)
+                if not text.strip() or text.startswith((CPP_MARK, BLANK_MARK, PF_MARK)):
+                    lead = []
+                    continue
+                text = re.sub(r"^![<>!]?\s?", "", text.strip()).rstrip()
+                prev = last[-1][1] if last else None
+                if prev is not None and d.item is not None and getattr(prev, "item", None) is not None \
+                        and prev.item.span[1] == d.item.span[0]:
+                    for n, _ in last:
+                        docs[n].append(text)        # trailing comment of the previous statement
+                else:
+                    lead.append(text)
+                continue
+            names = [lname(e.items[0]) for e in items_of(d.items[2])] if cls(d) == "Data_Component_Def_Stmt" else []
+            last = [(n, d) for n in names]
+            for n in names:
+                docs[n] = list(lead)
+            lead = []
+        return docs
+
+    def member_docs(self, t, v):
+        """documentation of component v of t; companions / unwrapped variables of unwrap_types without
+        own documentation: that of the component of the unwrapped type"""
+        own = self.component_docs(t).get(v.name) if t.node is not None else None
+        if own or not (v.companion_of or v.unwrapped_type):
+            return own or []
+        inner = v.companion_of[1] if v.companion_of else v.unwrapped
+        ut = self.prog.find_type(v.unwrapped_type, t.module)
+        return self.component_docs(ut).get(inner, []) if ut is not None else []
 
     # ------------------------------------------------------------------ procedures
     def internal_order(self, p):
@@ -364,6 +436,30 @@ class ModuleEmitter:
             self.report.add("untranslated", "recursive-internal-procedure")
             tr.fortran_comment(q.node, ind, "recursive internal procedure (a lambda cannot call itself)")
 
+    @property
+    def excluded_names(self):
+        if not hasattr(self, "_excluded_names"):
+            self._excluded_names = set()
+        return self._excluded_names
+
+    def excluded(self, name):
+        """name (lower case: procedure, type, variable or type%binding) excluded by the configuration"""
+        import fnmatch
+        for e in self.cfg["exclude"]:
+            mod, _, pat = e.rpartition(":")
+            if fnmatch.fnmatch(self.mod.name, mod or "*") and fnmatch.fnmatch(name, pat):
+                self.report.add("info", "excluded:" + name)
+                return True
+        return False
+
+    def excluded_proc(self, p):
+        """module procedure / method (by implementation name or type%binding) excluded"""
+        if p.method_of:
+            t = self.prog.find_type(p.method_of, p.module)
+            names = [f"{p.method_of}%{b.name}" for b in (t.bindings.values() if t else []) if b.impl == p.name]
+            return any(self.excluded(n) for n in names) or self.excluded(p.name)
+        return self.excluded(p.name)
+
     def declaration_plan(self, p, tr):
         """-> ({local: index of the top-level statement before which it is declared}, loop-local variables)
 
@@ -374,6 +470,10 @@ class ModuleEmitter:
         execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
         if not execs or p.internal or walk(execs[0], (F.Goto_Stmt, F.Computed_Goto_Stmt)):
             return {}, set()
+        if any(str(c).startswith(CPP_MARK) for c in walk(p.node, F.Comment)):
+            moved_ok = False            # #ifdef regions: declarations stay at the top (scopes of the regions)
+        else:
+            moved_ok = True
         top = [c for c in execs[0].content if cls(c) != "Comment"]
         uses = {}                       # name -> [(top index, Name node or None for return)]
         for k, st in enumerate(top):
@@ -387,8 +487,19 @@ class ModuleEmitter:
             if cls(c) == "Specification_Part":
                 for nm in walk(c, F.Name):
                     spec_uses[lname(nm)] = spec_uses.get(lname(nm), 0) + 1
+        # objects declared by a method template ("Type {self}(...);") at the top level: no declaration
+        self.template_declared = set()
+        for st in top:
+            if cls(st) == "Call_Stmt" and cls(st.items[0]) == "Procedure_Designator" and \
+                    cls(st.items[0].items[0]) == "Name":
+                v = p.vars.get(lname(st.items[0].items[0]))
+                tpl = tr.method_template(v.tname, lname(st.items[0].items[2])) if v is not None and v.tname else None
+                if tpl and tr.declares_self(tpl) and not v.is_dummy:
+                    self.template_declared.add(v.name)
         moved, loop_local = {}, set()
         for n, v in p.vars.items():
+            if n in self.template_declared:
+                continue
             if v.is_dummy or n == tr.err or n not in uses or v.alias or v.base == "procedure" or \
                     v.has("save") or v.has("parameter") or v.init is not None:
                 continue
@@ -397,9 +508,10 @@ class ModuleEmitter:
             loops = [d for st in top for d in walk(st, F.Block_Nonlabel_Do_Construct)
                      if loop_var(d) == n]
             inside = {id(nm) for d in loops for nm in walk(d, F.Name)}
-            if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]):
+            if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]) \
+                    and moved_ok:
                 loop_local.add(n)
-            else:
+            elif moved_ok:
                 moved[n] = min(k for k, _ in uses[n])
         return moved, loop_local
 
@@ -415,6 +527,8 @@ class ModuleEmitter:
         merged = None
         simple = len(code) == 1 and cls(st) in ("Assignment_Stmt", "Allocate_Stmt", "Call_Stmt")
         for v in declare if simple else []:
+            if v.companions:                    # declared with its companions before the statement
+                continue
             line, t = new[code[0]], tr.cpp_type(v)
             name = re.escape(v.cname)
             m = re.match(rf"(\s*){name} = (.*);(.*)$", line)
@@ -439,6 +553,10 @@ class ModuleEmitter:
                 for c in comments.get(v.name, []):
                     new[code[0]] += "  " + tr.comment_text(c)
                 continue
+            if tr.expanded_variables(v):            # expand_args type: its variables
+                for d in tr.expanded_variables(v):
+                    tr.emit(ind, f"{d}{{}};")
+                continue
             try:
                 t, d = self.var_decl(tr, v).split("\0")
             except Untranslatable as e:
@@ -447,10 +565,40 @@ class ModuleEmitter:
             tr.emit(ind, f"{t} {d};")
             for c in comments.get(v.name, []):
                 tr.out[-1] += "  " + tr.comment_text(c)
+            for cv in (v.companions or {}).values():
+                ct, cd = self.var_decl(tr, cv).split("\0")
+                tr.emit(ind, f"{ct} {cd};")
         inserted = len(tr.out) - n0
         if inserted and tr.last_err_call is not None and tr.last_err_call[0] >= n0:
             tr.last_err_call = (tr.last_err_call[0] + inserted, tr.last_err_call[1])
         tr.out.extend(new)
+
+    def result_decl(self, tr, p, ind, done, moved):
+        """declaration of a function result without declaration statement (typed function prefix)"""
+        if p.kind == "function" and not done and p.result in p.vars and p.result not in moved:
+            tr.emit(ind + 1, f"{tr.cpp_type(p.vars[p.result])} {p.vars[p.result].cname};")
+            return True
+        return done
+
+    def balance_preprocessor(self, tr, start):
+        """safety net: #if / #endif within a function body must be balanced"""
+        depth = 0
+        for k in range(start, len(tr.out)):
+            s = tr.out[k].strip()
+            if s.startswith("#if"):
+                depth += 1
+            elif s.startswith("#endif"):
+                if depth == 0:
+                    tr.out[k] = f"// {TODO}: unbalanced preprocessor line: {s}"
+                    self.report.add("todo", "unbalanced-preprocessor")
+                    continue
+                depth -= 1
+            elif s.startswith(("#else", "#elif")) and depth == 0:
+                tr.out[k] = f"// {TODO}: unbalanced preprocessor line: {s}"
+                self.report.add("todo", "unbalanced-preprocessor")
+        for _ in range(depth):
+            tr.out.append(f"#endif  // TODO(f2cpp): added, the Fortran #endif could not be placed")
+            self.report.add("todo", "unbalanced-preprocessor")
 
     def emit_proc(self, tr_out, p, ind, head=None, close="}"):
         """definition of a procedure appended to tr_out.out"""
@@ -463,7 +611,9 @@ class ModuleEmitter:
         tr.emit(ind, "{")
         self.warn_lower_bounds(tr, [p.vars[a] for a in p.args if a in p.vars], ind + 1)
         skip = set(p.args)
+        self.template_declared = set()
         moved, loop_local = self.declaration_plan(p, tr)
+        skip |= self.template_declared
         tr.loop_local = loop_local
         if self.cfg["declare_at_first_use"]:
             tr.loop_decl = loop_local
@@ -476,16 +626,26 @@ class ModuleEmitter:
         moved_comments, hidden_decl = {}, None      # trailing comments of declarations that moved
         body_start = len(tr.out)
         has_result_decl = False
+        lambdas_done = False
         for part in p.node.content:
             k = cls(part)
             if k == "Specification_Part":
                 prev = None
-                for d in part.content:
+                decl_idx = [i for i, d in enumerate(part.content)
+                            if cls(d) in ("Type_Declaration_Stmt", "Procedure_Declaration_Stmt")]
+                for i, d in enumerate(part.content):
                     kd = cls(d)
                     if kd in ("Implicit_Part", "Comment"):
                         for c in (d.content if kd == "Implicit_Part" else [d]):
                             if cls(c) != "Comment" or id(c) in p.doc_nodes:
                                 continue            # argument documentation is in the header
+                            trailing = prev is not None and c.item is not None and last_line(prev) == c.item.span[0]
+                            if p.internal and not lambdas_done and decl_idx and i > decl_idx[-1] and not trailing:
+                                # lambdas right after the declarations: before comments / #ifdef that follow
+                                has_result_decl = self.result_decl(tr, p, ind, has_result_decl, moved)
+                                tr.emit(0, "")
+                                self.emit_lambdas(tr, p, ind + 1)
+                                lambdas_done = True
                             if hidden_decl is not None and c.item is not None and \
                                     last_line(hidden_decl[0]) == c.item.span[0]:
                                 if hidden_decl[1] in moved:
@@ -516,12 +676,11 @@ class ModuleEmitter:
                         self.report.add("untranslated", "specification:" + kd)
                         tr.fortran_comment(d, ind + 1, "not translated")
             elif k == "Execution_Part":
-                if p.kind == "function" and not has_result_decl and p.result in p.vars and p.result not in moved:
-                    tr.emit(ind + 1, f"{tr.cpp_type(p.vars[p.result])} {p.vars[p.result].cname};")
-                    has_result_decl = True
-                if p.internal:
+                has_result_decl = self.result_decl(tr, p, ind, has_result_decl, moved)
+                if p.internal and not lambdas_done:
                     tr.emit(0, "")
                     self.emit_lambdas(tr, p, ind + 1)
+                    lambdas_done = True
                 prev, k = None, -1
                 for c in part.content:
                     if cls(c) == "Comment":
@@ -530,32 +689,79 @@ class ModuleEmitter:
                     k += 1
                     self.emit_statement(tr, c, ind + 1, prev, at.get(k, []), moved_comments)
                     prev = c
+            elif k == "Internal_Subprogram_Part":
+                # the lambdas are at the start of the body; preprocessor lines of this part (e.g. an
+                # #endif after the internal procedures) stay here to keep #if / #endif balanced
+                for c in part.content:
+                    for x in ([c] if cls(c) == "Comment" else
+                              [d for d in getattr(c, "content", []) if cls(d) == "Comment"]):
+                        if str(x).startswith(CPP_MARK):
+                            tr.comment(x, ind + 1)
         while len(tr.out) > body_start and tr.out[-1] == "":
             tr.out.pop()
         while len(tr.out) > body_start + 1 and tr.out[body_start] == "":
             del tr.out[body_start]
         if p.kind == "function" and not tr.out[-1].strip().startswith("return "):
             tr.emit(ind + 1, tr.return_code())
+        self.balance_preprocessor(tr, body_start)
         tr.emit(ind, close)
 
     # ------------------------------------------------------------------ module
-    def includes(self):
+    def includes(self, header_text=None, source_text=""):
+        """#include lines of the used modules; with header_text: -> (for the header, for the source):
+        a module imported with an only-list is included where one of its names is used (nowhere: not at
+        all); modules used without only-list are included in the header"""
+        import re
         ext, known = self.cfg["header_ext"], self.cfg["module_headers"]
-        res = []
-        replaced = set(self.cfg["function_map"]) | set(self.cfg["call_templates"]) | \
-            set(self.cfg["kind_map"]) | set(self.cfg["constant_map"]) | \
-            {s.lower() for s in self.cfg["error_success"]}
+        h, c = [], []
+        replaced = MappedNames(self.cfg)
         for u in self.mod.uses:
             if u in self.cfg["ignore_modules"]:
                 continue
             only = self.mod.use_only.get(u)
             if only and all(n in replaced for n in only):
                 continue        # everything imported from this module is replaced by the configuration
-            h = known[u] if u in known else \
+            hdr = known[u] if u in known else \
                 (self.prog.file_stem(u) if u in self.prog.modules else self.mod.use_spelling.get(u, u)) + ext
-            if h and f'#include "{h}"' not in res:
-                res.append(f'#include "{h}"')
-        return res
+            if not hdr:
+                continue
+            line = f'#include "{hdr}"'
+            target = h
+            if header_text is not None and only and not any("(" in n or n in ("operator", "assignment")
+                                                            for n in only):
+                pats = [re.compile(rf"(?<![\w]){re.escape(x)}(?![\w])", re.I)
+                        for n in only if n not in replaced for x in self.cpp_names(u, n)]
+                if any(p.search(header_text) for p in pats):
+                    target = h
+                elif any(p.search(source_text) for p in pats):
+                    target = c
+                else:
+                    self.report.add("info", f"include-not-needed:{u}")
+                    continue
+            if line not in h + c:
+                target.append(line)
+        return (h, c) if header_text is not None else h
+
+    def cpp_names(self, u, n):
+        """C++ identifiers that a name n imported from module u can appear as"""
+        from .model import cname
+        names = {cname(n)}
+        m = self.prog.modules.get(u)
+        names.add(self.prog.type_name(n).split("::")[-1])          # types (also of unparsed modules)
+        if n in self.cfg["type_map"]:
+            names.add(self.cfg["type_map"][n].split("::")[-1].split("<")[0])
+        if m is not None:
+            if n in m.procs:
+                names.add(m.procs[n].cname)
+                if m.procs[n].generic:
+                    names.add(m.procs[n].generic)
+            if n in m.generics:
+                names.add(m.generic_spelling.get(n, n))
+            if n in m.vars:
+                names.add(m.vars[n].cname)
+            if n in m.ifaces:
+                names.add(m.ifaces[n].cname)
+        return {x for x in names if x}
 
     HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
@@ -614,7 +820,8 @@ class ModuleEmitter:
         dirs = self.tr()
         dirs.block(cpp_directives, 0)
 
-        types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types]
+        types_fwd = [f"class {self.prog.type_name(t)};" for t in mod.types
+                     if t not in cfg["unwrap_types"] and not self.excluded(t)]
         aliases = self.tr()     # std::function aliases: before the classes, which use them as arguments
         # a test module used by other (test) modules provides shared helpers: it gets a header
         shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
@@ -622,11 +829,15 @@ class ModuleEmitter:
         spec = [p for p in mod.node.content if cls(p) == "Specification_Part"]
         for s in (spec[0].content if spec else []):
             k = cls(s)
-            if k == "Implicit_Part":
-                pending += [c for c in s.content if cls(c) == "Comment"]
-                continue
-            if k == "Comment":
-                pending.append(s)
+            if k in ("Implicit_Part", "Comment"):
+                for c in (s.content if k == "Implicit_Part" else [s]):
+                    if cls(c) != "Comment":
+                        continue
+                    if str(c).startswith(CPP_MARK):     # #ifdef ...: in the header and in the source (balanced)
+                        hpp.comment(c, 0)
+                        cpp_priv.comment(c, 0)
+                    else:
+                        pending.append(c)
                 continue
             if k in ("Use_Stmt", "Access_Stmt"):
                 pending = [c for c in pending if str(c).startswith(BLANK_MARK)][:1]
@@ -634,6 +845,8 @@ class ModuleEmitter:
             if k == "Type_Declaration_Stmt":
                 names = [lname(e.items[0]) for e in items_of(s.items[2])]
                 for n in names:
+                    if self.excluded(n):
+                        continue
                     v = mod.vars[n]
                     public = mod.is_public(n, v.access) or mod.is_test
                     sink = hpp if public and (shared or not mod.is_test) else cpp_priv
@@ -645,6 +858,9 @@ class ModuleEmitter:
                     one = type("S", (), {"items": (s.items[0], s.items[1], _One(s, n))})()
                     self.decl_stmt(sink, one, mod.vars, 1 if sink is cpp_priv else 0,
                                    prefix="inline " if sink is hpp else "")
+            elif k == "Derived_Type_Def" and (lname(s.content[0].items[1]) in cfg["unwrap_types"] or
+                                              self.excluded(lname(s.content[0].items[1]))):
+                pending = []                            # wrapper type: replaced by its component; excluded
             elif k == "Derived_Type_Def":
                 sink = cpp_priv if mod.is_test and not shared else hpp   # tests have a header only if shared
                 sink.block(pending, 0)
@@ -691,10 +907,18 @@ class ModuleEmitter:
             k = cls(s)
             if k == "Comment":
                 cpp.comment(s, 0)
+                if str(s).startswith(CPP_MARK):         # e.g. #endif after a procedure: also around prototypes
+                    protos_pub.comment(s, 0)
                 continue
             if k not in ("Subroutine_Subprogram", "Function_Subprogram"):
                 continue
             p = mod.procs[lname([c for c in s.content if cls(c) != "Comment"][0].items[1])]
+            for c in p.doc:                             # #ifdef ... around procedures: in both files
+                if str(c).startswith(CPP_MARK):
+                    cpp.comment(c, 0)
+                    protos_pub.comment(c, 0)
+            if self.excluded_proc(p):
+                continue
             ptr = self.tr(p)
             if mod.is_test:
                 role = pf_role(p)
@@ -743,7 +967,8 @@ class ModuleEmitter:
                 h = self.file_header(top, cfg["header_ext"]) + \
                     [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
                 h += self.std_includes("\n".join(hpp.out + protos_pub.out + aliases.out), self.HEADER_INCLUDES)
-                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + self.includes()
+                inc_h, _ = self.includes("\n".join(hpp.out + protos_pub.out + aliases.out + cpp.out + cpp_priv.out))
+                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + inc_h
                 h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 or aliases.out else []) + \
                     aliases.out + strip_blank(hpp.out)
                 h += ([""] + protos_pub.out if protos_pub.out else []) + [""] + self.guard()[1]
@@ -756,7 +981,9 @@ class ModuleEmitter:
         h = self.file_header(top, cfg["header_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
         h += self.std_includes(guard_text, self.HEADER_INCLUDES)
-        h += [f"#include {i}" for i in cfg["extra_includes"]] + self.includes()
+        body = "\n".join(cpp.out + cpp_priv.out + protos_priv.out)
+        inc_h, inc_c = self.includes(guard_text, body)
+        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h
         h += [""] + mod_doc.out + [self.open_ns(), ""]
         if types_fwd and (len(types_fwd) > 1 or aliases.out):
             h += types_fwd + [""]
@@ -767,7 +994,8 @@ class ModuleEmitter:
 
         body = "\n".join(cpp.out + cpp_priv.out)
         c = self.file_header(top, cfg["source_ext"]) + \
-            [BANNER.format(src=os.path.basename(self.src)), f'#include "{self.prog.file_stem(mod.name)}{cfg["header_ext"]}"', ""]
+            [BANNER.format(src=os.path.basename(self.src)), f'#include "{self.prog.file_stem(mod.name)}{cfg["header_ext"]}"']
+        c += inc_c + [""]
         c += self.std_includes(body, self.SOURCE_INCLUDES)
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
@@ -779,16 +1007,15 @@ class ModuleEmitter:
     def missing_modules(self):
         """report used modules whose definitions are neither parsed (file or -I) nor mapped"""
         cfg = self.cfg
-        mapped = set(cfg["function_map"]) | set(cfg["call_templates"]) | set(cfg["type_map"]) | \
-            set(cfg["kind_map"]) | set(cfg["constant_map"]) | {s.lower() for s in cfg["error_success"]}
+        mapped = MappedNames(cfg, type_map=True)
         kinds = ("unknown-name", "external-call", "external-function", "unknown-type")
         unresolved = sorted({c.split(":", 1)[1] for c in self.report.cur["info"]
-                             if c.split(":")[0] in kinds} - mapped)
+                             if c.split(":")[0] in kinds and c.split(":", 1)[1] not in mapped})
         for u, only in self.mod.use_only.items():
             if u in self.prog.modules or u in cfg["ignore_modules"]:
                 continue
             if only is not None:
-                need = [n for n in dict.fromkeys(only) if n not in mapped]
+                need = [n for n in dict.fromkeys(only) if n not in mapped and n not in cfg["expand_args"]]
                 if need:
                     self.report.add("missing", f"{u}: needed for {', '.join(need)}")
             elif unresolved:
@@ -843,7 +1070,7 @@ class ModuleEmitter:
                                                        ("optional", ["std::optional"]),
                                                        ("vector", ["std::vector"])])
         c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
-            self.includes() + dirs.out
+            self.includes("\n".join(cpp.out + cpp_priv.out + protos.out))[0] + dirs.out
         if shared:
             c.append(f'#include "{self.prog.file_stem(mod.name)}{self.cfg["header_ext"]}"')
         # tests are not part of the project namespace
@@ -863,6 +1090,20 @@ class ModuleEmitter:
             c += ["};", ""]
         c += strip_blank(cpp.out) + [""]
         return "\n".join(self.braces(squeeze(c)))
+
+
+class MappedNames:
+    """names replaced by the configuration (function_map, call_templates incl. glob patterns, ...)"""
+
+    def __init__(self, cfg, type_map=False):
+        self.cfg = cfg
+        self.names = set(cfg["function_map"]) | set(cfg["call_templates"]) | set(cfg["kind_map"]) | \
+            set(cfg["constant_map"]) | {s.lower() for s in cfg["error_success"]} | \
+            (set(cfg["type_map"]) if type_map else set())
+
+    def __contains__(self, n):
+        from .translate import match_name
+        return n in self.names or match_name(n, self.cfg["call_templates"]) is not None
 
 
 def loop_var(do):

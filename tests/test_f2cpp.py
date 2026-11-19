@@ -8,6 +8,7 @@ import pytest
 from f2cpp import config
 from f2cpp.cli import translate
 from f2cpp.prepass import prepass
+from f2cpp.report import Report
 
 HERE = os.path.dirname(__file__)
 CORPUS = os.path.join(HERE, "corpus")
@@ -438,7 +439,9 @@ def test_module_header_rename(tmp_path):
     c = config.load()
     c["module_headers"] = {"project_global_thing": "project_thing.hpp"}
     translate([str(tmp_path / "project_global_thing.F90"), str(tmp_path / "user_mod.F90")], c, str(tmp_path))
-    assert '#include "project_thing.hpp"' in (tmp_path / "user_mod.hpp").read_text()
+    # only needed in the function body: included in the source, not in the header
+    assert '#include "project_thing.hpp"' in (tmp_path / "user_mod.cpp").read_text()
+    assert "project_thing" not in (tmp_path / "user_mod.hpp").read_text()
     assert (tmp_path / "project_thing.hpp").read_text().startswith("//! @file project_thing.hpp")
     assert '#include "project_thing.hpp"' in (tmp_path / "project_thing.cpp").read_text()
 
@@ -459,7 +462,7 @@ def test_accessors(tmp_path):
     assert "system.couplingManager().step = n;" in (tmp_path / "a_mod.cpp").read_text()
     cpp = (tmp_path / "a_mod.cpp").read_text()
     assert "n = system.models().size() + system.count + system.offsets().first;" in cpp
-    assert "system.models()(2).id = n;" in cpp
+    assert "system.models()(1).id = n;" in cpp        # accessor of an array: 0-based index
     assert "obj.value() = 2.0 * obj.value();" in cpp
 
 
@@ -735,7 +738,7 @@ def test_output_file_names_keep_the_module_spelling(tmp_path, capsys):
     from f2cpp.cli import main
     (tmp_path / "MyThing_mod.F90").write_text("module MyThing_mod\ninteger, parameter :: n = 2\nend module\n")
     (tmp_path / "user_mod.F90").write_text("module user_mod\nuse MyThing_mod, only: n\nuse Other_Mod, only: m\n"
-                                           "end module\n")
+                                           "integer, parameter :: k = n + m\nend module\n")
     (tmp_path / "prog.F90").write_text("program p\nend program\n")
     (tmp_path / "other.F90").write_text("module renamed_mod\nend module\n")
     main([str(tmp_path / f) for f in ("MyThing_mod.F90", "user_mod.F90", "prog.F90", "other.F90")]
@@ -764,3 +767,737 @@ def test_optional_arrays_are_empty_by_default(out, tmp_path):
            "std::optional<scalar> s = std::nullopt);" in hpp
     assert "if (w.size() == 0) return;" in cpp and "if (!idx.empty()) g(w);" in cpp
     assert "f(a, vec(), std::vector<int>(), 1.0);" in cpp and "f(a, a);" in cpp
+
+
+def test_unwrapped_mutable_wrapper_type(tmp_path):
+    (tmp_path / "mutable_mod.F90").write_text("""module mutable_mod
+  implicit none
+  type MutableRealArray1d_type
+    !> pointer instead of allocatable to make it mutable
+    real, pointer, contiguous :: v(:) => null()
+  end type
+end module mutable_mod
+""")
+    (tmp_path / "cache_mod.F90").write_text("""module cache_mod
+  use mutable_mod, only: MutableRealArray1d_type
+  implicit none
+  type :: cache_type
+    integer :: n = 0
+    type(MutableRealArray1d_type) :: tmp     !< scratch space
+  contains
+    procedure :: setup
+    procedure :: apply
+  end type
+contains
+  subroutine setup(this, n)
+    class(cache_type), intent(inout) :: this
+    integer, intent(in) :: n
+    this%n = n
+    if (associated(this%tmp%v)) deallocate(this%tmp%v)
+    allocate(this%tmp%v(n))
+    this%tmp%v = 0.0
+  end subroutine setup
+  function apply(this, x) result(s)
+    class(cache_type), intent(in) :: this
+    real, intent(in) :: x(:)
+    real :: s
+    this%tmp%v(1:this%n) = 2.0 * x(1:this%n)
+    this%tmp%v(1) = this%tmp%v(1) + 1.0
+    s = sum(this%tmp%v)
+  end function apply
+end module cache_mod
+""")
+    c = cfg()
+    c["unwrap_types"] = {"mutablerealarray1d_type": "v"}
+    translate([str(tmp_path / "mutable_mod.F90"), str(tmp_path / "cache_mod.F90")], c, str(tmp_path))
+    hpp, cpp = (tmp_path / "cache_mod.hpp").read_text(), (tmp_path / "cache_mod.cpp").read_text()
+    assert "mutable vec tmp;  //!< scratch space" in hpp
+    assert "class MutableRealArray1d" not in (tmp_path / "mutable_mod.hpp").read_text()
+    assert "if (tmp.size() > 0) tmp.resize(0);" in cpp and "tmp.resize(n);" in cpp and "tmp.setZero();" in cpp
+    assert "tmp(Eigen::seq(0, n - 1)) = 2.0 * x(Eigen::seq(0, n - 1));" in cpp
+    assert "tmp(0) = tmp(0) + 1.0;" in cpp and "scalar s = tmp.sum();" in cpp
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "cache_mod.cpp"],
+        str(tmp_path))
+
+
+@needs_cxx
+@pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
+def test_wrapped_module_end_to_end(tmp_path):
+    """mysolver_mod stays in Fortran (bind(C) layer + C++ glue), solver_user_mod is translated and uses it;
+    the result equals the pure Fortran program"""
+    d = str(tmp_path)
+    w = os.path.join(CORPUS, "wrapped")
+    consts = {"mysolver_type": ["n", "diag", "weights", "params", "label"]}
+    translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True, wrap_constants=consts), d,
+              wrap=[os.path.join(w, "mysolver_mod.F90")])
+    hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
+    binding = read((d,), "mysolver_mod_c_binding.F90")
+    assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
+           "int* ierr);" in h
+    assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
+    assert "typedef struct project_MySolver\n{\n  void* p_impl = nullptr;\n  int n = 0;\n  PROJECT_REAL* diag = nullptr;\n" \
+           "  int diag_size = 0;\n  PROJECT_REAL weights[3] = {};\n  project_SolverParams params;\n} project_MySolver;" in h
+    assert "typedef struct project_SolverParams\n{\n  int maxit = 0;\n  PROJECT_REAL tol = 0;\n  bool restart = false;\n" \
+           "  PROJECT_REAL w[2] = {};\n} project_SolverParams;" in h
+    assert "!typedef struct project_MySolver\n!{\n!  void* p_impl = nullptr;\n" in binding
+    assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
+           "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
+           "    real(C_REAL) :: weights(3) = 0\n    type(SolverParams_c) :: params\n  end type MySolver_c" in binding
+    assert "  type, bind(C), public :: SolverParams_c\n    integer(C_INT) :: maxit = 0\n" in binding
+    # setup / destroy (Fortran only): C struct with the constants, const getters only
+    assert "  function project_MySolver_setup(obj) result(handle)\n    type(MySolver_type), target :: obj\n" in binding
+    assert "    allocate(this_c)\n    this_c%p_impl = c_loc(obj)\n    this_c%n = obj%n\n    this_c%diag = C_NULL_PTR\n    this_c%diag_size = 0\n    if (allocated(obj%diag)) then\n" \
+           "      this_c%diag = c_loc(obj%diag)\n      this_c%diag_size = size(obj%diag)\n    end if\n" \
+           "    this_c%weights = obj%weights\n    this_c%params%maxit = obj%params%maxit\n" \
+           "    this_c%params%tol = obj%params%tol\n    this_c%params%restart = logical(obj%params%restart, C_BOOL)\n" \
+           "    this_c%params%w = obj%params%w\n    handle = c_loc(this_c)" in binding
+    assert "  subroutine project_MySolver_destroy(handle)" in binding and "    deallocate(this_c)\n" in binding
+    assert "set_constants" not in binding + cpp
+    # struct constant: C++ copy of the class, member of the wrapper filled in the constructor
+    assert "class SolverParams final\n{\npublic:\n  int maxit = 10;  //!< maximum number of iterations\n" in hpp
+    assert "  //! iteration parameters\n  const SolverParams& params() const { return params_; }" in hpp
+    assert "  explicit MySolver(project_MySolver& c);" in hpp and "  SolverParams params_;" in hpp
+    assert "MySolver::MySolver(project_MySolver& c) : handle_(&c)\n{\n  params_.maxit = c.params.maxit;\n" in cpp
+    assert "  params_.w = Eigen::Map<const vec>(c.params.w, 2);" in cpp
+    assert "struct project_SolverParams;" not in hpp
+    assert "  //! problem size\n  int n() const;\n  //! diagonal\n  Eigen::Map<const vec> diag() const;\n" in hpp
+    assert "//!< constant" not in hpp
+    assert "Eigen::Map<const vec> MySolver::weights() const\n{\n  return Eigen::Map<const vec>(handle_->weights, 3);" in cpp
+    assert "Eigen::Map<const vec> MySolver::diag() const\n{\n  return Eigen::Map<const vec>(handle_->diag, handle_->diag_size);" in cpp
+    assert "  // TODO(f2cpp): constant label not wrapped: character" in hpp
+    assert "int& n()" not in hpp and "Eigen::Map<vec> diag()" not in hpp
+    assert "    call c_f_pointer(mySolver, this_c)\n    call c_f_pointer(this_c%p_impl, obj)" in binding
+    assert "namespace MySolver_private\n{\nstd::unique_ptr<MySolver> wrapFromC(project_MySolver& c);" in hpp
+    assert "public:\n  MySolver() = default;  //!< empty object\n" in hpp
+    assert "protected:\n  explicit MySolver(project_MySolver& c);  //!< the object created in Fortran\n" \
+           "  friend std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c);\n" \
+           "  project_MySolver* handle_ = nullptr;" in hpp
+    assert "std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c)\n{\n" \
+           "  return std::unique_ptr<MySolver>(new MySolver(c));  // new: protected constructor, make_unique has no access" in cpp
+    assert '#ifdef DLLEXPORT\n  DLLEXPORT :: project_MySolver_apply\n#endif' in binding
+    # the C interface is only included in the glue; the header declares the handle type itself
+    assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
+    assert "struct project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
+    assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
+    assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
+    assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
+    assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
+    assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
+    assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
+    assert "  bool verbose() const;\n  Eigen::Map<mat> coupling();\n" in hpp
+    assert "  Eigen::Map<mat> coupling();\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
+           "std::optional<scalar> tol = std::nullopt) const;" in hpp
+    assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
+           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
+           '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
+    # module procedures
+    assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
+    assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
+    assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
+    assert "void scale_vector(vec& x, scalar factor)\n{\n  throw std::logic_error" in cpp    # size of x unknown
+    # optional string: NULL pointer
+    assert "int project_tagged_length(const char* msg, const char* tag);" in h
+    assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
+    assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
+    assert "    if (c_associated(tag)) tag_f = str_array_ptr_to_str(tag)\n" \
+           "    res = tagged_length(msg=str_array_ptr_to_str(msg), tag=tag_f)" in binding
+    user = read((d,), "solver_user_mod.cpp")
+    assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
+    os.makedirs(os.path.join(d, "f"))
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    for src, obj in ((os.path.join(SUPPORT, "project_str.F90"), "f/str.o"),
+                     (os.path.join(w, "mysolver_mod.F90"), "f/mysolver.o"),
+                     ("mysolver_mod_c_binding.F90", "f/binding.o"),
+                     (os.path.join(SUPPORT, "mysolver_factory.F90"), "f/factory.o")):
+        run(ff + [src, "-o", obj], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for src, obj in (("mysolver_mod.cpp", "glue.o"), ("solver_user_mod.cpp", "user.o"),
+                     (os.path.join(SUPPORT, "wrap_driver.cpp"), "drv.o")):
+        run(gxx + [src, "-o", obj], d)
+    run(["g++", "glue.o", "user.o", "drv.o", "f/str.o", "f/mysolver.o", "f/binding.o", "f/factory.o",
+         "-lgfortran", "-o", "cdrv"], d)
+    res = run(["./cdrv"], d).split("\n")
+    run(ff + [os.path.join(w, "solver_user_mod.F90"), "-o", "ref_user.o"], d)
+    run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
+         "ref_user.o", "-o", "fdrv"], d)
+    ref = run(["./fdrv"], d).split()
+    vals = " ".join(res[:5]).split()
+    assert len(vals) == len(ref) == 11
+    for a, b in zip(vals, ref):
+        assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
+    assert res[5] == "project_MySolver_apply: size of x"
+
+
+def test_wrapped_module_without_size_checks(tmp_path):
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], cfg(), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
+    cpp = (tmp_path / "mysolver_mod.cpp").read_text()
+    assert "invalid_argument" not in cpp and "  y.resize(x.size());\n  int ierr = 0;\n" in cpp
+    hpp = (tmp_path / "mysolver_mod.hpp").read_text()
+    assert "  explicit MySolver(project_MySolver& c) : handle_(&c) {}  //!< the object created in Fortran" in hpp
+
+
+def test_c_names_follow_the_namespace(tmp_path):
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
+    h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
+    assert "typedef struct flow_MySolver\n{" in h and "#define FLOW_REAL double" in h
+    assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
+    assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
+
+
+def test_exclude_parts_of_a_module(tmp_path):
+    from f2cpp.cli import main
+    (tmp_path / "rec_mod.F90").write_text("""module rec_mod
+  implicit none
+  type :: record_type
+    integer :: id = 0
+    real :: value = 0.0
+  contains
+    procedure :: show
+  end type
+  type :: internal_type
+    integer :: k
+  end type
+  integer, parameter :: max_count = 10
+  real :: scratch(3)
+contains
+  subroutine show(this)
+    class(record_type), intent(in) :: this
+  end subroutine show
+  subroutine read_records(r)
+    type(record_type), intent(out) :: r(:)
+  end subroutine read_records
+  subroutine write_records(r)
+    type(record_type), intent(in) :: r(:)
+  end subroutine write_records
+  function keep_me() result(k)
+    integer :: k
+    k = 1
+  end function keep_me
+end module rec_mod
+""")
+    (tmp_path / "x.toml").write_text('[exclude]\nrec_mod = ["*_records", "internal_type"]\n'
+                                     '"*" = ["record_type%show"]\n')
+    main([str(tmp_path / "rec_mod.F90"), "-o", str(tmp_path / "out"), "-c", str(tmp_path / "x.toml"),
+          "-x", "rec_mod:scratch"])
+    hpp, cpp = (tmp_path / "out" / "rec_mod.hpp").read_text(), (tmp_path / "out" / "rec_mod.cpp").read_text()
+    assert "class record final" in hpp and "inline const int max_count = 10;" in hpp
+    # a data type without (emitted) methods keeps its members public
+    assert "class record final\n{\npublic:\n\n  int id = 0;\n  scalar value = 0.0;\n};" in hpp
+    assert "int keep_me();" in hpp and "_records" not in hpp + cpp
+    assert "internal" not in hpp and "scratch" not in hpp + cpp and "show" not in hpp + cpp
+
+
+def test_includes_only_where_needed(tmp_path):
+    (tmp_path / "a_mod.F90").write_text("module a_mod\ntype :: pt_type\nreal :: x\nend type\n"
+                                        "integer, parameter :: na = 2\nend module\n")
+    (tmp_path / "b_mod.F90").write_text("module b_mod\ncontains\nfunction twice(k) result(r)\ninteger :: k, r\n"
+                                        "r = 2 * k\nend function\nend module\n")
+    (tmp_path / "c_mod.F90").write_text("module c_mod\nend module\n")
+    (tmp_path / "u_mod.F90").write_text(
+        "module u_mod\nuse a_mod, only: pt_type, na\nuse b_mod, only: twice\nuse c_mod\n"
+        "contains\nfunction f(p) result(r)\ntype(pt_type), intent(in) :: p\nreal :: r\n"
+        "r = p%x * twice(na)\nend function\n"
+        "subroutine g()\nuse c_mod\nend subroutine\nend module\n")
+    translate([str(tmp_path / f) for f in ("u_mod.F90",)], config.load(), str(tmp_path),
+              [str(tmp_path / f) for f in ("a_mod.F90", "b_mod.F90", "c_mod.F90")])
+    hpp, cpp = (tmp_path / "u_mod.hpp").read_text(), (tmp_path / "u_mod.cpp").read_text()
+    assert '#include "a_mod.hpp"' in hpp                               # pt in the signature
+    assert '#include "b_mod.hpp"' in cpp and "b_mod" not in hpp        # twice only in the body
+    assert '#include "c_mod.hpp"' in hpp                               # no only-list: kept
+
+
+@needs_cxx
+@pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
+def test_wrapped_class_hierarchy(tmp_path):
+    """root (abstract, deferred method) and derived class in two wrapped modules"""
+    import math
+    d = str(tmp_path)
+    w = os.path.join(CORPUS, "wrapped")
+    translate([], cfg(), d, wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
+    bh, sh = read((d,), "body_mod.hpp"), read((d,), "sphere_mod.hpp")
+    sb = read((d,), "sphere_mod_c_binding.F90")
+    assert "class body\n{" in bh and "  scalar volume() const;" in bh and "  project_body* handle_ = nullptr;" in bh
+    assert "class sphere final : public body\n{" in sh and "  using body::body;" in sh
+    assert "  friend std::unique_ptr<sphere> sphere_private::wrapFromC(project_body& c);" in sh
+    assert "explicit sphere" not in sh                                 # body(project_body&) is inherited
+    assert "volume" not in sh and "handle_" not in sh                  # overrides dispatch in the base class
+    assert "  type, public :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
+        read((d,), "body_mod_c_binding.F90")
+    assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in sb
+    assert "    call c_f_pointer(sphere, this_c)\n    call c_f_pointer(this_c%p_impl, wrapper)\n" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
+    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr=dr, ierr=ierr)\n" \
+           "    class default\n      ierr = -1\n    end select" in sb
+    # file headers: original header, @file renamed, @brief prefixed
+    assert read((d,), "body_mod_c_binding.F90").startswith(
+        "!> @file body_mod_c_binding.F90\n!> @brief C binding: Abstract bodies")
+    assert read((d,), "body_mod.cpp").startswith("//! @file body_mod.cpp\n//! @brief C++ wrapper: Abstract bodies")
+    assert bh.startswith("//! @file body_mod.hpp\n//! @brief Abstract bodies")
+    os.makedirs(os.path.join(d, "f"))
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    objs = []
+    for src in (os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90"), "body_mod_c_binding.F90",
+                "sphere_mod_c_binding.F90", os.path.join(SUPPORT, "body_factory.F90")):
+        objs.append("f/" + os.path.basename(src) + ".o")
+        run(ff + [src, "-o", objs[-1]], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for src in ("body_mod.cpp", "sphere_mod.cpp", os.path.join(SUPPORT, "body_driver.cpp")):
+        objs.append(os.path.basename(src) + ".o")
+        run(gxx + [src, "-o", objs[-1]], d)
+    run(["g++"] + objs + ["-lgfortran", "-o", "drv"], d)
+    lines = run(["./drv"], d).split("\n")
+    vol = 4.0 / 3.0 * math.pi * 8.0
+    got = [float(x) for x in (lines[0] + " " + lines[1]).split()]
+    vol2 = 4.0 / 3.0 * math.pi * 2.5 ** 3
+    for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2]):
+        assert a == pytest.approx(b, rel=1e-12)
+    assert lines[2] == "ierr!=0 returned from project_sphere_grow"
+
+
+def test_wrapped_class_with_hand_wrapped_base(tmp_path):
+    """only the derived class is wrapped; the base module (wrapped by hand) is given with -I"""
+    w = os.path.join(CORPUS, "wrapped")
+    c = cfg()
+    c["module_headers"] = {"body_mod": "body_wrapper.hpp"}
+    translate([], c, str(tmp_path), [os.path.join(w, "body_mod.F90")], wrap=[os.path.join(w, "sphere_mod.F90")])
+    sh = (tmp_path / "sphere_mod.hpp").read_text()
+    assert '#include "body_wrapper.hpp"' in sh and "class sphere final : public body" in sh
+    assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in \
+        (tmp_path / "sphere_mod_c_binding.F90").read_text()
+    c["wrap_handle"] = "direct"                 # simple case: the handle points to the wrapper itself
+    translate([], c, str(tmp_path), [os.path.join(w, "body_mod.F90")], wrap=[os.path.join(w, "sphere_mod.F90")])
+    sb = (tmp_path / "sphere_mod_c_binding.F90").read_text()
+    assert "  use body_mod_c_binding, only: bodyWrapper_type\n" in sb and "this_c" not in sb
+    assert "typedef struct project_body project_body;" not in (tmp_path / "sphere_mod.h").read_text()
+    assert '#include "body_mod.h"' in (tmp_path / "sphere_mod.h").read_text()
+
+
+def test_wrapped_header_forward_declarations(tmp_path):
+    (tmp_path / "pair_mod.F90").write_text("""module pair_mod
+  implicit none
+  type :: node_type
+    integer :: id = 0
+  contains
+    procedure :: link
+  end type
+  type :: edge_type
+    integer :: weight = 1
+  end type
+  abstract interface
+    function cost_iface(e) result(c)
+      import :: edge_type
+      type(edge_type), intent(in) :: e
+      real :: c
+    end function
+  end interface
+contains
+  subroutine link(this, e, f)
+    class(node_type), intent(inout) :: this
+    type(edge_type), intent(in) :: e
+    procedure(cost_iface) :: f
+  end subroutine
+end module pair_mod
+""")
+    translate([], cfg(), str(tmp_path), wrap=[str(tmp_path / "pair_mod.F90")])
+    hpp = (tmp_path / "pair_mod.hpp").read_text()
+    assert "class node;\nclass edge;\n" in hpp and hpp.index("class edge;") < hpp.index("class node final")
+    assert "using cost_iface = std::function<scalar(const edge& e)>;" in hpp and "#include <functional>" in hpp
+    assert "void link(const edge& e, const cost_iface& f);" in hpp       # not wrapped (objects): declared
+
+
+def test_preprocessor_lines_stay_balanced(tmp_path):
+    src = """module ifd_mod
+  implicit none
+#ifdef WITH_X
+  real, parameter :: x0 = 1.0
+#else
+  real, private :: x0 = 2.0
+#endif
+contains
+  subroutine a(x)
+    real, intent(inout) :: x
+#ifdef DEBUG
+    real :: dbg
+#endif
+    integer :: k
+#ifdef DEBUG
+    dbg = x
+#endif
+    do k = 1, 3
+      x = x + k
+    end do
+#ifdef DEBUG
+    x = x + dbg
+#endif
+  end subroutine a
+
+#ifdef WITH_B
+  subroutine b()
+  end subroutine b
+#endif
+
+  function c(x) result(y)
+    real, intent(in) :: x
+    real :: y
+    y = x + x0
+#ifdef DEBUG
+    y = 2 * y
+#else
+    y = 3 * y
+#endif
+  end function c
+#ifdef WITH_D
+  subroutine d()
+  end subroutine d
+#endif
+end module ifd_mod
+"""
+    (tmp_path / "ifd_mod.F90").write_text(src)
+    translate([str(tmp_path / "ifd_mod.F90")], config.load(), str(tmp_path))
+    hpp, cpp = (tmp_path / "ifd_mod.hpp").read_text(), (tmp_path / "ifd_mod.cpp").read_text()
+    for text in (hpp, cpp):
+        lines = [l.strip() for l in text.split("\n")]
+        assert sum(l.startswith("#if") for l in lines) == sum(l.startswith("#endif") for l in lines)
+    assert "#ifdef WITH_B\nvoid b()\n{\n}\n\n#endif" in cpp and "#ifdef WITH_B\nvoid b();\n#endif" in hpp
+    assert "#ifdef DEBUG\n  scalar dbg;\n#endif\n  int k;\n" in cpp          # declarations stay in their region
+    # Fortran include files: dropped / renamed with include_map
+    c = config.load()
+    c["include_map"] = {"err_macros.h": ""}
+    (tmp_path / "inc_mod.F90").write_text('#include "err_macros.h"\nmodule inc_mod\n#include "err_macros.h"\n'
+                                          "contains\n#include \"err_macros.h\"\nsubroutine s()\nend subroutine\n"
+                                          "end module\n")
+    translate([str(tmp_path / "inc_mod.F90")], c, str(tmp_path))
+    assert "err_macros" not in (tmp_path / "inc_mod.hpp").read_text() + (tmp_path / "inc_mod.cpp").read_text()
+    for d in ("-DDEBUG -DWITH_B -DWITH_D -DWITH_X", ""):
+        run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN] + d.split() +
+            ["-include", "project_math.hpp", "-c", "ifd_mod.cpp"], str(tmp_path))
+
+
+def test_preprocessor_lines_around_internal_procedures(tmp_path):
+    (tmp_path / "ce_mod.F90").write_text("""module ce_mod
+  implicit none
+  type :: ce_type
+    real, allocatable :: tmp_u(:)
+  contains
+    procedure :: residual
+  end type
+contains
+  subroutine residual(this, y)
+    class(ce_type), intent(inout) :: this
+    real, intent(in) :: y(:)
+#ifndef USE_COPY
+    this%tmp_u = y
+#else
+    call copyArray(y, this%tmp_u)
+#endif
+
+#ifdef USE_COPY
+  contains
+    pure subroutine copyArray(source, dest)
+      real, intent(in) :: source(:)
+      real, intent(out) :: dest(:)
+      dest = source
+    end subroutine
+#endif
+  end subroutine
+end module ce_mod
+""")
+    translate([str(tmp_path / "ce_mod.F90")], cfg(), str(tmp_path))
+    cpp = (tmp_path / "ce_mod.cpp").read_text()
+    body = cpp[cpp.index("::residual"):]
+    assert body.count("#if") == body.count("#endif") == 2 and "TODO(f2cpp): unbalanced" not in cpp
+    assert "auto copyArray = [&](const vec& source, vec& dest)" in cpp
+    for d in ("-DUSE_COPY", "-DNONE"):
+        run(["g++", "-std=c++17", "-Wall", "-I.", "-I" + SUPPORT, "-I" + EIGEN, d, "-c", "ce_mod.cpp"], str(tmp_path))
+
+
+def test_accessors_of_unknown_types_index_from_zero(tmp_path):
+    (tmp_path / "u_mod.F90").write_text(
+        "module u_mod\nuse sys_mod, only: system_type\ncontains\nsubroutine s(system)\n"
+        "type(system_type), intent(inout) :: system\ninteger :: i\n"
+        "do i = 1, system%n\n  system%x(i) = 2.0 * system%x(i)\nend do\nsystem%x(1) = system%m(2, i)\n"
+        "end subroutine\nend module\n")
+    c = config.load()
+    c["accessors"] = {"system_type": {"x": None, "n": None}}
+    translate([str(tmp_path / "u_mod.F90")], c, str(tmp_path))
+    cpp = (tmp_path / "u_mod.cpp").read_text()
+    assert "system.x()(i - 1) = 2.0 * system.x()(i - 1);" in cpp   # accessor (array, lower bound 1)
+    assert "system.x()(0) = system.m(2, i);" in cpp                  # unknown component: passed through
+
+
+def test_expanded_arguments(tmp_path):
+    (tmp_path / "cfg_mod.F90").write_text("""module cfg_mod
+  use tixi_node, only: ConfigNode_type
+  implicit none
+contains
+  subroutine read_settings(configNode, n, ierr)
+    type(ConfigNode_type), intent(in) :: configNode
+    integer, intent(out) :: n
+    integer, intent(out) :: ierr
+    n = tixiGetIntegerElement(configNode%tixiHandle, trim(configNode%xml_path) // '/n')
+    call read_more(configNode, n, ierr)
+    call external_read(configNode, ierr)
+  end subroutine read_settings
+  subroutine read_more(configNode, n, ierr)
+    type(ConfigNode_type), intent(in) :: configNode
+    integer, intent(inout) :: n
+    integer, intent(out) :: ierr
+    type(ConfigNode_type) :: copy
+    n = n + len_trim(configNode%xml_path)
+    copy = configNode
+  end subroutine read_more
+end module cfg_mod
+""")
+    (tmp_path / "x.toml").write_text('[expand_args]\nConfigNode_type = ["int tixiHandle = tixiHandle", '
+                                     '"const std::string& xpath = xml_path"]\n')
+    c = config.load(str(tmp_path / "x.toml"))
+    translate([str(tmp_path / "cfg_mod.F90")], c, str(tmp_path))
+    hpp, cpp = (tmp_path / "cfg_mod.hpp").read_text(), (tmp_path / "cfg_mod.cpp").read_text()
+    assert "void read_settings(int tixiHandle, const std::string& xpath, int& n);" in hpp
+    assert 'n = tixiGetIntegerElement(tixiHandle, xpath + "/n");' in cpp
+    assert "read_more(tixiHandle, xpath, n);" in cpp and "external_read(tixiHandle, xpath);" in cpp
+    assert "n = n + xpath.size();" in cpp
+    assert "not translated (expanded-argument)" in cpp                 # copy = configNode
+
+
+def test_expanded_variables_in_tests(tmp_path):
+    """module (fixture) and local variables of an expand_args type: its C++ variables"""
+    (tmp_path / "test_cfg_mod.pf").write_text("""module test_cfg_mod
+  use funit
+  use tixi_node, only: ConfigNode_type
+  use cfg_mod, only: read_settings
+  implicit none
+  type(ConfigNode_type) :: configNode
+contains
+  @before
+  subroutine setUp
+    use funit
+    use tixi, only: SUCCESS, tixiCreateDocument
+    @assertEqual(SUCCESS, tixiCreateDocument('root', configNode%tixiHandle))
+    configNode%xml_path = '/root'
+  end subroutine
+
+  @after
+  subroutine tearDown
+    use funit
+    use tixi, only: SUCCESS, tixiCloseDocument
+    @assertEqual(SUCCESS, tixiCloseDocument(configNode%tixiHandle))
+    configNode%tixiHandle = -1
+    configNode%xml_path = ''
+  end subroutine
+
+  @test
+  subroutine test_read
+    type(ConfigNode_type) :: other
+    integer :: n, ierr
+    call read_settings(configNode, n, ierr)
+    other%xml_path = '/other'
+    @assertEqual(0, n)
+  end subroutine
+end module test_cfg_mod
+""")
+    (tmp_path / "cfg_mod.F90").write_text("""module cfg_mod
+  use tixi_node, only: ConfigNode_type
+  implicit none
+contains
+  subroutine read_settings(configNode, n, ierr)
+    type(ConfigNode_type), intent(in) :: configNode
+    integer, intent(out) :: n
+    integer, intent(out) :: ierr
+    n = 0
+    ierr = 0
+  end subroutine read_settings
+end module cfg_mod
+""")
+    (tmp_path / "x.toml").write_text('[expand_args]\nConfigNode_type = ["TixiDocumentHandle tixiHandle = tixiHandle", '
+                                     '"const std::string& xpath = xml_path"]\n')
+    rep = Report()
+    translate([str(tmp_path / "cfg_mod.F90"), str(tmp_path / "test_cfg_mod.pf")],
+              config.load(str(tmp_path / "x.toml")), str(tmp_path), report=rep)
+    cpp = (tmp_path / "test_cfg_mod.cpp").read_text()
+    assert "  TixiDocumentHandle tixiHandle;\n  std::string xpath;\n" in cpp and "ConfigNode" not in cpp
+    assert 'ASSERT_EQ(SUCCESS, tixiCreateDocument("root", tixiHandle));\n  xpath = "/root";' in cpp
+    assert "  tixiHandle = -1;\n  xpath = \"\";" in cpp
+    assert "read_settings(tixiHandle, xpath, n);" in cpp
+    # local: prefixed (the fixture's variables are visible)
+    assert 'TixiDocumentHandle other_tixiHandle{};\n  std::string other_xpath{};' in cpp
+    assert 'other_xpath = "/other";' in cpp
+    assert not any("confignode" in m for f in rep.files.values() for m in f["missing"])
+
+
+def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
+    """A exists in Fortran and C++ (not wrapped), B is wrapped (by hand: -I), C is wrapped now"""
+    w = os.path.join(CORPUS, "wrapped")
+    c = cfg()
+    c["wrap_independent_bases"] = ["a_type"]
+    c["module_headers"] = {"a_mod": "serialization/a.hpp", "b_mod": "b_wrapper.hpp"}
+    translate([], c, str(tmp_path), [os.path.join(w, "a_mod.F90"), os.path.join(w, "b_mod.F90")],
+              wrap=[os.path.join(w, "c_mod.F90")])
+    hpp, b = (tmp_path / "c_mod.hpp").read_text(), (tmp_path / "c_mod_c_binding.F90").read_text()
+    assert "struct project_B;" in hpp and "class C final : public B" in hpp
+    assert "  using B::B;" in hpp and "write_state" not in hpp
+    assert "  use b_mod_c_binding, only: BWrapper_type, B_c" in b and "project_A" not in b + hpp
+    # B wrapped as well: B is the root, its override of A's method is wrapped in B
+    translate([], c, str(tmp_path), [os.path.join(w, "a_mod.F90")],
+              wrap=[os.path.join(w, "b_mod.F90"), os.path.join(w, "c_mod.F90")])
+    bh, bb = (tmp_path / "b_wrapper.hpp").read_text(), (tmp_path / "b_wrapper_c_binding.F90").read_text()
+    assert "class B : public A" in bh and "explicit B(project_B& c) : handle_(&c) {}" in bh
+    assert "  void write_state() const;" in bh and "  friend std::unique_ptr<B> B_private::wrapFromC(project_B& c);\n  project_B* handle_ = nullptr;" in bh
+    assert "  int& someInteger();\n  const int& someInteger() const;" in bh and "scale" not in bh.replace("rescale", "")
+    assert "res = c_loc(obj%someinteger)" in bb
+    assert "  // TODO(f2cpp): no getter for component listOfOther (type(A_type), rank 1, allocatable;" in bh
+    assert "  // TODO(f2cpp): binding version not wrapped: nopass" in bh
+    assert "// TODO(f2cpp): module variable b_count not wrapped" in bh
+    assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
+    assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
+
+
+def test_method_template_declaring_the_object(tmp_path):
+    (tmp_path / "project_solverX.F90").write_text("""module project_solverX
+  use project_config, only: solverX_config_type
+  use tixi_node, only: ConfigNode_type
+  implicit none
+contains
+  subroutine setup(abstractConfig, n, ierr)
+    type(ConfigNode_type), intent(in) :: abstractConfig
+    integer, intent(out) :: n
+    integer, intent(out) :: ierr
+    type(solverX_config_type) :: config
+    n = 0
+    call config%read(abstractConfig, ierr)
+    n = config%size
+  end subroutine setup
+end module project_solverX
+""")
+    (tmp_path / "x.toml").write_text(
+        '[expand_args]\nConfigNode_type = ["int tixiHandle", "const std::string& xml_path"]\n'
+        '[method_templates]\n"*_config_type%read" = "project::config::{module_base}Config_wrapper {self}({0});"\n')
+    translate([str(tmp_path / "project_solverX.F90")], config.load(str(tmp_path / "x.toml")), str(tmp_path))
+    cpp = (tmp_path / "project_solverX.cpp").read_text()
+    assert "  project::config::solverXConfig_wrapper config(tixiHandle, xml_path);\n" in cpp
+    assert "solverX_config config" not in cpp and "n = config.size;" in cpp
+
+
+def test_call_templates_with_glob_patterns(tmp_path):
+    (tmp_path / "g_mod.F90").write_text(
+        "module g_mod\nuse logging, only: log_debug, log_info, log_error\ncontains\nsubroutine s(x)\n"
+        "real :: x\ncall log_debug('a')\ncall log_info('b')\ncall log_error('c', x)\nx = 1.0\n"
+        "end subroutine\nend module\n")
+    c = config.load()
+    c["call_templates"] = {"log_error": "report_error({0}, {1});", "log_*": ""}
+    path = str(tmp_path / "g_mod.F90")
+    report, _ = translate([path], c, str(tmp_path))
+    cpp = (tmp_path / "g_mod.cpp").read_text()
+    assert "void s(scalar& x)\n{\n  report_error(\"c\", x);\n  x = 1.0;\n}" in cpp     # exact name first
+    assert "logging" not in (tmp_path / "g_mod.hpp").read_text() + cpp and not report.files[path]["missing"]
+
+
+def test_unwrapped_type_with_companions(tmp_path):
+    """array of a type around a polymorphic object plus metadata: one std::vector per component"""
+    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([os.path.join(CORPUS, "unwrap", "blocks_mod.F90")], c, str(tmp_path))
+    hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
+    assert "  //! the operator\n  std::vector<std::unique_ptr<Op>> arr;\n  //! first row\n  std::vector<int> arr_offset1;\n" \
+           "  //! first column\n  std::vector<int> arr_offset2;" in hpp
+    assert "class Block;" not in hpp and "class Block\n" not in hpp and "mutable" not in hpp
+    assert "  arr_offset1.resize(n);\n  arr_offset2.resize(n);\n  arr.resize(n);" in cpp
+    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1[i] = 10 * (i + 1);\n" \
+           "    arr_offset2[i] = arr_offset1[i] + 1;" in cpp
+    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2[i]));" in cpp
+    if not shutil.which("g++") or not os.path.isdir(EIGEN):
+        return
+    (tmp_path / "main.cpp").write_text('#include "blocks_mod.hpp"\n#include <cstdio>\nint main()\n{\n'
+                                       '  project::Blocks b;\n  b.init(3);\n  std::printf("%g\\n", b.total());\n}\n')
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "blocks_mod.cpp", "main.cpp",
+         "-o", "m"], str(tmp_path))
+    assert run(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
+
+
+def test_wrapped_constant_of_a_translated_type(tmp_path):
+    """struct constant whose type is in another (translated) module: its C++ class is the copy"""
+    w = os.path.join(CORPUS, "wrapped")
+    translate([os.path.join(w, "offsets_mod.F90")], cfg(wrap_constants={"holder_type": ["offsets"]},
+                                                       exclude=["offsets_type%tag"]), str(tmp_path),
+              wrap=[os.path.join(w, "holder_mod.F90")])
+    hpp, cpp = (tmp_path / "holder_mod.hpp").read_text(), (tmp_path / "holder_mod.cpp").read_text()
+    h, b = (tmp_path / "holder_mod.h").read_text(), (tmp_path / "holder_mod_c_binding.F90").read_text()
+    assert '#include "offsets_mod.hpp"' in hpp and "class Offsets" not in hpp
+    assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
+    assert "typedef struct project_Offsets\n{\n  int row = 0;\n  int col = 0;\n  PROJECT_REAL w[2] = {};\n" \
+           "  PROJECT_REAL* scale = nullptr;\n  int scale_size = 0;\n  int* idx = nullptr;\n  int idx_size = 0;\n" \
+           "  bool mask[2] = {};\n  bool* active = nullptr;\n  int active_size = 0;\n} project_Offsets;" in h
+    # logical arrays: copied into logical(C_BOOL) (the buffer is released in destroy)
+    assert "    this_c%offsets%mask = logical(obj%offsets%mask, C_BOOL)\n" in b
+    assert "      allocate(buf1(size(obj%offsets%active)))\n      buf1 = logical(obj%offsets%active, C_BOOL)\n" in b
+    assert "      call c_f_pointer(this_c%offsets%active, buf1, [this_c%offsets%active_size])\n" \
+           "      deallocate(buf1)" in b
+    assert "  offsets_.active = Eigen::Map<const Eigen::Array<bool, Eigen::Dynamic, 1>>(c.offsets.active, " \
+           "c.offsets.active_size);" in cpp
+    assert "tag" not in h + cpp and "TODO(f2cpp):" not in hpp
+    assert "    if (allocated(obj%offsets%scale)) then\n      this_c%offsets%scale = c_loc(obj%offsets%scale)\n" in b
+    assert "    this_c%offsets%row = obj%offsets%row\n" in b
+    assert "  offsets_.row = c.offsets.row;\n  offsets_.col = c.offsets.col;\n" \
+           "  offsets_.w = Eigen::Map<const vec>(c.offsets.w, 2);\n" \
+           "  offsets_.scale = Eigen::Map<const vec>(c.offsets.scale, c.offsets.scale_size);\n" in cpp
+    assert "  offsets_.idx.assign(c.offsets.idx, c.offsets.idx + c.offsets.idx_size);" in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
+             "holder_mod.cpp"], str(tmp_path))
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+        for src in (os.path.join(w, "offsets_mod.F90"), os.path.join(w, "holder_mod.F90"), "holder_mod_c_binding.F90"):
+            run(ff + [src], str(tmp_path))
+
+
+def test_wrapped_constants_of_unwrapped_companions(tmp_path):
+    """wrapped type with an array of an unwrapped type: the companions obj%arr(:)%offset are gathered into
+    C buffers by setup (const getters only)"""
+    d = str(tmp_path)
+    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n'
+                                     '[wrap_constants]\nBlocks_type = ["arr_offset1", "arr_offset2"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    src = os.path.join(CORPUS, "unwrap", "blocks_mod.F90")
+    translate([], c, d, wrap=[src])
+    hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
+    b, h = (tmp_path / "blocks_mod_c_binding.F90").read_text(), (tmp_path / "blocks_mod.h").read_text()
+    assert "  int* arr_offset1 = nullptr;\n  int arr_offset1_size = 0;\n" in h
+    assert "    if (allocated(obj%arr)) then\n      allocate(buf1(size(obj%arr)))\n      buf1 = obj%arr(:)%offset1\n" \
+           "      if (size(buf1) > 0) this_c%arr_offset1 = c_loc(buf1(1))\n      this_c%arr_offset1_size = size(obj%arr)" in b
+    assert "obj%arr_offset" not in b and "  //! first row\n  Eigen::Map<const Eigen::VectorXi> arr_offset1() const;" in hpp
+    assert "Eigen::Map<Eigen::VectorXi> arr_offset1()" not in hpp
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""program drv
+  use, intrinsic :: iso_c_binding
+  use blocks_mod
+  use blocks_mod_c_binding, only: project_Blocks_setup, project_Blocks_destroy
+  implicit none
+  interface
+    subroutine print_offsets(h) bind(C, name="print_offsets")
+      import :: C_PTR
+      type(C_PTR), value :: h
+    end subroutine
+  end interface
+  type(Blocks_type), target :: bl
+  type(C_PTR) :: h
+  call bl%init(3)
+  h = project_Blocks_setup(bl)
+  call print_offsets(h)
+  call project_Blocks_destroy(h)
+end program drv
+""")
+    (tmp_path / "print.cpp").write_text('#include "blocks_mod.hpp"\n#include "blocks_mod.h"\n#include <cstdio>\n'
+                                        'extern "C" void print_offsets(project_Blocks* h)\n{\n'
+                                        '  auto b = project::Blocks_private::wrapFromC(*h);\n'
+                                        '  for (int i = 0; i < b->arr_offset1().size(); ++i)\n'
+                                        '    std::printf("%d %d\\n", b->arr_offset1()(i), b->arr_offset2()(i));\n}\n')
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    for f in (src, "blocks_mod_c_binding.F90", "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f, o in (("blocks_mod.cpp", "glue.o"), ("print.cpp", "print.o")):
+        run(gxx + [f, "-o", o], d)
+    run(["gfortran", "blocks_mod.o", "blocks_mod_c_binding.o", "drv.o", "glue.o", "print.o", "-lstdc++", "-o", "m"], d)
+    assert run(["./m"], d).split() == ["10", "11", "20", "21", "30", "31"]

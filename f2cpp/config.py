@@ -71,6 +71,10 @@ DEFAULTS = {
     # Fortran type -> component names (["*"]: all components): obj%models -> obj.models();
     # renamed accessor: "coupling_manager=couplingManager"
     "accessors": {},
+    # parts of modules that are not emitted (stay in Fortran only), glob patterns; in the config file
+    # [exclude] module = ["name", ...] (name: module procedure, type, module variable, "type%binding",
+    # "type%component" of wrapped types / struct constants)
+    "exclude": [],
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
     # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing.
@@ -105,6 +109,44 @@ DEFAULTS = {
     # {self}: the object, {0}, {1}: arguments (conversions as in function_map), e.g.
     # "lu_type%solve" = "{1} = {self}.solve({0});"
     "method_templates": {},
+    # wrapper types around a single component (lower case) -> that component: variables of the type
+    # become the component itself, members are `mutable` (e.g. mutablerealarray1d_type = "v":
+    # type(MutableRealArray1d_type) :: tmp; this%tmp%v(i) -> mutable vec tmp; tmp(i - 1))
+    "unwrap_types": {},
+    # wrapped modules (--wrap): C binding conventions
+    # names derived from the (outer) namespace NS if not set: ns_<Class>_<method>, NS_REAL,
+    # NS_SINGLE_PRECISION, module ns_str
+    "c_prefix": None,                         # <ns>_<Class>_<method>
+    "c_class_names": {},
+    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)                      # Fortran type -> class name in C names (shorter names)
+    "c_real": None,                           # C type macro of real: <NS>_REAL
+    "c_single_precision": None,               # <NS>_SINGLE_PRECISION
+    "wrap_string_in": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
+    # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
+    # "procedure") -> {"x": "this%n", "a(2)": "3"}
+    "wrap_sizes": {},
+    # check array sizes in the C++ glue before the call (the C interface has no sizes)
+    "wrap_size_checks": False,
+    # handle of wrapped objects: "struct": pointer to a bind(C) struct <Class>_c whose member p_impl points
+    # to the Fortran object (class hierarchies: to <Root>Wrapper_type); "direct": pointer to the object /
+    # wrapper itself. wrap_direct_handles: root types that use "direct" anyway
+    "wrap_handle": "struct",
+    # base types that exist independently in Fortran and C++ (e.g. a generic serialization base): not
+    # part of the wrapped hierarchy, the next derived type is its root (handle, wrapper type)
+    "wrap_independent_bases": [],
+    "wrap_direct_handles": [],
+    # "constant" components of wrapped root types: members of the C struct of the handle (copied by
+    # project_<Class>_set_constants, called in wrapFromC), only a const getter in C++.
+    # {"mysolver_type": ["n", "diag"]}: real / integer / logical scalars, rank 1 arrays (fixed size:
+    # copied; allocatable / pointer: pointer + size into the Fortran object)
+    "wrap_constants": {},
+    # macro for the DLL export attribute of the bind(C) routines ("" for none):
+    # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
+    "wrap_dllexport": "DLLEXPORT",
+    # dummy arguments of a (not translated) type that are several parameters in C++:
+    # type -> ["C++ type name = component", ...], e.g.
+    # confignode_type = ["int tixiHandle = tixiHandle", "const std::string& xpath = xml_path"]
+    "expand_args": {},
     # abstract interface (lower case) -> C++ type of procedure arguments / components declared
     # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
     "procedure_map": {},
@@ -131,7 +173,10 @@ def load(path=None, **overrides):
         for key, val in user.items():
             if key not in cfg:
                 raise SystemExit(f"f2cpp: unknown config key '{key}' in {p}")
-            if isinstance(cfg[key], dict):
+            if key == "exclude":            # [exclude] module = ["name", ...] or ["module:name", ...]
+                items = [f"{m}:{n}" for m, names in val.items() for n in names] if isinstance(val, dict) else val
+                cfg[key] = cfg[key] + [v for v in items if v not in cfg[key]]
+            elif isinstance(cfg[key], dict):
                 cfg[key].update(val)
             elif isinstance(cfg[key], list) and key in ("extra_includes", "test_includes", "ignore_modules",
                                                          "pre_patches", "namespace_map"):
@@ -142,10 +187,32 @@ def load(path=None, **overrides):
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
+    # "type" = "component" or ["component", "metadata", ...]: the first replaces the variable, the others
+    # are companion variables <variable>_<component>
+    lists = {k.lower(): [v] if isinstance(v, str) else list(v) for k, v in cfg["unwrap_types"].items()}
+    cfg["unwrap_types"] = {k: v[0].lower() for k, v in lists.items()}
+    cfg["unwrap_companions"] = {k: [c.lower() for c in v[1:]] for k, v in lists.items() if len(v) > 1}
+    import re as _re
+    # "C++ type name = component"; without "= component" the component has the parameter's name
+    cfg["expand_args"] = {k.lower(): [(m.group(1), m.group(2), (m.group(3) or m.group(2)).lower()) for m in
+                                      (_re.match(r"^\s*([^=]*[^=\s])\s+(\w+)\s*(?:=\s*(\w+))?\s*$", e) for e in v) if m]
+                          for k, v in cfg["expand_args"].items()}
+    cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
+    cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
+    cfg["c_procedure_names"] = {k.lower(): v for k, v in cfg["c_procedure_names"].items()}
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
+    cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
+    cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
+    cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
+    cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
     for key, val in overrides.items():
         if val is not None:
             cfg[key] = val
+    ns = cfg["namespace"].split("::")[0]
+    cfg["c_prefix"] = cfg["c_prefix"] or ns.lower()
+    cfg["c_real"] = cfg["c_real"] or f"{ns.upper()}_REAL"
+    cfg["c_single_precision"] = cfg["c_single_precision"] or f"{ns.upper()}_SINGLE_PRECISION"
+    cfg["wrap_string_in"] = cfg["wrap_string_in"] or [f"{ns.lower()}_str", "str_array_ptr_to_str"]
     return cfg
