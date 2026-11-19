@@ -93,6 +93,9 @@ class ModuleEmitter:
                     decls[-1][1].append(d)
                 else:
                     decls.append([t, [d]])
+                for cv in (v.companions or {}).values():    # unwrapped type: its other components
+                    ct, cd = self.var_decl(tr, cv, member).split("\0")
+                    decls.append([pre + ct, [cd]])
                 self.report.add("translated", "declaration")
             except Untranslatable as e:
                 self.report.add("untranslated", "declaration:" + e.category)
@@ -468,6 +471,8 @@ class ModuleEmitter:
         merged = None
         simple = len(code) == 1 and cls(st) in ("Assignment_Stmt", "Allocate_Stmt", "Call_Stmt")
         for v in declare if simple else []:
+            if v.companions:                    # declared with its companions before the statement
+                continue
             line, t = new[code[0]], tr.cpp_type(v)
             name = re.escape(v.cname)
             m = re.match(rf"(\s*){name} = (.*);(.*)$", line)
@@ -504,6 +509,9 @@ class ModuleEmitter:
             tr.emit(ind, f"{t} {d};")
             for c in comments.get(v.name, []):
                 tr.out[-1] += "  " + tr.comment_text(c)
+            for cv in (v.companions or {}).values():
+                ct, cd = self.var_decl(tr, cv).split("\0")
+                tr.emit(ind, f"{ct} {cd};")
         inserted = len(tr.out) - n0
         if inserted and tr.last_err_call is not None and tr.last_err_call[0] >= n0:
             tr.last_err_call = (tr.last_err_call[0] + inserted, tr.last_err_call[1])

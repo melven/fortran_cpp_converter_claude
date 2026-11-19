@@ -250,6 +250,14 @@ locals and arguments); `this%tmp%v(i)` → `tmp(i - 1)`, `allocate(this%tmp%v(n)
 `tmp.resize(n)`, `associated(this%tmp%v)` → `tmp.size() > 0`. The wrapper type itself is not
 emitted.
 
+
+Several components: `block_type = ["p", "offset1", "offset2"]`. The first replaces the variable, the
+others (integer / real / logical scalars, e.g. metadata) become companion variables
+`<variable>_<component>` of the same shape. `type(Block_type), allocatable :: arr(:)` with
+`class(Op_type), allocatable :: p` → `std::vector<std::unique_ptr<Op>> arr; std::vector<int>
+arr_offset1, arr_offset2;`, `arr(i)%offset1` → `arr_offset1[i - 1]`, `arr(i)%p%f()` → `arr[i - 1]->f()`,
+`allocate(arr(n))` / `deallocate(arr)` resize / clear all of them. Not for dummy arguments; whole
+elements (`arr(i)` as an object) are not translated.
 ## Arguments that are several parameters in C++
 
 `expand_args` turns a dummy argument of a (not translated) type into several C++ parameters:

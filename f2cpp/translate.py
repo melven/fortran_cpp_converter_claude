@@ -34,6 +34,7 @@ class X:
     neg: object = None       # the negated expression, if it has a simpler form than !(...)
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
+    uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -168,7 +169,8 @@ class Translator:
         if v.base == "type":
             if v.tname not in self.cfg["type_map"] and self.find_type(v.tname) is None:
                 self.report.add("info", "unknown-type:" + v.tname)
-            return self.prog.type_name(v.tname, self.mod)
+            name = self.prog.type_name(v.tname, self.mod)
+            return f"std::unique_ptr<{name}>" if v.elem_uptr and v.rank else name
         return "auto"
 
     def find_iface(self, name):
@@ -610,17 +612,30 @@ class Translator:
             return X(hit[1], 0, base)
         cur = self.expr(parts[0])
         on_this = cur.raw == "this"
+        # holder: the object of the last component, hsubs: its subscripts (companions of unwrapped types)
+        holder, hsubs = None, (items_of(parts[0].items[1]) if cls(parts[0]) == "Part_Ref" else None)
         for p in parts[1:]:
             pname, subs = (p.items[0], items_of(p.items[1])) if cls(p) == "Part_Ref" else (p, None)
             n = lname(pname)
-            if cur.var is not None and cur.var.unwrapped == n and cur.whole:
+            if cur.var is not None and cur.var.companions and n in cur.var.companions and subs is None:
+                cv = cur.var.companions[n]      # arr(i)%offset -> arr_offset[i - 1]
+                x = self.var_ref(cv, self.member(holder, cv.cname, holder.qual)) if holder is not None else \
+                    self.var_ref(cv, cv.cname)
+                cur = self.subscript(x, cv, hsubs) if hsubs is not None else x
+                continue
+            if cur.var is not None and cur.var.unwrapped == n and (cur.whole or cur.uptr_elem):
                 if subs is not None:            # x%v(i) of an unwrapped wrapper type: x(i)
                     cur = self.subscript(cur, cur.var, subs)
                 continue
+            holder, hsubs = cur, subs
             if cur.rank > 0:
                 raise Untranslatable("component-of-array")
             td = self.find_type(cur.tname)
             comp = self.prog.find_component(td, n) if td else None
+            if comp is None and td and subs is not None and p is parts[-1] and self.prog.find_binding(td, n)[1]:
+                code, proc = self.call_on(cur, pname, p.items[1])     # a%b(i)%f(x): function binding
+                cur = self.result_x(code, proc)
+                continue
             if comp is None:
                 if td and any(a.name == n for a in self.prog.ancestors(td)):
                     cur = X(cur.code, 0, "type", cur.prec, tname=n, raw=cur.raw,
@@ -725,6 +740,12 @@ class Translator:
         return "seq", f"Eigen::seq({a}, {b}{c})"
 
     def subscript(self, x, v, subs):
+        res = self.subscript_(x, v, subs)
+        if v.elem_uptr and res.rank == 0:      # unique_ptr element: pointer-like
+            res.raw, res.code, res.prec, res.uptr_elem = res.code, "*" + res.code, P_UNARY, True
+        return res
+
+    def subscript_(self, x, v, subs):
         st = self.storage(v)
         if st in ("scalar", "uptr", "ptr") or len(subs) != v.rank:
             raise Untranslatable("substring" if v.base == "character" else "subscript")
@@ -1028,7 +1049,10 @@ class Translator:
     def method_call(self, desig, args):
         """obj%binding(args) -> (code, procedure or None)"""
         base_node, _, bname = desig.items
-        obj = self.expr(base_node)
+        return self.call_on(self.expr(base_node), bname, args)
+
+    def call_on(self, obj, bname, args):
+        """binding bname of the translated object obj called with args -> (code, procedure or None)"""
         n = lname(bname)
         template = self.method_template(obj.tname, n) if obj.tname else None
         if template is not None:        # method of an existing C++ class with another interface
@@ -1623,9 +1647,12 @@ class Translator:
             v = x.var
             if v is None:
                 raise Untranslatable("allocate-unknown")
-            st = self.storage(v)
+            st = "uptr" if x.uptr_elem else self.storage(v)
             name = x.raw if x.raw is not None else x.code
             dims = self.alloc_dims(shape)
+            for cv in (v.companions or {}).values() if x.whole and not x.uptr_elem else ():
+                cn = self.companion_code(name, v, cv)       # companions of unwrapped types: same shape
+                self.emit(ind, f"{cn}.resize({dims[0]});")
             if st in ("uptr", "ptr"):
                 t = self.prog.type_name(lname(tspec), self.mod) if tspec is not None else self.elem_type(v)
                 self.emit(ind, f"{name} = std::make_unique<{t}>();" if st == "uptr" else f"{name} = new {t}();")
@@ -1651,8 +1678,11 @@ class Translator:
     def s_Deallocate_Stmt(self, node, ind):
         for a in items_of(node.items[0]):
             x = self.ref(a)
-            st = self.storage(x.var) if x.var is not None else None
+            st = "uptr" if x.uptr_elem else self.storage(x.var) if x.var is not None else None
             name = x.raw if x.raw is not None else x.code
+            for cv in (x.var.companions or {}).values() if x.var is not None and not x.uptr_elem else ():
+                cn = self.companion_code(name, x.var, cv)
+                self.emit(ind, f"{cn}.clear();" if self.storage(cv) == "stdvec" else f"{cn}.resize(0);")
             if st == "uptr":
                 self.emit(ind, f"{name}.reset();")
             elif st in ("eigen", "objmat"):
@@ -1663,6 +1693,12 @@ class Translator:
                 self.emit(ind, f"{name}.clear();")
             else:
                 raise Untranslatable("deallocate")
+
+    def companion_code(self, name, v, cv):
+        """code of a companion variable from the code of the unwrapped variable (x.arr -> x.arr_offset)"""
+        if not name.endswith(v.cname):
+            raise Untranslatable("unwrapped-companion")
+        return name[:-len(v.cname)] + cv.cname
 
     def s_Nullify_Stmt(self, node, ind):
         for a in items_of(node.items[1]):

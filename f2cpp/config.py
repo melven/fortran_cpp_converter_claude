@@ -186,7 +186,11 @@ def load(path=None, **overrides):
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
-    cfg["unwrap_types"] = {k.lower(): v.lower() for k, v in cfg["unwrap_types"].items()}
+    # "type" = "component" or ["component", "metadata", ...]: the first replaces the variable, the others
+    # are companion variables <variable>_<component>
+    lists = {k.lower(): [v] if isinstance(v, str) else list(v) for k, v in cfg["unwrap_types"].items()}
+    cfg["unwrap_types"] = {k: v[0].lower() for k, v in lists.items()}
+    cfg["unwrap_companions"] = {k: [c.lower() for c in v[1:]] for k, v in lists.items() if len(v) > 1}
     import re as _re
     # "C++ type name = component"; without "= component" the component has the parameter's name
     cfg["expand_args"] = {k.lower(): [(m.group(1), m.group(2), (m.group(3) or m.group(2)).lower()) for m in

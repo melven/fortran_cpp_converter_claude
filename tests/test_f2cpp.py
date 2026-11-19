@@ -1390,3 +1390,24 @@ def test_call_templates_with_glob_patterns(tmp_path):
     cpp = (tmp_path / "g_mod.cpp").read_text()
     assert "void s(scalar& x)\n{\n  report_error(\"c\", x);\n  x = 1.0;\n}" in cpp     # exact name first
     assert "logging" not in (tmp_path / "g_mod.hpp").read_text() + cpp and not report.files[path]["missing"]
+
+
+def test_unwrapped_type_with_companions(tmp_path):
+    """array of a type around a polymorphic object plus metadata: one std::vector per component"""
+    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([os.path.join(CORPUS, "unwrap", "blocks_mod.F90")], c, str(tmp_path))
+    hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
+    assert "  std::vector<std::unique_ptr<Op>> arr;\n  std::vector<int> arr_offset1;\n  std::vector<int> arr_offset2;" in hpp
+    assert "class Block;" not in hpp and "class Block\n" not in hpp and "mutable" not in hpp
+    assert "  arr_offset1.resize(n);\n  arr_offset2.resize(n);\n  arr.resize(n);" in cpp
+    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1[i] = 10 * (i + 1);\n" \
+           "    arr_offset2[i] = arr_offset1[i] + 1;" in cpp
+    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2[i]));" in cpp
+    if not shutil.which("g++") or not os.path.isdir(EIGEN):
+        return
+    (tmp_path / "main.cpp").write_text('#include "blocks_mod.hpp"\n#include <cstdio>\nint main()\n{\n'
+                                       '  project::Blocks b;\n  b.init(3);\n  std::printf("%g\\n", b.total());\n}\n')
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "blocks_mod.cpp", "main.cpp",
+         "-o", "m"], str(tmp_path))
+    assert run(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
