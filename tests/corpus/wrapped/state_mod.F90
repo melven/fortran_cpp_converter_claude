@@ -21,11 +21,10 @@ contains
     integer, intent(out) :: ierr
     integer :: i
     ierr = 0
-    allocate(checkpoints(this%nCheckpoints))
+    PROJECT_ALLOCATE(checkpoints(this%nCheckpoints), ierr)
     do i = 1, size(checkpoints)
       allocate(checkpoints(i)%p, source=this%x * i)
     end do
-    PROJECT_CHK_ARGUMENT(size(checkpoints) == this%nCheckpoints, ierr)
   end subroutine model_save
 
   subroutine model_restore(this, checkpoints, ierr)

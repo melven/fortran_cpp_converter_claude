@@ -209,7 +209,7 @@ Changes in Fortran after `setup` are not seen. Companion variables of `unwrap_ty
 
 Owned objects: `wrap_owned = ["InternalStateWrapper_type"]` (root type without extensions): the C++
 object owns its Fortran object (destructor `project_<Class>_free`, move-only). Array arguments of the
-type are `std::vector<InternalStateWrapper>`: `intent(out)` (size from a check / `wrap_sizes`) creates
+type are `std::vector<InternalStateWrapper>`: `intent(out)` (size from a check, an `allocate` in the procedure or `wrap_sizes`) creates
 one owned object per element (`allocate(e, source=arr(i))` + `setup`), `intent(in)` copies the objects
 into a Fortran array (`X_private::toC` gives the handles).
 

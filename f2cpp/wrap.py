@@ -177,6 +177,14 @@ class WrapEmitter(ModuleEmitter):
                     if cls(args[0]) == "Name" and lname(args[0]) in p.args:
                         dim = int(str(args[1])) if len(args) > 1 and str(args[1]).isdigit() else None
                         sizes.setdefault((lname(args[0]), dim), b)
+        for st in walk(execs, F.Allocate_Stmt) if execs else []:   # allocate(x(n)) of an allocatable dummy
+            for al in items_of(st.items[1]):
+                if cls(al) != "Allocation" or cls(al.items[0]) != "Name" or lname(al.items[0]) not in p.args:
+                    continue
+                for k, spec in enumerate(items_of(al.items[1])):
+                    lo, hi = spec.items if cls(spec) == "Allocate_Shape_Spec" else (None, spec)
+                    if hi is not None and (lo is None or str(lo).strip() == "1"):
+                        sizes.setdefault((lname(al.items[0]), k + 1), hi)
         for a in p.args:
             v = p.vars.get(a)
             if v is not None and v.rank and all(hi is not None for _, hi in v.dims):
