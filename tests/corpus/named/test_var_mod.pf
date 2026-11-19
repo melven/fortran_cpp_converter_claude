@@ -26,6 +26,9 @@ contains
     params(1) = Variable_type('p', 'kg', rank=0)
     call model%assignVariables(params, params, params, ierr)
     @assertEqual(3, model%n)
+    params(1) = Variable_type('q', 's', rank=0)        ! again: a new variable params_2
+    call model%assignVariables(params, params, params, ierr)
+    @assertEqual(3, model%n)
     deallocate(params)
   end subroutine test_allocatable
 

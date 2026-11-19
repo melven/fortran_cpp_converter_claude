@@ -60,6 +60,7 @@ class Translator:
 
     def __init__(self, program, module, proc, report):
         self.prog, self.mod, self.proc, self.report = program, module, proc, report
+        self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -406,8 +407,9 @@ class Translator:
         if v is not None and v.named_elements:  # the whole array: braced list of the element variables
             k = self.named_count(v)
             lst = self.cfg["named_element_lists"].get(v.tname, "")
-            return X(lst + "{" + ", ".join(f"{v.cname}_{i}" for i in range(1, k + 1)) + "}", 1, "type", 100, v,
-                     v.tname, whole=True)
+            cur = self.named.get(v.name, ({}, 0))[0]
+            return X(lst + "{" + ", ".join(cur.get(i, f"{v.cname}_{i}") for i in range(1, k + 1)) + "}", 1, "type",
+                     100, v, v.tname, whole=True)
         if v is not None and n in self.shift and n not in self.overrides:
             return X(f"{v.cname} + {self.shift[n]}", 0, "integer", P_ADD, v)
         if v is None:
@@ -777,7 +779,18 @@ class Translator:
         """inputs(2) -> X of the variable inputs_2"""
         if len(subs) != 1 or cls(subs[0]) != "Int_Literal_Constant":
             raise Untranslatable("named-elements-index")
-        return X(f"{v.cname}_{int(str(subs[0].items[0]))}", 0, "type", 100, None, v.tname)
+        k = int(str(subs[0].items[0]))
+        return X(self.named.get(v.name, ({}, 0))[0].get(k, f"{v.cname}_{k}"), 0, "type", 100, None, v.tname)
+
+    def new_named_element(self, v, subs):
+        """inputs(k) = ...: a new C++ variable (counted up per array: an element assigned again gets a new one)"""
+        if len(subs) != 1 or cls(subs[0]) != "Int_Literal_Constant":
+            raise Untranslatable("named-elements-index")
+        cur, n = self.named.get(v.name, ({}, 0))
+        name = f"{v.cname}_{n + 1}"
+        cur[int(str(subs[0].items[0]))] = name
+        self.named[v.name] = (cur, n + 1)
+        return name
 
     def subscript(self, x, v, subs):
         if v is not None and v.named_elements:
@@ -1342,7 +1355,7 @@ class Translator:
         if cls(lhs_n) == "Part_Ref" and getattr(self.lookup(lname(lhs_n.items[0])), "named_elements", False):
             # inputs(1) = Variable_type(...) -> Variable inputs_1(...);  (declaration of the element)
             v = self.lookup(lname(lhs_n.items[0]))
-            el = self.named_element(v, items_of(lhs_n.items[1]))
+            self.named_element(v, items_of(lhs_n.items[1]))              # literal index
             if cls(rhs_n) not in ("Structure_Constructor", "Part_Ref", "Function_Reference") or \
                     lname(rhs_n.items[0]) != v.tname:
                 raise Untranslatable("named-elements-assignment")
@@ -1352,7 +1365,7 @@ class Translator:
             if m is None or "({"[")}".index(m.group(4))] != m.group(2):
                 raise Untranslatable("named-elements-assignment")
             cpp_cls = self.cfg["named_elements"].get(v.tname) or t
-            self.emit(ind, f"{cpp_cls} {el.code}({m.group(3)});")
+            self.emit(ind, f"{cpp_cls} {self.new_named_element(v, items_of(lhs_n.items[1]))}({m.group(3)});")
             return
         lhs = self.ref(lhs_n)
         v = lhs.var
@@ -1784,6 +1797,7 @@ class Translator:
         cond = X(self.condition(node.items[0]))
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
+        sub.named = self.named
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
             self.overrides, self.shift, self.loop_local, self.loop_decl
         sub.stmt(node.items[1], 0)

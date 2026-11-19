@@ -1776,6 +1776,8 @@ def test_named_elements(tmp_path):
     # allocatable with a literal allocate: the size; deallocate: nothing
     assert '  Variable params_1("p", "kg", 0);' in cpp and "  model.assignVariables(VariableVector{params_1}, " in cpp
     assert "params.resize" not in cpp and "params.clear" not in cpp
+    # assigned again: counted up, the list uses the current variable
+    assert '  Variable params_2("q", "s", 0);' in cpp and "  model.assignVariables(VariableVector{params_2}, " in cpp
     # constructor function (generic interface with the type's name)
     (tmp_path / "vc_mod.F90").write_text("""module vc_mod
   implicit none
