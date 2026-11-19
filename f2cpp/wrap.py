@@ -217,7 +217,7 @@ class WrapEmitter(ModuleEmitter):
         res = []
         consts = self.cfg["wrap_constants"].get(self.root(t)[1], [])
         for v in t.comps.values():
-            if not comp_public(t, v) or v.name in consts:
+            if not comp_public(t, v) or v.name in consts or self.excluded(f"{t.name}%{v.name}"):
                 continue
             if v.base in ("real", "integer") and v.rank == 0 and not v.has("pointer"):
                 res.append((v, "scalar"))
@@ -244,8 +244,6 @@ class WrapEmitter(ModuleEmitter):
             return None, None, self.component_kind(v)
         if v.rank == 0:
             return ("logical" if v.base == "logical" else "scalar"), None, None
-        if v.base == "logical":
-            return None, None, self.component_kind(v)
         if v.has("allocatable") or v.has("pointer"):
             return "array", None, None
         lo, up = v.dims[0]
@@ -266,6 +264,8 @@ class WrapEmitter(ModuleEmitter):
         if td.parent or td.bindings:
             return None, self.component_kind(v) + " (type with parent / methods)"
         for c in td.comps.values():
+            if self.excluded(f"{td.name}%{c.name}"):
+                continue
             kind, _, why = self.plain_kind(c)
             if kind is None:
                 return None, f"{self.component_kind(v)}: component {c.cname}: {why}"
@@ -318,28 +318,39 @@ class WrapEmitter(ModuleEmitter):
                 f.append(f"{self.f_type(v)} :: {n} = " + (".false." if kind == "logical" else "0"))
             elif kind == "fixed":
                 c.append(f"{ct} {n}[{extra}];")
-                f.append(f"{self.f_type(v)} :: {n}({extra}) = 0")
+                f.append(f"{self.f_type(v)} :: {n}({extra}) = " + (".false." if v.base == "logical" else "0"))
             else:
                 c += [f"{ct}* {n};", f"int {n}_size;"]
                 f += [f"type(C_PTR) :: {n} = C_NULL_PTR", f"integer(C_INT) :: {n}_size = 0"]
         return c, f
 
     def plain_consts(self, td):
-        return [(c, self.plain_kind(c)[0], self.plain_kind(c)[1]) for c in td.comps.values()]
+        return [(c, self.plain_kind(c)[0], self.plain_kind(c)[1]) for c in td.comps.values()
+                if not self.excluded(f"{td.name}%{c.name}")]
 
-    def copy_constants(self, consts, to, frm):
-        """Fortran statements: constants of the object (frm) into the C struct (to)"""
+    def copy_constants(self, consts, to, frm, decls, frees):
+        """Fortran statements: constants of the object (frm) into the C struct (to); logical arrays are
+        copied into logical(C_BOOL) buffers (decls: their pointers, frees: statements of destroy)"""
         body = []
         for v, kind, extra in consts:
             n, m = f"{to}%{v.cname}", f"{frm}%{v.name}"
             if kind == "struct":
-                body += self.copy_constants(self.plain_consts(extra), n, m)
-            elif kind == "logical":
+                body += self.copy_constants(self.plain_consts(extra), n, m, decls, frees)
+            elif kind == "logical" or kind == "fixed" and v.base == "logical":
                 body.append(f"{n} = logical({m}, C_BOOL)")
             elif kind == "array":
                 test = "associated" if v.has("pointer") else "allocated"
-                body += [f"{n} = C_NULL_PTR", f"{n}_size = 0", f"if ({test}({m})) then",
-                         f"  {n} = c_loc({m})", f"  {n}_size = size({m})", "end if"]
+                body += [f"{n} = C_NULL_PTR", f"{n}_size = 0", f"if ({test}({m})) then"]
+                if v.base == "logical":         # Fortran logical is not C bool: a copy
+                    buf = f"bools{len(decls) + 1}"
+                    decls.append(f"logical(C_BOOL), pointer :: {buf}(:)")
+                    body += [f"  allocate({buf}(size({m})))", f"  {buf} = logical({m}, C_BOOL)",
+                             f"  if (size({buf}) > 0) {n} = c_loc({buf}(1))"]
+                    frees += [f"if (c_associated({n})) then", f"  call c_f_pointer({n}, {buf}, [{n}_size])",
+                              f"  deallocate({buf})", "end if"]
+                else:
+                    body.append(f"  {n} = c_loc({m})")
+                body += [f"  {n}_size = size({m})", "end if"]
             else:
                 body.append(f"{n} = {m}")
         return body
@@ -350,21 +361,28 @@ class WrapEmitter(ModuleEmitter):
         setup, destroy = self.c_name(t, "setup"), self.c_name(t, "destroy")
         ft, poly, struct = t.spelling or t.name, self.poly(t), self.struct_handle(t)
         sty, wty = self.struct_type(t), self.wrapper_type(t) if self.poly(t) else None
+        own = ([f"type({sty}), pointer :: this_c"] if struct else []) + \
+            ([f"type({wty}), pointer :: wrapper"] if poly else [])
+        bufs, frees = [], []
+        copy = self.copy_constants(consts, "this_c", "obj", bufs, frees) if struct else []
         fb += ["", f"  !> handle of obj for C / C++ (obj must outlive it; release with {destroy})",
                f"  function {setup}(obj) result(handle)",
-               f"    {'class' if poly else 'type'}({ft}), target :: obj", "    type(C_PTR) :: handle"] +             ([f"    type({sty}), pointer :: this_c"] if struct else []) +             ([f"    type({wty}), pointer :: wrapper"] if poly else []) + [""]
+               f"    {'class' if poly else 'type'}({ft}), target :: obj", "    type(C_PTR) :: handle"] + \
+            [f"    {d}" for d in own + bufs] + [""]
         p = "c_loc(wrapper)" if poly else "c_loc(obj)"
         if poly:
             fb += ["    allocate(wrapper)", "    wrapper%ptr => obj"]
         if struct:
-            fb += ["    allocate(this_c)", f"    this_c%p_impl = {p}"] +                 [f"    {x}" for x in self.copy_constants(consts, "this_c", "obj")] + ["    handle = c_loc(this_c)"]
+            fb += ["    allocate(this_c)", f"    this_c%p_impl = {p}"] + [f"    {x}" for x in copy] + \
+                ["    handle = c_loc(this_c)"]
         else:
             fb.append(f"    handle = {p}")
         fb += [f"  end function {setup}", "",
                f"  !> releases the handle of {setup} (not the object)", f"  subroutine {destroy}(handle)",
-               "    type(C_PTR), intent(inout) :: handle"] +             ([f"    type({sty}), pointer :: this_c"] if struct else []) +             ([f"    type({wty}), pointer :: wrapper"] if poly else []) + ["", "    if (.not. c_associated(handle)) return"]
+               "    type(C_PTR), intent(inout) :: handle"] + [f"    {d}" for d in own + bufs] + \
+            ["", "    if (.not. c_associated(handle)) return"]
         if struct:
-            fb.append("    call c_f_pointer(handle, this_c)")
+            fb += ["    call c_f_pointer(handle, this_c)"] + [f"    {x}" for x in frees]
         if poly:
             fb += [f"    call c_f_pointer({'this_c%p_impl' if struct else 'handle'}, wrapper)", "    deallocate(wrapper)"]
         if struct:

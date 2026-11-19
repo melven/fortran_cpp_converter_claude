@@ -1416,14 +1416,24 @@ def test_unwrapped_type_with_companions(tmp_path):
 def test_wrapped_constant_of_a_translated_type(tmp_path):
     """struct constant whose type is in another (translated) module: its C++ class is the copy"""
     w = os.path.join(CORPUS, "wrapped")
-    translate([os.path.join(w, "offsets_mod.F90")], cfg(wrap_constants={"holder_type": ["offsets"]}), str(tmp_path),
+    translate([os.path.join(w, "offsets_mod.F90")], cfg(wrap_constants={"holder_type": ["offsets"]},
+                                                       exclude=["offsets_type%tag"]), str(tmp_path),
               wrap=[os.path.join(w, "holder_mod.F90")])
     hpp, cpp = (tmp_path / "holder_mod.hpp").read_text(), (tmp_path / "holder_mod.cpp").read_text()
     h, b = (tmp_path / "holder_mod.h").read_text(), (tmp_path / "holder_mod_c_binding.F90").read_text()
     assert '#include "offsets_mod.hpp"' in hpp and "class Offsets" not in hpp
     assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
     assert "typedef struct project_Offsets {\nint row;\nint col;\nPROJECT_REAL w[2];\nPROJECT_REAL* scale;\n" \
-           "int scale_size;\nint* idx;\nint idx_size;\n} project_Offsets;" in h
+           "int scale_size;\nint* idx;\nint idx_size;\nbool mask[2];\nbool* active;\nint active_size;\n" \
+           "} project_Offsets;" in h
+    # logical arrays: copied into logical(C_BOOL) (the buffer is released in destroy)
+    assert "    this_c%offsets%mask = logical(obj%offsets%mask, C_BOOL)\n" in b
+    assert "      allocate(bools1(size(obj%offsets%active)))\n      bools1 = logical(obj%offsets%active, C_BOOL)\n" in b
+    assert "      call c_f_pointer(this_c%offsets%active, bools1, [this_c%offsets%active_size])\n" \
+           "      deallocate(bools1)" in b
+    assert "  offsets_.active = Eigen::Map<const Eigen::Array<bool, Eigen::Dynamic, 1>>(c.offsets.active, " \
+           "c.offsets.active_size);" in cpp
+    assert "tag" not in h + cpp and "TODO(f2cpp):" not in hpp
     assert "    if (allocated(obj%offsets%scale)) then\n      this_c%offsets%scale = c_loc(obj%offsets%scale)\n" in b
     assert "    this_c%offsets%row = obj%offsets%row\n" in b
     assert "  offsets_.row = c.offsets.row;\n  offsets_.col = c.offsets.col;\n" \

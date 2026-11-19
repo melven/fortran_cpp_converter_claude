@@ -24,7 +24,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 | `-c TOML` | configuration, see `f2cpp/config.py` for all keys and defaults; may be repeated, later files take precedence (tables and include lists are merged) |
 | `-n NS` | C++ namespace |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
-| `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`; glob patterns, e.g. `io_mod:*_records`); in the config file `[exclude]` with `module = ["name", ...]` (`"*" = [...]` for all modules). Applies to translated and wrapped modules |
+| `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`, `type%component` of wrapped types / struct constants; glob patterns, e.g. `io_mod:*_records`); in the config file `[exclude]` with `module = ["name", ...]` (`"*" = [...]` for all modules). Applies to translated and wrapped modules |
 | `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
 
 Pass all modules that depend on each other in one call (or via `-I`): types, ranks and
@@ -201,7 +201,7 @@ struct handle): members of the C struct, filled by `setup`, only const getters i
 | `integer :: n` | `int n;` | `int n() const` (reads the struct) |
 | `real, allocatable :: diag(:)` | `PROJECT_REAL* diag; int diag_size;` (into the Fortran object) | `Eigen::Map<const vec> diag() const` |
 | `real :: weights(3)` | `PROJECT_REAL weights[3];` | `Eigen::Map<const vec> weights() const` |
-| `type(SolverParams_type) :: params` (plain scalars, rank-1 fixed-size / allocatable arrays) | `project_SolverParams params;` | C++ copy of the class `SolverParams` (type of another module: its translation, give the module as input or with `-I`), member `params_` filled in the constructor, `const SolverParams& params() const` |
+| `type(SolverParams_type) :: params` (plain scalars, rank-1 fixed-size / allocatable arrays; `logical` arrays are copied to `bool` in `setup`, buffer freed in `destroy`) | `project_SolverParams params;` | C++ copy of the class `SolverParams` (type of another module: its translation, give the module as input or with `-I`), member `params_` filled in the constructor, `const SolverParams& params() const` |
 
 Changes in Fortran after `setup` are not seen.
 

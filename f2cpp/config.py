@@ -72,7 +72,8 @@ DEFAULTS = {
     # renamed accessor: "coupling_manager=couplingManager"
     "accessors": {},
     # parts of modules that are not emitted (stay in Fortran only), glob patterns; in the config file
-    # [exclude] module = ["name", ...] (name: module procedure, type, module variable, "type%binding")
+    # [exclude] module = ["name", ...] (name: module procedure, type, module variable, "type%binding",
+    # "type%component" of wrapped types / struct constants)
     "exclude": [],
     "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
                        "ieee_arithmetic"],
