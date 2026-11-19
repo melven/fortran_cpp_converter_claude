@@ -256,6 +256,13 @@ parameters. A template that declares the object (`"Type {self}(...);"`) replaces
 an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
 (`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
 
+## Objects that are neither copyable nor movable
+
+`[named_elements] variable_type = ""` (or the C++ class name): local arrays of the type become one
+variable per element. `inputs(1) = Variable_type('a', '', rank=0)` → `Variable inputs_1("a", "", 0);`,
+`inputs(2)%rank` → `inputs_2.rank`, the whole array as argument → `{inputs_1, inputs_2}` (`{}` for
+size 0). Only literal sizes and indices; other uses (loops, copies, `size`, reassignment) are TODOs.
+
 ## Wrapper types
 
 `unwrap_types` replaces a wrapper type around a single component by that component:

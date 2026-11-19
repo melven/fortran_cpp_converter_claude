@@ -1750,3 +1750,18 @@ end module lng_mod
     if shutil.which("gfortran"):
         run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS,
              str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))
+
+
+def test_named_elements(tmp_path):
+    """non-copyable / non-movable C++ objects: local arrays become one named variable per element"""
+    (tmp_path / "x.toml").write_text('[named_elements]\nVariable_type = ""\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    n = os.path.join(CORPUS, "named")
+    translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
+    cpp = (tmp_path / "test_var_mod.cpp").read_text()
+    assert '  Variable inputs_1("firstInputOutput_rank0", "", 0);' in cpp
+    assert '  Variable outputs_1("thirdInputOutput_rank3", "", 2, ' in cpp
+    assert "  model.assignVariables({}, {inputs_1, inputs_2}, {outputs_1});" in cpp
+    assert "  ASSERT_EQ(1, inputs_2.rank);" in cpp
+    assert "std::vector<Variable>" not in cpp
+    assert "not translated (named-elements-index)" in cpp           # vars(i) = ... in a loop

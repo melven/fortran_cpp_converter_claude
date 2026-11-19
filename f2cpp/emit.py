@@ -73,8 +73,8 @@ class ModuleEmitter:
         decls = []          # [type, [declarators]]: entities of equal type share one statement
         for n in names:
             v = vars_[n]
-            if n in skip or v.alias or (n == tr.err and v.base == "integer" and v.rank == 0):
-                continue
+            if n in skip or v.alias or (n == tr.err and v.base == "integer" and v.rank == 0) or v.named_elements:
+                continue                        # named_elements: declared at the assignments of the elements
             if not member and tr.expanded_variables(v):     # expand_args type: its variables
                 decls += [[prefix + d.rsplit(" ", 1)[0], [d.rsplit(" ", 1)[1] + ("{}" if tr.proc else "")]]
                           for d in tr.expanded_variables(v)]
@@ -549,6 +549,8 @@ class ModuleEmitter:
                 merged = v
                 break
         for v in declare:
+            if v.named_elements:
+                continue
             if v is merged:
                 for c in comments.get(v.name, []):
                     new[code[0]] += "  " + tr.comment_text(c)

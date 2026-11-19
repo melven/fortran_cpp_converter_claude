@@ -403,6 +403,10 @@ class Translator:
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
         v = self.lookup(n)
+        if v is not None and v.named_elements:  # the whole array: braced list of the element variables
+            k = self.named_count(v)
+            return X("{" + ", ".join(f"{v.cname}_{i}" for i in range(1, k + 1)) + "}", 1, "type", 100, v,
+                     v.tname, whole=True)
         if v is not None and n in self.shift and n not in self.overrides:
             return X(f"{v.cname} + {self.shift[n]}", 0, "integer", P_ADD, v)
         if v is None:
@@ -757,7 +761,22 @@ class Translator:
         c = f", {self.expr(step).code}" if step is not None else ""
         return "seq", f"Eigen::seq({a}, {b}{c})"
 
+    def named_count(self, v):
+        """number of elements of a named_elements array (literal size, lower bound 1)"""
+        lo, hi = v.dims[0] if v.dims else (None, None)
+        if hi is None or not str(hi).strip().isdigit() or (lo is not None and str(lo).strip() != "1"):
+            raise Untranslatable("named-elements-size")
+        return int(str(hi).strip())
+
+    def named_element(self, v, subs):
+        """inputs(2) -> X of the variable inputs_2"""
+        if len(subs) != 1 or cls(subs[0]) != "Int_Literal_Constant":
+            raise Untranslatable("named-elements-index")
+        return X(f"{v.cname}_{int(str(subs[0].items[0]))}", 0, "type", 100, None, v.tname)
+
     def subscript(self, x, v, subs):
+        if v is not None and v.named_elements:
+            return self.named_element(v, subs)
         res = self.subscript_(x, v, subs)
         if v.elem_uptr and res.rank == 0:      # unique_ptr element: pointer-like
             res.raw, res.code, res.prec, res.uptr_elem = res.code, "*" + res.code, P_UNARY, True
@@ -1315,6 +1334,20 @@ class Translator:
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
+        if cls(lhs_n) == "Part_Ref" and getattr(self.lookup(lname(lhs_n.items[0])), "named_elements", False):
+            # inputs(1) = Variable_type(...) -> Variable inputs_1(...);  (declaration of the element)
+            v = self.lookup(lname(lhs_n.items[0]))
+            el = self.named_element(v, items_of(lhs_n.items[1]))
+            if cls(rhs_n) not in ("Structure_Constructor", "Part_Ref", "Function_Reference") or \
+                    lname(rhs_n.items[0]) != v.tname:
+                raise Untranslatable("named-elements-assignment")
+            rhs = self.expr(rhs_n)
+            t = self.elem_type(v)
+            if not (rhs.code.startswith(t + "{") and rhs.code.endswith("}")):
+                raise Untranslatable("named-elements-assignment")
+            cpp_cls = self.cfg["named_elements"].get(v.tname) or t
+            self.emit(ind, f"{cpp_cls} {el.code}({rhs.code[len(t) + 1:-1]});")
+            return
         lhs = self.ref(lhs_n)
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None

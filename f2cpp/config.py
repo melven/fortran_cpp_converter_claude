@@ -143,6 +143,10 @@ DEFAULTS = {
     # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
     # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
     "wrap_owned": [],
+    # types whose C++ objects are neither copyable nor movable: local arrays of them become one named
+    # variable per element (inputs(1) = T(...) -> Cls inputs_1(...); inputs -> {inputs_1, inputs_2});
+    # type -> C++ class ("" = the type's class name)
+    "named_elements": {},
     # C++ member holding the C handle per root type (derived classes use their root's), default handle_:
     # {"model_type": "model_c_"} (names of hand-written base classes)
     "wrap_handle_member": {},
@@ -216,6 +220,7 @@ def load(path=None, **overrides):
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
+    cfg["named_elements"] = {k.lower(): v for k, v in cfg["named_elements"].items()}
     cfg["wrap_handle_member"] = {k.lower(): v for k, v in cfg["wrap_handle_member"].items()}
     cfg["wrap_listeners"] = [t.lower() for t in cfg["wrap_listeners"]]
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]

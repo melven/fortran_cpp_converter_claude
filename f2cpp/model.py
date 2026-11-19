@@ -59,6 +59,7 @@ class Var:
     companions: dict = None      # unwrapped variable: other components -> companion variables <name>_<comp>
     elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
     companion_of: tuple = None   # companion variable: (unwrapped variable, component) in Fortran
+    named_elements: bool = False # local array of a named_elements type: one C++ variable per element
     unwrapped_type: str = None   # unwrapped variable / companion: the original (wrapper) type
     mutable: bool = False        # component modified through intent(in) objects (was an owned array pointer)
     alias: bool = False          # local pointer associated exactly once -> C++ reference
@@ -576,6 +577,7 @@ class Program:
                             not [a for a in p.args if a not in (p.pass_arg, err)]:
                         p.is_dtor, p.bind_name = True, "~"
         self.unwrap_types()
+        self.mark_named_elements()
         for m in self.modules.values():
             for t in m.types.values():
                 p = self.find_type(t.parent, m) if t.parent else None
@@ -632,6 +634,22 @@ class Program:
                         added.append((scope, cv))
         for scope, cv in added:                 # companions: visible like the variable
             scope.setdefault(cv.name, cv)
+
+    def mark_named_elements(self):
+        """local rank-1 arrays of named_elements types (not dummies, not components)"""
+        types = self.cfg.get("named_elements", {})
+        if not types:
+            return
+
+        def procs(ps):
+            for p in ps:
+                yield p
+                yield from procs(p.internal.values())
+        for m in self.modules.values():
+            for p in procs(m.procs.values()):
+                for v in p.vars.values():
+                    if v.base == "type" and v.tname in types and v.rank == 1 and not v.is_dummy:
+                        v.named_elements = True
 
     def file_stem(self, modname):
         """output file name (without extension) of a module: module name, or the name of its
