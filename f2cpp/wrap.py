@@ -505,8 +505,9 @@ class WrapEmitter(ModuleEmitter):
                 if present:                     # pointer to the data or disassociated (= absent)
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
-                    decls.append(f"{self.f_type(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)}) => null()")
-                    pre.append(f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])")
+                    # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
+                    decls.append(f"{self.f_type(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)})")
+                    pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
                 elif v.rank == 1:
                     decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")

@@ -15,4 +15,5 @@ program ref_driver
   print '(3es24.15)', real(s%params%maxit), s%params%tol, s%params%w(2)
   print '(es24.15)', s%weighted(x)
   print '(4es24.15)', s%weighted(x, y, [1.0, 0.5, 2.0]), y
+  print '(es24.15)', s%weighted(x)
 end program ref_driver

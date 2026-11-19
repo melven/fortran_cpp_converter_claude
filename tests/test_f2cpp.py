@@ -921,16 +921,16 @@ def test_wrapped_module_end_to_end(tmp_path):
     run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
          "ref_user.o", "-o", "fdrv"], d)
     ref = run(["./fdrv"], d).split()
-    vals = " ".join(res[:7]).split()
-    assert len(vals) == len(ref) == 16
+    vals = " ".join(res[:8]).split()
+    assert len(vals) == len(ref) == 17
     for a, b in zip(vals, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
-    assert res[7] == "project_MySolver_apply: size of x"
+    assert res[8] == "project_MySolver_apply: size of x"
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in h
-    assert "    type(C_PTR), value :: r\n    real(C_REAL), pointer :: r_f(:) => null()\n" in binding
-    assert "    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
+    assert "    type(C_PTR), value :: r\n    real(C_REAL), pointer :: r_f(:)\n" in binding and "=> null()\n    real(C" not in binding
+    assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
     assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
     assert "  if (r) r->get().resize(n());\n" in cpp
     assert "project_MySolver_weighted(handle_, x.data(), r ? r->get().data() : nullptr, " \
