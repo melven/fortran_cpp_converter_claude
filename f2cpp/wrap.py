@@ -598,7 +598,8 @@ class WrapEmitter(ModuleEmitter):
                 decls.append(f"type(C_PTR), value :: {a}")
                 decls.append(f"character(len=:), allocatable :: {a}_f")
                 c_args.append(f"const char* {a}")
-                pre.append(f"if (c_associated({a})) {a}_f = {self.cfg['wrap_string_in'][1]}({a})")
+                # sourced allocation: no reallocation on assignment (-fno-realloc-lhs)
+                pre.append(f"if (c_associated({a})) allocate({a}_f, source={self.cfg['wrap_string_in'][1]}({a}))")
                 call.append(f"{a}={a}_f")
                 glue.append(f"{v.cname} ? {v.cname}->c_str() : nullptr")
             elif kind == "listener":           # the C++ listener's Fortran bridge object; user: this C++ object
@@ -668,7 +669,8 @@ class WrapEmitter(ModuleEmitter):
                     decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer :: {a}_c({colons})",
                               f"logical, allocatable :: {a}_f({colons})"]
                     pre += [f"if (c_associated({a})) then", f"  call c_f_pointer({a}, {a}_c, [{shape}])",
-                            f"  allocate({a}_f({shape}))" if intent == "out" else f"  {a}_f = {a}_c", "end if"]
+                            f"  allocate({a}_f({shape}))"] + \
+                        ([] if intent == "out" else [f"  {a}_f({colons}) = {a}_c"]) + ["end if"]   # no realloc-lhs
                     if intent != "in":
                         post.append(f"if (allocated({a}_f)) {a}_c = logical({a}_f, C_BOOL)")
                     call.append(f"{a}={a}_f")
@@ -944,7 +946,7 @@ class WrapEmitter(ModuleEmitter):
                 c_dummies += [f"{a}_p", f"{a}_n"]
                 c_params += [f"const {ct}* {a}", f"int {a}_n"]
                 f_decls += [f"type(C_PTR), value :: {a}_p", f"integer(C_INT), value :: {a}_n"]
-                body += [f"allocate({a}_c(size({a})))", f"{a}_c = {a}", f"{a}_p = C_NULL_PTR",
+                body += [f"allocate({a}_c(size({a})))", f"{a}_c(:) = {a}", f"{a}_p = C_NULL_PTR",
                          f"if (size({a}_c) > 0) {a}_p = c_loc({a}_c(1))", f"{a}_n = size({a}_c)"]
                 et = self.tr(iface).eigen_type(v, 1)
                 cpp_args.append(("", "", f"{ns}::{et}(Eigen::Map<const {ns}::{et}>({a}, {a}_n))"

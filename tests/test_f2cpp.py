@@ -906,17 +906,17 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "int project_tagged_length(const char* msg, const char* tag);" in h
     assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
     assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
-    assert "    if (c_associated(tag)) tag_f = str_array_ptr_to_str(tag)\n" \
+    assert "    if (c_associated(tag)) allocate(tag_f, source=str_array_ptr_to_str(tag))\n" \
            "    res = tagged_length(msg=str_array_ptr_to_str(msg), tag=tag_f)" in binding
     user = read((d,), "solver_user_mod.cpp")
     assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
     os.makedirs(os.path.join(d, "f"))
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
     for src, obj in ((os.path.join(SUPPORT, "project_str.F90"), "f/str.o"),
                      (os.path.join(w, "mysolver_mod.F90"), "f/mysolver.o"),
                      ("mysolver_mod_c_binding.F90", "f/binding.o"),
                      (os.path.join(SUPPORT, "mysolver_factory.F90"), "f/factory.o")):
-        run(ff + [src, "-o", obj], d)
+        run(ff + [src, "-o", obj] + (["-Werror=realloc-lhs-all"] if "binding" in src else []), d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for src, obj in (("mysolver_mod.cpp", "glue.o"), ("solver_user_mod.cpp", "user.o"),
                      (os.path.join(SUPPORT, "wrap_driver.cpp"), "drv.o")):
@@ -940,7 +940,7 @@ def test_wrapped_module_end_to_end(tmp_path):
            "const bool* modelmask, int modelmask_n1);" in h
     assert "    logical(C_BOOL), pointer :: modelmask_c(:)\n    logical, allocatable :: modelmask_f(:)\n" in binding
     assert "    if (c_associated(modelmask)) then\n      call c_f_pointer(modelmask, modelmask_c, [modelmask_n1])\n" \
-           "      modelmask_f = modelmask_c\n    end if\n" in binding
+           "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
     assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
            "static_cast<int>(modelMask.size()) : 0);" in cpp
     assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x=x(1:obj%n), pos=pos_f)\n" \
@@ -1063,7 +1063,7 @@ def test_wrapped_class_hierarchy(tmp_path):
     assert read((d,), "body_mod.cpp").startswith("//! @file body_mod.cpp\n//! @brief C++ wrapper: Abstract bodies")
     assert bh.startswith("//! @file body_mod.hpp\n//! @brief Abstract bodies")
     os.makedirs(os.path.join(d, "f"))
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
     objs = []
     for src in (os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90"), "body_mod_c_binding.F90",
                 "sphere_mod_c_binding.F90", os.path.join(SUPPORT, "body_factory.F90")):
@@ -1474,7 +1474,7 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
              "holder_mod.cpp"], str(tmp_path))
     if shutil.which("gfortran"):
-        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
         for src in (os.path.join(w, "offsets_mod.F90"), os.path.join(w, "holder_mod.F90"), "holder_mod_c_binding.F90"):
             run(ff + [src], str(tmp_path))
 
@@ -1526,7 +1526,7 @@ end program drv
                                         '  for (int i = 0; i < b->arr_offset1().size(); ++i)\n'
                                         '    std::printf("%d %d\\n", b->arr_offset1()(i), b->arr_offset2()(i));\n'
                                         '  std::printf("%d\\n", project::sum_offsets(*b));\n}\n')
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "blocks_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
@@ -1624,7 +1624,7 @@ end program drv
         '  m->x() = 7.0;\n'
         '  m->restore(moved);                          // last checkpoint: 2 * 1.5\n'
         '}\n')
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "state_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
@@ -1699,7 +1699,7 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
   t2->set_listener(std::nullopt);
 }
 """)
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "listen_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
@@ -1748,7 +1748,7 @@ end module lng_mod
     names = re.findall(r"^\s*(?:end )?(?:subroutine|function)\s+(\w+)", b, flags=re.M)
     assert names and max(len(n) for n in names) <= 63
     if shutil.which("gfortran"):
-        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS,
+        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS,
              str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))
 
 
