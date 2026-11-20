@@ -20,12 +20,13 @@ module listen_mod
 
   abstract interface
     !> the state of thing changed
-    subroutine state_changed_iface(this, thing, old, history)
+    subroutine state_changed_iface(this, thing, old, history, ierr)
       import :: AbstractListener_type, Thing_type
       class(AbstractListener_type), intent(inout) :: this
       class(Thing_type), intent(in) :: thing      !< the changed thing
       real, intent(in) :: old                     !< previous value
       real, intent(in) :: history(:)              !< old and new value
+      integer, intent(out) :: ierr
     end subroutine state_changed_iface
   end interface
 
@@ -41,12 +42,14 @@ contains
     end if
   end subroutine thing_set_listener
 
-  subroutine thing_set_value(this, v)
+  subroutine thing_set_value(this, v, ierr)
     class(Thing_type), intent(inout) :: this
     real, intent(in) :: v
+    integer, intent(out) :: ierr
     real :: old
+    ierr = 0
     old = this%value
     this%value = v
-    if (associated(this%listener)) call this%listener%state_changed(this, old, [old, v])
+    if (associated(this%listener)) call this%listener%state_changed(this, old, [old, v], ierr)
   end subroutine thing_set_value
 end module listen_mod

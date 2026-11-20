@@ -903,12 +903,14 @@ class WrapEmitter(ModuleEmitter):
         specs.append(f"    procedure :: {bd.spelling} => {proc}")
         decl_nodes, c_dummies, c_params, f_decls, body, after, cpp_args = [], [], [], [], [], [], []
         todo = None
+        err = self.tr(iface).err
+        has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
         for a in iface.args:
             v = iface.vars[a]
             if v.node is not None and v.node not in decl_nodes:
                 decl_nodes.append(v.node)
-            if a == iface.pass_arg:
-                continue
+            if a == iface.pass_arg or (has_err and a == err):
+                continue                        # error flag: result of the C++ call (exception -> -1)
             if v.intent != "in":
                 todo = f"argument {v.cname}: only intent(in)"
                 continue
@@ -965,13 +967,15 @@ class WrapEmitter(ModuleEmitter):
             out.append(f"    {text}")
         if todo:
             return out + [f'    error stop "{cb}: {todo}"', f"  end subroutine {proc}"]
-        out += ["    interface", f"      subroutine cb(cpp, {', '.join(c_dummies)}) bind(C, name=\"{cb}\")",
-                "        import", "        type(C_PTR), value :: cpp"] + [f"        {d}" for d in f_decls] + \
-            ["      end subroutine cb", "    end interface"]
+        kw = "function" if has_err else "subroutine"
+        out += ["    interface", f"      {kw} cb(cpp, {', '.join(c_dummies)})" + (" result(status)" if has_err else "") +
+                f" bind(C, name=\"{cb}\")", "        import", "        type(C_PTR), value :: cpp"] + \
+            [f"        {d}" for d in f_decls] + (["        integer(C_INT) :: status"] if has_err else []) + \
+            [f"      end {kw} cb", "    end interface"]
         locals_ = []
         for a in iface.args:
             v = iface.vars[a]
-            if a == iface.pass_arg:
+            if a == iface.pass_arg or (has_err and a == err):
                 continue
             if v.base == "type":
                 locals_.append(f"type(C_PTR) :: {a}_cpp, {a}_h")
@@ -981,20 +985,24 @@ class WrapEmitter(ModuleEmitter):
             else:
                 locals_.append(f"{self.f_type(v)} :: {a}_c")
         out += [f"    {d}" for d in locals_] + [""] + [f"    {x}" for x in body] + \
-            [f"    call cb(this%cpp, {', '.join(c_dummies)})".replace("this%", f"{iface.pass_arg}%")] + \
+            [(f"    {err} = cb(this%cpp, {', '.join(c_dummies)})" if has_err else
+              f"    call cb(this%cpp, {', '.join(c_dummies)})").replace("this%", f"{iface.pass_arg}%")] + \
             [f"    {x}" for x in after] + [f"  end subroutine {proc}"]
         out = [x.replace("this%owner", f"{iface.pass_arg}%owner").replace("this%user", f"{iface.pass_arg}%user")
                for x in out]
         # --- C declaration (in the .h) and C++ definition of the extern "C" function
-        out = ["", "  !@c_declaration", f"  !  void {cb}(void* cpp, {', '.join(c_params)});", "  !@end_c_declaration"] + out
+        ret = "int" if has_err else "void"
+        out = ["", "  !@c_declaration", f"  !  {ret} {cb}(void* cpp, {', '.join(c_params)});", "  !@end_c_declaration"] + out
         lq = f"{ns}::{prog.type_name(lt.name)}"
-        g = [f"void {cb}(void* cpp, {', '.join(c_params)})", "{", "  try", "  {"]
+        fail = "    return -1;                         // -> ierr" if has_err else "    std::terminate();"
+        g = [f"{ret} {cb}(void* cpp, {', '.join(c_params)})", "{", "  try", "  {"]
         g += [f"    {x}" for pre, _, _ in cpp_args for x in [pre] if x]
         g += [f"    {x}" for _, pre, _ in cpp_args for x in [pre] if x]
-        g += [f"    static_cast<{lq}*>(cpp)->{bd.spelling}({', '.join(c for _, _, c in cpp_args)});", "  }",
-              "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
-              f'    std::fprintf(stderr, "{cb}: %s\\n", e.what());', "    std::terminate();", "  }",
-              "  catch (...)", "  {", "    std::terminate();", "  }", "}", ""]
+        g += [f"    static_cast<{lq}*>(cpp)->{bd.spelling}({', '.join(c for _, _, c in cpp_args)});"]
+        g += ["    return 0;"] if has_err else []
+        g += ["  }", "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
+              f'    std::fprintf(stderr, "{cb}: %s\\n", e.what());', fail, "  }",
+              "  catch (...)", "  {", fail, "  }", "}", ""]
         self.cpp_global += g
         return out
 

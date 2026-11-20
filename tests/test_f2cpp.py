@@ -1648,8 +1648,11 @@ def test_wrapped_listener(tmp_path):
     assert "  type, extends(AbstractListener_type), public :: AbstractListener_cpp\n" in b
     assert "    if (listener_same(this%owner, thing)) then\n      thing_cpp = this%user\n" in b
     assert "      listener_f%user = listener_user\n      listener_f%owner => obj\n" in b
-    assert "void project_AbstractListener_state_changed(void* cpp, void* thing_cpp, project_Thing* thing, " \
+    assert "int project_AbstractListener_state_changed(void* cpp, void* thing_cpp, project_Thing* thing, " \
            "PROJECT_REAL old, const PROJECT_REAL* history, int history_n);" in h
+    # the error flag: result of the C++ call, exceptions -> -1
+    assert "    ierr = cb(this%cpp, thing_cpp, thing_h, old_c, history_p, history_n)" in b
+    assert "    return -1;                         // -> ierr" in cpp and "std::terminate" not in cpp
     assert "project_Thing_set_listener(handle_, listener ? AbstractListener_private::toC(listener->get()) : nullptr, " in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
@@ -1677,12 +1680,14 @@ end program drv
     (tmp_path / "run.cpp").write_text(r"""#include "listen_mod.hpp"
 #include "listen_mod.h"
 #include <cstdio>
+#include <stdexcept>
 struct L : project::AbstractListener
 {
   const project::Thing* expected = nullptr;
   void state_changed(const project::Thing& thing, project::scalar old, const project::vec& history) override
   {
     std::printf("%g %g %g %d\n", thing.value(), old, history(1), &thing == expected ? 1 : 0);
+    if (thing.value() > 3.5) throw std::runtime_error("too large");
   }
 };
 extern "C" void run(project_Thing* h1, project_Thing* h2)
@@ -1695,6 +1700,14 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
   t1->set_value(2.0);                 // the owner itself: 2 0 2 1
   t2->set_listener(std::ref(l));      // owner now t2
   t1->set_value(3.0);                 // temporary wrapper of t1: 3 2 3 0
+  try
+  {
+    t1->set_value(4.0);               // the listener throws -> ierr -> exception
+  }
+  catch (const std::exception& e)
+  {
+    std::printf("caught\n");
+  }
   t1->set_listener(std::nullopt);
   t2->set_listener(std::nullopt);
 }
@@ -1706,7 +1719,7 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
     for f, o in (("listen_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:3] == ["2 0 2 1", "3 2 3 0", "F"]
+    assert run(["./m"], d).split("\n")[:5] == ["2 0 2 1", "3 2 3 0", "4 3 4 0", "caught", "F"]
 
 
 def test_wrapped_handle_member_name(tmp_path):

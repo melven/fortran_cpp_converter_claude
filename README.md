@@ -221,7 +221,8 @@ binding defines `AbstractListener_cpp` extending the Fortran type (`cpp`: the C+
 the C++ / Fortran object it was set on); its methods call `extern "C"` functions in the glue that call the
 C++ method. An object argument that is the owner is passed as the owner's C++ object, others as temporary
 wrappers. `set_listener(std::optional<std::reference_wrapper<AbstractListener>>)` passes the listener's
-Fortran object; unset it before the listener is destroyed. Exceptions in listeners terminate.
+Fortran object; unset it before the listener is destroyed. An error flag argument (`ierr`) of the listener method is the result of the C++ call: an exception
+in the listener gives `ierr = -1` (message on stderr); without error flag exceptions terminate.
 
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
