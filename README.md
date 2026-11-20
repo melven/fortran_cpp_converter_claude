@@ -217,9 +217,9 @@ into a Fortran array (`X_private::toC` gives the handles).
 Listeners: `wrap_listeners = ["AbstractListener_type"]` (abstract type with deferred bindings, `intent(in)`
 arguments: the owner object, real / integer / logical scalars, real / integer rank-1 arrays; error flag). C++:
 class `AbstractListener` with pure virtual methods (no error argument) and private static trampolines
-`state_changed_c(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr; without error flag:
+`state_changed_wrapper(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr; without error flag:
 terminate); non-copyable (its Fortran object knows its address). The binding defines
-`AbstractListener_cpp` extending the Fortran type: `cpp` (the C++ listener), `user` / `owner` (the C++ /
+`AbstractListener_cpp` extending the Fortran type: `userData` (the C++ listener), `user` / `owner` (the C++ /
 Fortran object it was set on) and one `type(C_FUNPTR)` per method, passed by the C++ constructor to
 `project_AbstractListener_create`; its methods call through them (`c_f_procpointer`), so the Fortran
 library references no symbol of the C++ library. Object arguments must be the owner (else `ierr = -1`).

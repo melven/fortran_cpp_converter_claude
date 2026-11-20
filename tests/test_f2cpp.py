@@ -1645,16 +1645,16 @@ def test_wrapped_listener(tmp_path):
     hpp, cpp = (tmp_path / "listen_mod.hpp").read_text(), (tmp_path / "listen_mod.cpp").read_text()
     b, h = (tmp_path / "listen_mod_c_binding.F90").read_text(), (tmp_path / "listen_mod.h").read_text()
     assert "  virtual void state_changed(const Thing& thing, scalar old, const vec& history) = 0;" in hpp
-    assert "private:\n  static void state_changed_c(void* cpp, void* thing, scalar old, const scalar* history, " \
+    assert "private:\n  static void state_changed_wrapper(void* userData, void* thing, scalar old, const scalar* history, " \
            "int history_n, int* ierr);  //!< called from Fortran" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
-    assert "project_AbstractListener* project_AbstractListener_create(void* cpp, void (*state_changed_fn)(void*, void*, " \
+    assert "project_AbstractListener* project_AbstractListener_create(void* userData, void (*state_changed_fn)(void*, void*, " \
            "PROJECT_REAL, const PROJECT_REAL*, int, int*));" in h
     assert "AbstractListener::AbstractListener() : fortran_(project_AbstractListener_create(this, " \
-           "&AbstractListener::state_changed_c))" in cpp
+           "&AbstractListener::state_changed_wrapper))" in cpp
     assert "    type(C_FUNPTR) :: state_changed_fn = C_NULL_FUNPTR" in b
     assert "    call c_f_procpointer(this%state_changed_fn, f)\n" \
-           "    call f(this%cpp, this%user, old_c, history_p, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
+           "    call f(this%userData, this%user, old_c, history_p, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
     assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
     assert "extern" not in cpp and "    *ierr = -1;" in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):

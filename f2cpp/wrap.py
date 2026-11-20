@@ -886,7 +886,7 @@ class WrapEmitter(ModuleEmitter):
             self.bridges += m["abstract"]
         self.bridges += [f"  !> {ft} implemented in C++: calls the C++ object through function pointers",
                          f"  type, extends({ft}), public :: {bridge}",
-                         "    type(C_PTR) :: cpp = C_NULL_PTR      !< the C++ listener",
+                         "    type(C_PTR) :: userData = C_NULL_PTR !< the C++ listener",
                          "    type(C_PTR) :: user = C_NULL_PTR     !< C++ object of the owner (set_listener)",
                          "    class(*), pointer :: owner => null() !< Fortran object of the owner"] + \
             [f"    type(C_FUNPTR) :: {m['fn']} = C_NULL_FUNPTR   !< {cls}::{m['tramp']}" for _, _, m in live] + \
@@ -900,11 +900,11 @@ class WrapEmitter(ModuleEmitter):
                    "    listener_same = associated(p, x)", "  end function listener_same"]
         c_fns = "".join(f", void (*{m['fn']})({m['c_types']})" for _, _, m in live)
         f_fns = "".join(f", {m['fn']}" for _, _, m in live)
-        fb += ["", "!@c_declaration", f"!  {ht}* {create}(void* cpp{c_fns});", f"!  void {free}({ht}* listener);",
+        fb += ["", "!@c_declaration", f"!  {ht}* {create}(void* userData{c_fns});", f"!  void {free}({ht}* listener);",
                "!@end_c_declaration", f"  !> Fortran object of the C++ listener cpp (with its trampolines)",
-               f"  function {create}(cpp{f_fns}) result(listener) bind(C, name=\"{create}\")"] + self.dllexport(create) + \
-            ["    type(C_PTR), value :: cpp"] + [f"    type(C_FUNPTR), value :: {m['fn']}" for _, _, m in live] + \
-            ["    type(C_PTR) :: listener", f"    type({bridge}), pointer :: b", "", "    allocate(b)", "    b%cpp = cpp"] + \
+               f"  function {create}(userData{f_fns}) result(listener) bind(C, name=\"{create}\")"] + self.dllexport(create) + \
+            ["    type(C_PTR), value :: userData"] + [f"    type(C_FUNPTR), value :: {m['fn']}" for _, _, m in live] + \
+            ["    type(C_PTR) :: listener", f"    type({bridge}), pointer :: b", "", "    allocate(b)", "    b%userData = userData"] + \
             [f"    b%{m['fn']} = {m['fn']}" for _, _, m in live] + ["    listener = c_loc(b)", f"  end function {create}", "",
              f"  subroutine {free}(listener) bind(C, name=\"{free}\")"] + self.dllexport(free) + \
             ["    type(C_PTR), value :: listener", f"    type({bridge}), pointer :: b", "",
@@ -916,13 +916,13 @@ class WrapEmitter(ModuleEmitter):
         """parts of one deferred binding: bridge procedure (arguments to C, call through the function pointer),
         Fortran interface and C++ definition of the trampoline (calls the virtual method; exceptions -> ierr)"""
         prog = self.prog
-        proc, fn, tramp = f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{bd.name}_fn", f"{bd.name}_c"
+        proc, fn, tramp = f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{bd.name}_fn", f"{bd.name}_wrapper"
         aiface = f"{self.c_class(lt)}_{bd.name}_c"
         err = self.tr(iface).err
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
         this = iface.pass_arg
         decl_nodes, c_params, f_dummies, f_decls, locals_, checks, body, actuals, cpp_args = \
-            [], ["void* cpp"], ["cpp"], ["type(C_PTR), value :: cpp"], [], [], [], [f"{this}%cpp"], []
+            [], ["void* userData"], ["userData"], ["type(C_PTR), value :: userData"], [], [], [], [f"{this}%userData"], []
         todo = None
         fail = (f"{err} = -1" if has_err else f'error stop "{proc}: called for another object than its owner"')
         for a in iface.args:
@@ -998,7 +998,7 @@ class WrapEmitter(ModuleEmitter):
         res["c_types"] = ", ".join(re.sub(r"\s*\w+$", "", c) for c in c_params)
         on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
         res["cpp"] = [f"void {cls}::{tramp}({res['cpp_params']})", "{"] + ([f"  *{err} = 0;"] if has_err else []) + \
-            ["  try", "  {", f"    static_cast<{cls}*>(cpp)->{bd.spelling}({', '.join(cpp_args)});", "  }",
+            ["  try", "  {", f"    static_cast<{cls}*>(userData)->{bd.spelling}({', '.join(cpp_args)});", "  }",
              "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
              f'    std::fprintf(stderr, "{cls}::{bd.spelling}: %s\\n", e.what());'] + on_error + \
             ["  }", "  catch (...)", "  {"] + on_error + ["  }", "}", ""]
