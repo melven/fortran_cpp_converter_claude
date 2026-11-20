@@ -92,7 +92,7 @@ def test_expressions(out):
     assert "void expm(const mat& A, scalar t, mat& E)" in cpp
     assert "ierr" not in cpp
     assert "P = As * P;" in cpp
-    assert "aug(Eigen::seq(0, n - 1), Eigen::seq(n, n + p - 1)) = B;" in cpp
+    assert "aug.block(0, n, n, p) = B;" in cpp
     assert "nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;" in cpp
     assert 'if (!(s <= max_squarings)) throw std::logic_error("assertion failed: s <= max_squarings");' in cpp
     assert "PROJECT_" not in cpp and "project_macros" not in cpp
@@ -164,14 +164,14 @@ def test_features(out):
     # lower bound -1 and indirect access through an index array with lower bound 0
     assert "ghost.resize(n + 2);" in poly and "idx.resize(m + 1);" in poly and "ghost(0) = -10.0;" in poly
     assert "res = ghost((idx(Eigen::seq(1, Eigen::last)).array() + 1));" in poly
-    assert "ghost((idx(Eigen::seq(1, 2)).array() + 1)) = 1.5 * ghost((idx(Eigen::seq(1, 2)).array() + 1));" in poly
+    assert "ghost((idx.segment(1, 2).array() + 1)) = 1.5 * ghost((idx.segment(1, 2).array() + 1));" in poly
     assert "// TODO(f2cpp):" not in poly
     assert "degree = c.size() - 1;" in poly and "coeff.resize(degree + 1);" in poly
     assert "for (int k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
     assert "vec w(c.size());" in poly and "w(k - 1) = k * c(k);" in poly
-    assert "d(Eigen::seq(0, n - 1)) = w(Eigen::seq(0, n - 1));" in poly
+    assert "d.segment(0, n) = w(Eigen::seq(0, n - 1));" in poly
     assert "mat p(c.size() - 1 + 1, x.size());" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
-    assert "hist[k] = (k + 1) * table(Eigen::seq(0, 1), Eigen::seq(0, 1));" in poly
+    assert "hist[k] = (k + 1) * table.block(0, 0, 2, 2);" in poly
     assert "h.phi[k](0, 0) = dt * k + h.phi[0].rows();" in cpp
     assert "phi.resize(h.phi.size());" in cpp
     assert "for (std::size_t k_ = 0; k_ < h.phi.size(); ++k_) phi[k_] = h.phi[k_].cast<scalar>();" in cpp
@@ -234,7 +234,7 @@ def test_features(out):
     assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  if (false /* TODO(f2cpp): error flag, replace by " \
            "try/catch: ierr /= 0 */)\n  {\n    std::cout << \"accumulate failed\" << std::endl;\n    return;\n  }" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
-    assert "m = project::mean(samples(Eigen::seq(0, n - 1)));" in cpp
+    assert "m = project::mean(samples.segment(0, n));" in cpp
     assert "b = (a.array() > 0.0).select(a, b);" in cpp
     assert "  }\n  else if (k >= 3 && k <= max_items)\n  {\n" in cpp
     # other untranslatable condition
@@ -343,7 +343,7 @@ def test_eigen_placeholders_default(tmp_path):
     translate([str(tmp_path / "s_mod.F90")], config.load(), str(tmp_path))
     cpp = (tmp_path / "s_mod.cpp").read_text()
     assert "x(Eigen::seq(1, Eigen::placeholders::last)) = a(Eigen::seq(1, Eigen::placeholders::last), 0);" in cpp
-    assert "a(Eigen::placeholders::all, Eigen::seq(0, 1)).setZero();" in cpp
+    assert "a.middleCols(0, 2).setZero();" in cpp
 
 
 def test_missing_modules(tmp_path):
@@ -726,12 +726,12 @@ end module lam_mod
 
 def test_aliasing(out):
     poly = read(out, "poly_mod.cpp")
-    assert "x(Eigen::seq(1, n - 1)) = x(Eigen::seq(0, n - 2)).eval();" in poly           # overlapping
+    assert "x.segment(1, n - 1) = x.segment(0, n - 1).eval();" in poly           # overlapping
     assert "x = x(Eigen::seq(n - 1, 0, -1)).eval();" in poly
     assert "a = (a + a.transpose()).eval();" in poly and "a.transposeInPlace();" in poly
     assert "a.col(0) = a * a.col(1);" in poly                     # products are evaluated by Eigen
     assert "a.row(1).transpose() = a.row(0).transpose() * 2.0;" in poly   # same or disjoint rows
-    assert "a(Eigen::seq(0, 1), 2) = (a(Eigen::seq(1, 2), 2) + a(Eigen::seq(0, 1), 0)).eval();" in poly
+    assert "a.col(2).segment(0, 2) = (a.col(2).segment(1, 2) + a.col(0).segment(0, 2)).eval();" in poly
     assert "eval()" not in read(out, "block_lu_mod.cpp")
 
 
@@ -815,7 +815,7 @@ end module cache_mod
     assert "mutable vec tmp;  //!< scratch space" in hpp
     assert "class MutableRealArray1d" not in (tmp_path / "mutable_mod.hpp").read_text()
     assert "if (tmp.size() > 0) tmp.resize(0);" in cpp and "tmp.resize(n);" in cpp and "tmp.setZero();" in cpp
-    assert "tmp(Eigen::seq(0, n - 1)) = 2.0 * x(Eigen::seq(0, n - 1));" in cpp
+    assert "tmp.segment(0, n) = 2.0 * x.segment(0, n);" in cpp
     assert "tmp(0) = tmp(0) + 1.0;" in cpp and "scalar s = tmp.sum();" in cpp
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "cache_mod.cpp"],
         str(tmp_path))
@@ -1804,3 +1804,33 @@ end module vc_mod
     translate([str(tmp_path / "vc_mod.F90")], config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "z.toml")]),
               str(tmp_path))
     assert '  Var vs_1("a");' in (tmp_path / "vc_mod.cpp").read_text()
+
+
+def test_slices_segment_block(tmp_path):
+    """contiguous slices whose length follows from cancelling identical terms: segment / block; else Eigen::seq"""
+    (tmp_path / "sl_mod.F90").write_text("""module sl_mod
+  implicit none
+contains
+  subroutine s(x, a, offset, n, lo, hi, k)
+    real, intent(inout) :: x(:), a(:, :)
+    integer, intent(in) :: offset, n, lo, hi, k
+    x(offset+1:offset+n) = 1.0
+    x(offset:offset+n-1) = 2.0
+    x(2*k:2*k+n) = 3.0
+    x(lo:hi) = 4.0
+    x(1:n:2) = 5.0
+    x(offset+1:n) = 6.0
+    a(offset+1:offset+3, k:k+n-1) = 7.0
+    a(1:n, k) = 8.0
+    a(k, 2:n) = 9.0
+  end subroutine s
+end module sl_mod
+""")
+    translate([str(tmp_path / "sl_mod.F90")], cfg(), str(tmp_path))
+    cpp = (tmp_path / "sl_mod.cpp").read_text()
+    for line in ("x.segment(offset, n).setConstant(1.0);", "x.segment(offset - 1, n).setConstant(2.0);",
+                 "x.segment(2 * k - 1, n + 1).setConstant(3.0);", "x(Eigen::seq(lo - 1, hi - 1)).setConstant(4.0);",
+                 "x(Eigen::seq(0, n - 1, 2)).setConstant(5.0);", "x(Eigen::seq(offset, n - 1)).setConstant(6.0);",
+                 "a.block(offset, k - 1, 3, n).setConstant(7.0);", "a.col(k - 1).segment(0, n).setConstant(8.0);",
+                 "a.row(k - 1).segment(1, n - 1).transpose().setConstant(9.0);"):
+        assert line in cpp, line

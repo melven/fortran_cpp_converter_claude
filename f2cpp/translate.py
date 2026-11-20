@@ -38,6 +38,11 @@ class X:
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
+
+
+class Seq(str):
+    """code of an Eigen::seq slice; seg: (start, length) if contiguous with a simple length"""
+    seg = None
 REL_OPS = {".lt.": "<", ".le.": "<=", ".gt.": ">", ".ge.": ">=", ".eq.": "==", ".ne.": "!=",
            "<": "<", "<=": "<=", ">": ">", ">=": ">=", "==": "==", "/=": "!="}
 MATH1 = {"sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh"}
@@ -765,7 +770,52 @@ class Translator:
         a = self.index0(lo, lb) if lo is not None else "0"
         b = self.index0(hi, lb) if hi is not None else self.cfg["eigen_placeholders"] + "::last"
         c = f", {self.expr(step).code}" if step is not None else ""
-        return "seq", f"Eigen::seq({a}, {b}{c})"
+        code = Seq(f"Eigen::seq({a}, {b}{c})")
+        if step is None and hi is not None and (lb is None or lo is not None):
+            n = self.slice_length(lo, hi)
+            if n is not None:                   # contiguous with a simple length: segment / block
+                code.seg = (a, n)
+        return "seq", code
+
+    def slice_length(self, lo, hi):
+        """length hi - lo + 1 of a slice by cancelling identical +/- terms of lo and hi (as written); None
+        unless what remains of lo is a literal (lo None: 1)"""
+        def terms(node, sign, out):
+            k = cls(node)
+            if k == "Level_2_Expr" and node.items[1] in ("+", "-"):
+                terms(node.items[0], sign, out)
+                terms(node.items[2], sign if node.items[1] == "+" else -sign, out)
+            elif k == "Int_Literal_Constant":
+                out.append((sign, None, int(str(node.items[0]))))
+            elif k == "Level_2_Unary_Expr" and str(node.items[0]).strip() in ("+", "-"):
+                terms(node.items[1], sign if str(node.items[0]).strip() == "+" else -sign, out)
+            else:
+                out.append((sign, node, re.sub(r"\s+", "", str(node)).lower()))
+        th, tl = [], []
+        terms(hi, 1, th)
+        if lo is not None:
+            terms(lo, 1, tl)
+        else:
+            tl = [(1, None, 1)]
+        const = sum(sg * v for sg, n, v in th if n is None) - sum(sg * v for sg, n, v in tl if n is None) + 1
+        rest = [t for t in th if t[1] is not None]
+        for sg, n, key in [t for t in tl if t[1] is not None]:
+            hit = next((t for t in rest if t[0] == sg and t[2] == key), None)
+            if hit is None:
+                return None                     # lo has a term that hi does not have
+            rest.remove(hit)
+        if not rest:
+            return str(const) if const >= 0 else None
+        if len(rest) > 2:
+            return None                         # not simpler than the end index
+        code = ""
+        for sg, n, _ in rest:
+            x = self.expr(n)
+            if x.rank:
+                return None
+            code += (f"{par(x, P_ADD)}" if not code and sg > 0 else
+                     f"{' + ' if sg > 0 else ' - '}{par(x, P_ADD, True)}" if code else f"-{par(x, P_UNARY)}")
+        return code if const == 0 else f"{code} {'+' if const > 0 else '-'} {abs(const)}"
 
     def named_count(self, v):
         """number of elements of a named_elements array (literal size, lower bound 1)"""
@@ -833,7 +883,20 @@ class Translator:
             res.code = f"{base}({idx})" if v.base not in ("type", "character") else f"{base}[{idx}]"
             return res
         res.rank = sum(k != "idx" for k in kinds)
-        if len(sc) == 1:
+        seg = [getattr(c, "seg", None) for _, c in sc]
+        if len(sc) == 1 and seg[0]:             # contiguous slices with a simple length
+            res.code = f"{base}.segment({seg[0][0]}, {seg[0][1]})"
+        elif len(sc) == 2 and seg[0] and seg[1]:
+            res.code = f"{base}.block({seg[0][0]}, {seg[1][0]}, {seg[0][1]}, {seg[1][1]})"
+        elif len(sc) == 2 and seg[0] and kinds[1] == "idx":
+            res.code = f"{base}.col({sc[1][1]}).segment({seg[0][0]}, {seg[0][1]})"
+        elif len(sc) == 2 and seg[1] and kinds[0] == "idx":
+            res.code = f"{base}.row({sc[0][1]}).segment({seg[1][0]}, {seg[1][1]}).transpose()"
+        elif len(sc) == 2 and seg[0] and kinds[1] == "all":
+            res.code = f"{base}.middleRows({seg[0][0]}, {seg[0][1]})"
+        elif len(sc) == 2 and seg[1] and kinds[0] == "all":
+            res.code = f"{base}.middleCols({seg[1][0]}, {seg[1][1]})"
+        elif len(sc) == 1:
             res.code = base if kinds[0] == "all" else f"{base}({sc[0][1]})"
         elif kinds == ["all", "all"]:
             res.code = base
