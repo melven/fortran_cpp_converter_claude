@@ -1635,7 +1635,8 @@ end program drv
 
 
 def test_wrapped_listener(tmp_path):
-    """abstract listener type implemented in C++: Fortran bridge type calling the C++ object"""
+    """abstract listener type implemented in C++: Fortran bridge type calling private static trampolines of the
+    C++ class through function pointers (no C++ symbol referenced by the Fortran library)"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
     (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
@@ -1644,16 +1645,18 @@ def test_wrapped_listener(tmp_path):
     hpp, cpp = (tmp_path / "listen_mod.hpp").read_text(), (tmp_path / "listen_mod.cpp").read_text()
     b, h = (tmp_path / "listen_mod_c_binding.F90").read_text(), (tmp_path / "listen_mod.h").read_text()
     assert "  virtual void state_changed(const Thing& thing, scalar old, const vec& history) = 0;" in hpp
+    assert "private:\n  static void state_changed_c(void* cpp, void* thing, scalar old, const scalar* history, " \
+           "int history_n, int* ierr);  //!< called from Fortran" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
-    assert "  type, extends(AbstractListener_type), public :: AbstractListener_cpp\n" in b
-    assert "    if (listener_same(this%owner, thing)) then\n      thing_cpp = this%user\n" in b
-    assert "      listener_f%user = listener_user\n      listener_f%owner => obj\n" in b
-    assert "int project_AbstractListener_state_changed(void* cpp, void* thing_cpp, project_Thing* thing, " \
-           "PROJECT_REAL old, const PROJECT_REAL* history, int history_n);" in h
-    # the error flag: result of the C++ call, exceptions -> -1
-    assert "    ierr = cb(this%cpp, thing_cpp, thing_h, old_c, history_p, history_n)" in b
-    assert "    return -1;                         // -> ierr" in cpp and "std::terminate" not in cpp
-    assert "project_Thing_set_listener(handle_, listener ? AbstractListener_private::toC(listener->get()) : nullptr, " in cpp
+    assert "project_AbstractListener* project_AbstractListener_create(void* cpp, void (*state_changed_fn)(void*, void*, " \
+           "PROJECT_REAL, const PROJECT_REAL*, int, int*));" in h
+    assert "AbstractListener::AbstractListener() : fortran_(project_AbstractListener_create(this, " \
+           "&AbstractListener::state_changed_c))" in cpp
+    assert "    type(C_FUNPTR) :: state_changed_fn = C_NULL_FUNPTR" in b
+    assert "    call c_f_procpointer(this%state_changed_fn, f)\n" \
+           "    call f(this%cpp, this%user, old_c, history_p, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
+    assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
+    assert "extern" not in cpp and "    *ierr = -1;" in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv
@@ -1698,15 +1701,22 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
   l.expected = t1.get();
   t1->set_listener(std::ref(l));
   t1->set_value(2.0);                 // the owner itself: 2 0 2 1
-  t2->set_listener(std::ref(l));      // owner now t2
-  t1->set_value(3.0);                 // temporary wrapper of t1: 3 2 3 0
   try
   {
     t1->set_value(4.0);               // the listener throws -> ierr -> exception
   }
-  catch (const std::exception& e)
+  catch (const std::exception&)
   {
     std::printf("caught\n");
+  }
+  t2->set_listener(std::ref(l));      // owner now t2: a change of t1 is an error
+  try
+  {
+    t1->set_value(3.0);
+  }
+  catch (const std::exception&)
+  {
+    std::printf("other\n");
   }
   t1->set_listener(std::nullopt);
   t2->set_listener(std::nullopt);
@@ -1718,9 +1728,11 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f, o in (("listen_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
+    # the Fortran objects alone: no undefined C++ symbols
+    undefined = run(["nm", "-u", "listen_mod_c_binding.o"], d)
+    assert "AbstractListener" not in undefined.replace("project_AbstractListener", "")
     run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:5] == ["2 0 2 1", "3 2 3 0", "4 3 4 0", "caught", "F"]
-
+    assert run(["./m"], d).split("\n")[:5] == ["2 0 2 1", "4 2 4 1", "caught", "other", "F"]
 
 def test_wrapped_handle_member_name(tmp_path):
     """name of the handle member per root type (hand-written base classes); derived classes use it"""

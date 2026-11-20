@@ -215,14 +215,16 @@ one owned object per element (`allocate(e, source=arr(i))` + `setup`), `intent(i
 into a Fortran array (`X_private::toC` gives the handles).
 
 Listeners: `wrap_listeners = ["AbstractListener_type"]` (abstract type with deferred bindings, `intent(in)`
-arguments: wrapped objects, real / integer / logical scalars, real / integer rank-1 arrays): C++ class
-`AbstractListener` with pure virtual methods (non-copyable: its Fortran object knows its address). The
-binding defines `AbstractListener_cpp` extending the Fortran type (`cpp`: the C++ listener, `user` / `owner`:
-the C++ / Fortran object it was set on); its methods call `extern "C"` functions in the glue that call the
-C++ method. An object argument that is the owner is passed as the owner's C++ object, others as temporary
-wrappers. `set_listener(std::optional<std::reference_wrapper<AbstractListener>>)` passes the listener's
-Fortran object; unset it before the listener is destroyed. An error flag argument (`ierr`) of the listener method is the result of the C++ call: an exception
-in the listener gives `ierr = -1` (message on stderr); without error flag exceptions terminate.
+arguments: the owner object, real / integer / logical scalars, real / integer rank-1 arrays; error flag). C++:
+class `AbstractListener` with pure virtual methods (no error argument) and private static trampolines
+`state_changed_c(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr; without error flag:
+terminate); non-copyable (its Fortran object knows its address). The binding defines
+`AbstractListener_cpp` extending the Fortran type: `cpp` (the C++ listener), `user` / `owner` (the C++ /
+Fortran object it was set on) and one `type(C_FUNPTR)` per method, passed by the C++ constructor to
+`project_AbstractListener_create`; its methods call through them (`c_f_procpointer`), so the Fortran
+library references no symbol of the C++ library. Object arguments must be the owner (else `ierr = -1`).
+`set_listener(std::optional<std::reference_wrapper<AbstractListener>>)`; unset it before the listener
+is destroyed.
 
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
