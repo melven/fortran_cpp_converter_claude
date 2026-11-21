@@ -123,6 +123,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             res.append("\n".join(out + [line]))
         return "\n".join(res)
 
+    def wrapped_types(self):
+        """public, not excluded types of the module"""
+        return [t for t in self.mod.types.values() if not self.excluded(t.name) and self.mod.is_public(t.name)]
+
     def owned(self, t):
         """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
         return t.name in self.cfg["wrap_owned"] and self.is_root(t) and not self.poly(t) and self.struct_handle(t)
@@ -981,7 +985,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 self.emit_type(hpp, td, 0)
                 hpp.emit(0, "")
             self.report.add("translated", "wrapped-constant-type")
-        for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
+        for t in self.wrapped_types():
             if t.name in cfg["unwrap_types"] or t.name in values:
                 continue
             if t.name in cfg["wrap_listeners"]:
@@ -1144,14 +1148,14 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
         h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
         # the C interface stays out of the C++ header: only the handle types (same typedef as in the .h)
-        handles = sorted({self.c_type_name(t) for t in mod.types.values()
-                          if t.name not in cfg["unwrap_types"] and not self.excluded(t.name) and t.name not in values})
+        handles = sorted({self.c_type_name(t) for t in self.wrapped_types()
+                          if t.name not in cfg["unwrap_types"] and t.name not in values})
         if handles:
             h += [""] + [f"struct {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
         h += ["", self.open_ns(), ""]
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
-        classes = [t for t in mod.types.values() if t.name not in cfg["unwrap_types"] and not self.excluded(t.name)]
+        classes = [t for t in self.wrapped_types() if t.name not in cfg["unwrap_types"]]
         deferred = {b.iface for m in prog.modules.values() for t in m.types.values()
                     for b in t.bindings.values() if b.deferred}
         aliases = self.tr()

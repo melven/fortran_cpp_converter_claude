@@ -229,6 +229,32 @@ is destroyed.
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
 
+Abstract types implemented in C++ (Fortran dependents stay, the implementations are translated):
+
+```toml
+wrap_reverse = ["AbstractThing_type"]
+[wrap_reverse_factories]
+AbstractThingFactory_type = { register = "register_thing_factory", unregister = "unregister_thing_factory" }
+[reverse_factory_instances]                    # translated factories: global instance with its name
+LinearThingFactory_type = "linear"
+```
+
+- C struct `project_AbstractThing` per C++ object: one function pointer per deferred binding, `destroy`,
+  `p_impl` (back to the Fortran object), `userData` (the C++ object), set by the C++ constructor
+- C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
+  (arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
+  `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
+- Fortran `CWrapperThing_type` (binding module) extends the abstract type, calls the function pointers,
+  owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)` makes one
+- factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
+  in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor
+  unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)`: `release()` to Fortran
+- translated factories get `using Base::Base;` and `<Factory>_private::instance("name")`
+- arguments: wrapped objects (temporary handles), real / integer / logical scalars (in / out / inout),
+  real / integer rank-1 arrays (copied; the size must not change), created objects, scalar results, `ierr`
+- the Fortran library references no symbol of the C++ library (registration at run time); a global
+  factory instance in a static library is only constructed if its object file is linked
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and

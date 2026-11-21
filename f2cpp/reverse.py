@@ -122,7 +122,8 @@ class ReverseMixin:
                     cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")
                 else:                           # a C++ vector, copied back (the size must not change)
                     post.append(f"{a}(:) = {a}_c")
-                    cpp_pre.append(f"{et} {a}_v = Eigen::Map<const {et}>({a}, {a}_n);")
+                    cpp_pre.append(f"{et} {a}_v({a}_n);" if intent == "out" else
+                                   f"{et} {a}_v = Eigen::Map<const {et}>({a}, {a}_n);")
                     cpp_args.append(f"{a}_v")
                     cpp_post += [f'if ({a}_v.size() != {a}_n) throw std::length_error("{v.cname}: size changed");',
                                  f"Eigen::Map<{et}>({a}, {a}_n) = {a}_v;"]
@@ -158,6 +159,8 @@ class ReverseMixin:
             out.append(f"    {text}")
         if res_v is not None and res_v.node is None:        # result declared by the function prefix
             out.append(f"    {self.fortran_decl(res_v)} :: {iface.result}")
+        elif res_v is not None and res_v.node not in decl_nodes:
+            out.append(f"    {res_v.node}")
         res = {"todo": todo, "tramp": tramp}
         if todo:
             res["fortran"] = out + [f'    error stop "{proc}: {todo}"', f"  end {kw} {proc}"]
@@ -423,10 +426,10 @@ class ReverseMixin:
                    f"!  void {unreg}(const char* name);", "!@end_c_declaration",
                    "  !> registers the C++ factory under name (Fortran factory registration)",
                    f"  subroutine {reg}(factory, name) bind(C, name=\"{reg}\")"] + self.dllexport(reg) + \
-                ["    type(C_PTR), value :: factory, name", f"    type({bridge}), pointer :: f", "",
-                 "    allocate(f)", "    call c_f_pointer(factory, f%c)", "    allocate(f%holder)",
-                 "    f%holder%ptr => f", "    f%c%p_impl = c_loc(f%holder)",
-                 f"    call {factory['register']}({name_in[1]}(name), f)", f"  end subroutine {reg}", "",
+                ["    type(C_PTR), value :: factory, name", f"    type({bridge}) :: f", "",
+                 "    call c_f_pointer(factory, f%c)",
+                 f"    call {factory['register']}({name_in[1]}(name), f)      ! stores a copy",
+                 f"  end subroutine {reg}", "",
                  f"  subroutine {unreg}(name) bind(C, name=\"{unreg}\")"] + self.dllexport(unreg) + \
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]

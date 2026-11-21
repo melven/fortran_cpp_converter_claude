@@ -1859,3 +1859,77 @@ end module sl_mod
                  "a.block(offset, k - 1, 3, n).setConstant(7.0);", "a.col(k - 1).segment(0, n).setConstant(8.0);",
                  "a.row(k - 1).segment(1, n - 1).transpose().setConstant(9.0);"):
         assert line in cpp, line
+
+
+def test_reverse_wrapped_types(tmp_path):
+    """abstract Fortran types implemented in C++: Fortran dependents create things through the Fortran
+    factory registration, the factory and the things are translated C++ (wrap_reverse, wrap_reverse_factories);
+    same output as the pure Fortran program"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('wrap_reverse = ["AbstractThing_type"]\n[wrap_reverse_factories]\n'
+                                     'AbstractThingFactory_type = { register = "register_thing_factory", '
+                                     'unregister = "unregister_thing_factory" }\n'
+                                     '[reverse_factory_instances]\nLinearThingFactory_type = "linear"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    wrapped = [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "thing_factory_mod.F90")]
+    translate([os.path.join(r, "linear_thing_mod.F90"), os.path.join(r, "test_linear_thing_mod.pf")], c, d, wrap=wrapped)
+    th, tc, tb = ((tmp_path / f).read_text() for f in ("thing_mod.hpp", "thing_mod.cpp", "thing_mod_c_binding.F90"))
+    fh, fc, fb = ((tmp_path / f).read_text() for f in ("thing_factory_mod.hpp", "thing_factory_mod.cpp",
+                                                         "thing_factory_mod_c_binding.F90"))
+    h, lh, lc = ((tmp_path / f).read_text() for f in ("thing_mod.h", "linear_thing_mod.hpp", "linear_thing_mod.cpp"))
+    # C struct per C++ object: function pointers, destroy, p_impl, userData
+    assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
+           "int, PROJECT_REAL*, int, int*) = nullptr;\n  void (*weight)(struct project_AbstractThing*, PROJECT_REAL*) = " \
+           "nullptr;\n  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
+           "  void* userData = nullptr;\n} project_AbstractThing;" in h
+    # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
+    assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
+    assert "  static void evaluate_wrapper(struct project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
+           "int y_n, int* ierr);" in th
+    assert "  std::unique_ptr<project_AbstractThing> c_;" in th and "#include \"thing_mod.h\"" not in th
+    assert "  std::unique_ptr<AbstractThing> owner(static_cast<AbstractThing*>(self->userData));  // deletes it" in tc
+    assert "  explicit AbstractThingFactory(const std::string& name);" in fh
+    assert "  virtual void create_thing(const Config& config, std::unique_ptr<AbstractThing>& thing) const = 0;" in fh
+    assert "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;\n" \
+           "    thing_u.release(); // NOLINT(bugprone-unused-return-value)" in fc
+    # Fortran: wrapper types owning / calling the C++ objects
+    assert "  type, extends(AbstractThing_type), public :: CWrapperThing_type\n" in tb and "    final :: cwrapperthing_final" in tb
+    assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
+           "int(size(y_c), C_INT), ierr_c)" in tb
+    assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fb
+    assert "    call register_thing_factory(str_array_ptr_to_str(name), f)" in fb
+    # translated implementation: name constructor of the factory base, global instance
+    assert "class LinearThingFactory final : public AbstractThingFactory\n{\npublic:\n  using AbstractThingFactory::AbstractThingFactory;" in lh
+    assert 'namespace LinearThingFactory_private\n{\nLinearThingFactory instance("linear");' in lc
+    assert "class Entry" not in fh                                       # private type: not wrapped
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-Wall",
+          "-Werror", "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    os.makedirs(os.path.join(d, "ref"))
+    for f in ("config_mod.F90", "thing_mod.F90", "thing_factory_mod.F90", "linear_thing_mod.F90", "thing_user_mod.F90",
+              "ref_main.F90"):
+        run(ff + [os.path.join(r, f)], os.path.join(d, "ref"))
+    run(["gfortran", "config_mod.o", "thing_mod.o", "thing_factory_mod.o", "linear_thing_mod.o", "thing_user_mod.o",
+         "ref_main.o", "-o", "ref"], os.path.join(d, "ref"))
+    ref = run(["./ref"], os.path.join(d, "ref"))
+    fsrc = [os.path.join(SUPPORT, "project_str.F90")] + wrapped + [os.path.join(r, "thing_user_mod.F90"), "config_mod_c_binding.F90",
+            "thing_mod_c_binding.F90", "thing_factory_mod_c_binding.F90", os.path.join(r, "mixed_main.F90")]
+    for f in fsrc:
+        run(ff + [f], d)
+    # the Fortran library references no symbol of the C++ library
+    for o in ("thing_mod_c_binding.o", "thing_factory_mod_c_binding.o", "config_mod_c_binding.o"):
+        assert "_Z" not in run(["nm", "-u", o], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod"):
+        run(gxx + [f + ".cpp", "-o", f + "_cpp.o"], d)
+    objs = [os.path.splitext(os.path.basename(f))[0] + ".o" for f in fsrc] + \
+        [f + "_cpp.o" for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod")]
+    run(["gfortran"] + objs + ["-lstdc++", "-o", "mixed"], d)
+    assert run(["./mixed"], d) == ref
+    # the translated pFUnit test of the implementation (gtest, linked with the Fortran parts)
+    if os.path.exists("/usr/include/gtest/gtest.h"):
+        run(gxx + ["test_linear_thing_mod.cpp", "-o", "test_cpp.o"], d)
+        run(["g++"] + [o for o in objs if o != "mixed_main.o"] + ["test_cpp.o", "-lgtest", "-lgtest_main", "-lpthread",
+                                                                  "-lgfortran", "-o", "gt"], d)
+        assert "[  PASSED  ] 1 test" in run(["./gt"], d)
