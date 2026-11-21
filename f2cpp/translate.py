@@ -35,6 +35,7 @@ class X:
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
+    via_accessor: bool = False   # component through a getter (accessor, wrapped class)
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -67,6 +68,7 @@ class Translator:
         self.prog, self.mod, self.proc, self.report = program, module, proc, report
         self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
         self.brace_arrays = False   # array constructors as braced lists
+        self.via_getters = False    # translated method of a wrapped class: components are getters
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -688,7 +690,9 @@ class Translator:
                         raise Untranslatable("unwrapped-object-of-wrapped-class")
                 if acc:     # the accessor returns a reference, also for pointer components
                     x = X(self.member(cur, acc, cur.qual) + "()", comp.rank, comp.base, 100, comp,
-                          comp.tname, whole=True)
+                          comp.tname, whole=True, via_accessor=True)
+                    if self.via_getters and n in self.cfg["wrap_constants"].get(td.name, []):
+                        self.note("wrapped-constant", f"{comp.cname}: copy made at setup (changes are not seen)")
                 else:
                     x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
                 if subs is not None:
@@ -1421,6 +1425,10 @@ class Translator:
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
+        if self.via_getters and cls(lhs_n) in ("Data_Ref", "Name"):
+            lx = self.ref(lhs_n)
+            if lx.via_accessor and lx.whole and lx.rank > 0 and self.expr(rhs_n).rank > 0:
+                raise Untranslatable("wrapped-component-resize")    # may change the size (reallocation)
         if cls(lhs_n) == "Part_Ref" and getattr(self.lookup(lname(lhs_n.items[0])), "named_elements", False):
             # inputs(1) = Variable_type(...) -> Variable inputs_1(...);  (declaration of the element)
             v = self.lookup(lname(lhs_n.items[0]))
@@ -1781,6 +1789,9 @@ class Translator:
 
     def s_Allocate_Stmt(self, node, ind):
         tspec, allocs, opts = node.items
+        if self.via_getters and any(self.ref(a.items[0] if cls(a) == "Allocation" else a).via_accessor
+                                    for a in items_of(allocs)):
+            raise Untranslatable("wrapped-component-allocate")   # an Eigen::Map of Fortran memory
         src = [o for o in items_of(opts) if lname(o.items[0]) == "source"]
         if src and len(items_of(allocs)) == 1:  # allocate(x, source=v) of class(*): std::any holds a copy
             x = self.ref(items_of(allocs)[0])
@@ -1837,6 +1848,8 @@ class Translator:
                 self.emit(ind, f"{name}.assign({self.nested_ctor(v, dims)});")
 
     def s_Deallocate_Stmt(self, node, ind):
+        if self.via_getters and any(self.ref(a).via_accessor for a in items_of(node.items[0])):
+            raise Untranslatable("wrapped-component-allocate")
         if all(cls(a) == "Name" and getattr(self.lookup(lname(a)), "named_elements", False)
                for a in items_of(node.items[0])):
             return                              # named_elements: end of scope
@@ -1876,7 +1889,7 @@ class Translator:
         cond = X(self.condition(node.items[0]))
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
-        sub.named = self.named
+        sub.named, sub.via_getters = self.named, self.via_getters
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
             self.overrides, self.shift, self.loop_local, self.loop_decl
         sub.stmt(node.items[1], 0)

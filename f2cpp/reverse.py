@@ -432,8 +432,11 @@ inline {ah}* to_fortran(const std::any& v)
         st, bridge, ft = f"{cc}_c", self.bridge_name(lt), lt.spelling or lt.name
         holder = f"{cc}Holder_type"
         factory = cfg["wrap_reverse_factories"].get(lt.name)
-        methods = []
+        methods, cpp_only = [], []
         for bd, iface in self.methods_of(lt):
+            if not bd.deferred and self.translated_here(lt, bd, iface):      # wrap_translate: C++ only
+                cpp_only.append((bd, iface, None))
+                continue
             this = iface.pass_arg
             proc = f"{bridge[:-5].lower()}_{bd.name}"
             m = self.forward(lt, bd, iface, proc=proc, aiface=f"{cc}_{bd.name}_c", funptr=f"{this}%c%{bd.name}",
@@ -464,7 +467,8 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(1, f"virtual ~{cls}();" + ("" if factory is None else "  //!< unregisters it"))
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to C / Fortran")
         hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;")
-        self.pure_virtuals(hpp, methods)
+        all_methods = methods + cpp_only
+        self.pure_virtuals(hpp, all_methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
         for bd, iface, m in live:
@@ -493,7 +497,7 @@ inline {ah}* to_fortran(const std::any& v)
                         f"{name}::~{cls}()", "{", f"  {unreg}(name_.c_str());", "}", ""]
         lines += [f"{ht}* {cls}_private::toC(const {cls}& x)", "{", "  return x.c_.get();", "}", ""]
         self.emit_lines(cpp, lines + [x for _, _, m in live for x in m["cpp"]])
-        self.default_methods(cpp, methods)
+        self.default_methods(cpp, all_methods)
         self.needs_cstdio = True
         # --- Fortran: interfaces, bind(C) struct, holder (target of p_impl), wrapper type
         for _, _, m in live:

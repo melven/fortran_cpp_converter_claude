@@ -823,14 +823,22 @@ end module cache_mod
 
 @needs_cxx
 @pytest.mark.skipif(not shutil.which("gfortran"), reason="gfortran missing")
-def test_wrapped_module_end_to_end(tmp_path):
+@pytest.mark.parametrize("translated", [False, True])
+def test_wrapped_module_end_to_end(tmp_path, translated):
     """mysolver_mod stays in Fortran (bind(C) layer + C++ glue), solver_user_mod is translated and uses it;
-    the result equals the pure Fortran program"""
+    the result equals the pure Fortran program. translated: norm / residual_norm implemented in C++
+    (wrap_translate), the header is the same"""
     d = str(tmp_path)
     w = os.path.join(CORPUS, "wrapped")
     consts = {"mysolver_type": ["n", "diag", "weights", "params", "label"]}
-    translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True, wrap_constants=consts), d,
+    wt = ["mysolver_type%norm", "residual_norm"] if translated else []
+    translate([os.path.join(w, "solver_user_mod.F90")], cfg(wrap_size_checks=True, wrap_constants=consts,
+                                                            wrap_translate=wt), d,
               wrap=[os.path.join(w, "mysolver_mod.F90")])
+    if translated:
+        translate([], cfg(wrap_size_checks=True, wrap_constants=consts), os.path.join(d, "plain"),
+                  wrap=[os.path.join(w, "mysolver_mod.F90")])
+        assert read((d,), "mysolver_mod.hpp") == read((d, "plain"), "mysolver_mod.hpp")     # same declarations
     hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
     binding = read((d,), "mysolver_mod_c_binding.F90")
     assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
@@ -895,9 +903,14 @@ def test_wrapped_module_end_to_end(tmp_path):
            "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
            '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
     # module procedures
-    assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
     assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
-    assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
+    if translated:                      # C++ implementations, no binding
+        assert "project_residual_norm" not in h + binding and "project_MySolver_norm" not in h + binding
+        assert "scalar residual_norm(const vec& r, const vec& b, int n)\n{\n  scalar res = (r - b).cwiseAbs().maxCoeff();" in cpp
+        assert "scalar MySolver::norm(const vec& x) const\n{\n" in cpp and "diag()" in cpp
+    else:
+        assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
+        assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
     # size unknown in Fortran (x(:) without check): passed from C++
     assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in h
     assert "  project_scale_vector(x.data(), static_cast<int>(x.size()), factor, &ierr);" in cpp
@@ -2059,3 +2072,41 @@ end module rs_mod
     b = (tmp_path / "rs_mod_c_binding.F90").read_text()
     assert "! TODO(f2cpp): argument state: class(*) (C++ data is not passed to Fortran; translate the caller)" in b
     assert 'error stop "cwrappers_save_state:' in b
+
+
+def test_wrap_translate_guards(tmp_path):
+    """translated methods of a wrapped class: no allocation / size change through the getters (Eigen::Map)"""
+    (tmp_path / "g_mod.F90").write_text("""module g_mod
+  implicit none
+  type :: G_type
+    real, allocatable :: v(:)
+    integer :: n = 0
+  contains
+    procedure :: grow => g_grow
+    procedure :: total => g_total
+  end type G_type
+contains
+  subroutine g_grow(this, m, w)
+    class(G_type), intent(inout) :: this
+    integer, intent(in) :: m
+    real, intent(in) :: w(:)
+    if (allocated(this%v)) deallocate(this%v)
+    allocate(this%v(m))
+    this%v = 1.0
+    this%v = w
+    this%v(1) = 2.0
+    this%n = m
+  end subroutine g_grow
+  real function g_total(this)
+    class(G_type), intent(in) :: this
+    g_total = sum(this%v) + this%n
+  end function g_total
+end module g_mod
+""")
+    translate([], cfg(wrap_translate=["g_type%*"]), str(tmp_path), wrap=[str(tmp_path / "g_mod.F90")])
+    cpp, b = (tmp_path / "g_mod.cpp").read_text(), (tmp_path / "g_mod_c_binding.F90").read_text()
+    assert "scalar G::total() const\n{\n  scalar g_total = v().sum() + n();" in cpp
+    assert cpp.count("not translated (wrapped-component-allocate)") == 2           # deallocate (one-line if), allocate
+    assert cpp.count("not translated (wrapped-component-resize)") == 1             # this%v = w
+    assert "  v().setConstant(1.0);" in cpp and "  v()(0) = 2.0;" in cpp
+    assert "project_G_grow" not in b and "project_G_total" not in b

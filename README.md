@@ -260,6 +260,15 @@ LinearThingFactory_type = "linear"
 The binding module is `private`; one `public ::` statement per name for the types, the `bind(C)`
 procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran).
 
+Mixing: `wrap_translate = ["mysolver_type%norm", "residual_norm"]` (glob patterns) implements listed
+methods / procedures of a wrapped module in C++: same declaration (the header does not change), the
+translation as definition, no binding. Components are getters into the Fortran object; `allocate` /
+`deallocate` of components and array assignments that may change their size are TODOs (`Eigen::Map`),
+constants (`wrap_constants`) are noted (copies from `setup`). Private components, private procedures and
+module variables are not available (compile errors / TODOs). Fortran callers keep using the Fortran
+implementation (`wrapped-translated:` in the report). Reverse types: listed bindings with a default
+implementation get no `_wrapper` (C++ only; Fortran keeps its default).
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and

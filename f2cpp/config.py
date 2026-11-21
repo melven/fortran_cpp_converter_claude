@@ -143,6 +143,9 @@ DEFAULTS = {
     # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
     # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
     "wrap_owned": [],
+    # methods ("type%binding") / procedures of wrapped modules implemented in C++ (their translation instead of
+    # the glue; same declaration); reverse types: no <method>_wrapper (C++ only); glob patterns
+    "wrap_translate": [],
     # types whose C++ objects are neither copyable nor movable: local arrays of them become one named
     # variable per element (inputs(1) = T(...) -> Cls inputs_1(...); inputs -> {inputs_1, inputs_2});
     # type -> C++ class ("" = the type's class name)
@@ -230,6 +233,7 @@ def load(path=None, **overrides):
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
+    cfg["wrap_translate"] = [t.lower().replace(" ", "") for t in cfg["wrap_translate"]]
     cfg["named_elements"] = {k.lower(): v for k, v in cfg["named_elements"].items()}
     cfg["named_element_lists"] = {k.lower(): v for k, v in cfg["named_element_lists"].items()}
     cfg["wrap_handle_member"] = {k.lower(): v for k, v in cfg["wrap_handle_member"].items()}

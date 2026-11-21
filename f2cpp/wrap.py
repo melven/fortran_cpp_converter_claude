@@ -856,6 +856,34 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 decls.append(f"integer(C_INT), value :: {n}")
                 glue.append(f"static_cast<int>({cn}.size())")
 
+    def tr(self, proc=None):
+        tr = super().tr(proc)
+        tr.via_getters = getattr(self, "via_getters", False)     # translated method of a wrapped class
+        return tr
+
+    def translated_here(self, t, bd, p):
+        """listed in wrap_translate ("type%binding" / procedure, glob patterns): implemented in C++"""
+        import fnmatch
+        key = f"{t.name}%{bd.name}" if t is not None else p.name
+        return any(fnmatch.fnmatch(key, pat) for pat in self.cfg["wrap_translate"])
+
+    def translated_method(self, t, bd, p, hdecl, cpp):
+        """the same declaration as the wrapped method, the translation as implementation (no binding)"""
+        tr = self.tr(p)
+        ret, fname, decl_params, const = self.signature(tr, p, True)
+        ind, name = (1, bd.spelling if bd.deferred else p.bind_name) if t is not None else (0, fname)
+        self.doc(hdecl, p, ind)
+        hdecl.emit(ind, f"{ret} {name}({decl_params}){const};")
+        self.via_getters = True                 # components: getters into the Fortran object
+        try:
+            self.emit_proc(cpp, p, 0)
+        finally:
+            self.via_getters = False
+        cpp.emit(0, "")
+        key = f"{t.name}%{bd.name}" if t is not None else p.name
+        self.report.add("translated", "wrapped-translated")
+        self.report.add("info", f"wrapped-translated:{key}")      # Fortran callers still use the Fortran version
+
     def not_wrapped(self, t, p, reason, hdecl, cpp, bname=None):
         tr = self.tr(p)
         ret, fname, params, const = self.signature(tr, p, False)
@@ -1079,6 +1107,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     continue
                 if bd.access == "private" and not bd.generic:
                     continue
+                if self.translated_here(t, bd, p):
+                    self.translated_method(t, bd, p, hpp, cpp)
+                    continue
                 args, reason = self.wrappable(p, t)
                 if reason:
                     self.not_wrapped(t, p, reason, hpp, cpp, bd.spelling if bd.deferred else None)
@@ -1148,6 +1179,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if self.excluded_proc(p):
                 continue
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
+                continue
+            if self.translated_here(None, None, p):
+                self.translated_method(None, None, p, hpp, cpp)
                 continue
             args, reason = self.wrappable(p, None)
             if reason:
