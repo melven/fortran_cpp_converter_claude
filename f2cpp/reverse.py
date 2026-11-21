@@ -11,6 +11,10 @@ the pointers (the Fortran library references no symbol of the C++ library).
   p_impl, userData); Fortran CWrapper<Thing>_type owns the C++ object (final -> destroy)
 - reverse factories (wrap_reverse_factories): as reverse types, registered by the C++ constructor under
   a name in the existing Fortran factory registration
+
+Possible simplification: listeners as reverse types without destroy (C struct in the C++ object,
+set_listener passes the struct, Fortran wraps it non-owning); one mechanism with an ownership flag and the
+owner rule for object arguments.
 """
 import re
 

@@ -450,6 +450,9 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 - Fortran is case-insensitive: the spelling of the declaration is used. Names differing only
   in case from other C++ names in scope are not detected.
 
+- **Listeners and reverse types** are two variants of the same mechanism (possible simplification):
+  listeners could become reverse types without `destroy` (C struct in the C++ object, `set_listener`
+  passes it, Fortran wraps it non-owning).
 ## Development
 
 ```bash
