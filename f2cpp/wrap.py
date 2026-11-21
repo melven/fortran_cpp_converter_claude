@@ -1021,6 +1021,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.any_used, self.any_helpers = False, set()  # class(*) arguments: holders, f2cpp_any, used helpers
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
+        self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
         stem_h = os.path.basename(stem) + ".h"
         values = self.value_types()
@@ -1306,7 +1307,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 b[j] = line.replace(", public ::", " ::")
                 types.append(m.group(2))
         k = b.index("  implicit none")
-        b[k + 1:k + 1] = ["  private"] + [f"  public :: {t}" for t in types] + public_list(b)
+        b[k + 1:k + 1] = ["  private"] + [f"  public :: {t}" for t in types] + public_list(b) + \
+            [f"  public :: {n}" for n in self.public_extra if n in "\n".join(b) and f"  public :: {n}" not in b]
 
 
 
@@ -1354,7 +1356,7 @@ def short_names(fb):
 
 
 ISO_C = ["C_PTR", "C_NULL_PTR", "C_FUNPTR", "C_NULL_FUNPTR", "C_INT", "C_BOOL", "C_CHAR", "C_NULL_CHAR", "C_FLOAT",
-         "C_DOUBLE", "c_f_procpointer", "c_loc",
+         "C_DOUBLE", "c_f_procpointer", "c_funloc", "c_loc",
          "c_f_pointer", "c_associated"]
 
 

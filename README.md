@@ -239,8 +239,14 @@ AbstractThingFactory_type = { register = "register_thing_factory", unregister = 
 LinearThingFactory_type = "linear"
 ```
 
-- C struct `project_AbstractThing` per C++ object: one function pointer per deferred binding, `destroy`,
-  `p_impl` (back to the Fortran object), `userData` (the C++ object), set by the C++ constructor
+- abstract C struct `project_AbstractThing`: one function pointer per binding (the struct is the first
+  argument), `destroy`, `userData` (the implementation: C++ or Fortran object); for C++ objects set by the
+  C++ constructor
+- the other direction: a Fortran implementation behind the struct for C / C++:
+  `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
+  `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
+  pointers to the `bind(C)` routines `wrap_<method>`; C++ `WrapperThing(project_AbstractThing&)` derives from
+  `AbstractThing` and calls them (the struct outlives it; the default constructor gives an empty object)
 - all bindings are forwarded (Fortran bindings are overridable): deferred ones are pure virtual in C++,
   those with a default implementation `virtual` with the translated default as definition
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`

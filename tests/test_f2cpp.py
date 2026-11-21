@@ -1898,8 +1898,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
            "int, PROJECT_REAL*, int, int*) = nullptr;\n  void (*weight)(struct project_AbstractThing*, PROJECT_REAL*) = " \
            "nullptr;\n  void (*reset)(struct project_AbstractThing*) = nullptr;\n" in h
-    assert "  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
-           "  void* userData = nullptr;\n} project_AbstractThing;" in h
+    assert "  void (*destroy)(struct project_AbstractThing*) = nullptr;\n" \
+           "  void* userData = nullptr;\n} project_AbstractThing;" in h and "p_impl" not in h
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
     # bindings with a default implementation: virtual, the translated default, forwarded as well
@@ -2118,3 +2118,92 @@ end module g_mod
     assert cpp.count("not translated (wrapped-component-resize)") == 1             # this%v = w
     assert "  v().setConstant(1.0);" in cpp and "  v()(0) = 2.0;" in cpp
     assert "project_G_grow" not in b and "project_G_total" not in b
+
+
+def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
+    """the other direction of a reverse type: a Fortran implementation behind the C struct
+    (create_<Thing>_C_from_Fortran, wrap_<method>), used in C++ through Wrapper<Thing>"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('wrap_reverse = ["AbstractThing_type"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, d, wrap=[os.path.join(r, "thing_mod.F90")])
+    hpp, cpp = (tmp_path / "thing_mod.hpp").read_text(), (tmp_path / "thing_mod.cpp").read_text()
+    b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
+    assert "class WrapperThing final : public AbstractThing\n{\npublic:\n  WrapperThing() = default;" in hpp
+    assert "  explicit WrapperThing(project_AbstractThing& c) : other_(&c) {}" in hpp
+    assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
+    assert "  subroutine wrap_evaluate(self, x, x_n, y, y_n, ierr) bind(C, name=\"project_AbstractThing_wrap_evaluate\")" in b
+    assert "    call c_f_pointer(self_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x=x, y=y, ierr=ierr_f)" in b
+    assert "  subroutine create_Thing_C_from_Fortran(fthing, cthing, ierr)\n" \
+           "    type(AbstractThingWrapper_type), target, intent(in) :: fthing\n" \
+           "    type(AbstractThing_c), intent(out) :: cthing\n" in b
+    assert "  public :: create_Thing_C_from_Fortran\n" in b and "p_impl" not in h + b
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""program drv
+  use, intrinsic :: iso_c_binding
+  use thing_mod_c_binding, only: AbstractThing_c, AbstractThingWrapper_type, create_Thing_C_from_Fortran
+  use const_thing_mod, only: ConstThing_type
+  implicit none
+  interface
+    subroutine run(c) bind(C, name="run")
+      import :: C_PTR
+      type(C_PTR), value :: c
+    end subroutine
+  end interface
+  type(ConstThing_type), target :: thing
+  type(AbstractThingWrapper_type), target :: fthing
+  type(AbstractThing_c), target :: cthing
+  integer :: ierr
+  thing%c = 2.0
+  fthing%ptr => thing
+  call create_Thing_C_from_Fortran(fthing, cthing, ierr)
+  call run(c_loc(cthing))
+end program drv
+""")
+    (tmp_path / "run.cpp").write_text(r"""#include "thing_mod.hpp"
+#include "thing_mod.h"
+#include <cstdio>
+#include <stdexcept>
+static project::scalar use(project::AbstractThing& t)       // any implementation
+{
+  project::vec x(2), y(2);
+  x << 1.0, 3.0;
+  t.evaluate(x, y);
+  return y(1) + t.weight() + t.offset();
+}
+extern "C" void run(project_AbstractThing* c)
+{
+  project::WrapperThing w(*c);                   // the Fortran implementation in C++
+  std::printf("%g\n", use(w));                  // 3 + 2, 10 * 2, Fortran default offset 0
+  project::vec x(2), y(3);
+  try
+  {
+    w.evaluate(x, y);                            // Fortran: ierr = 1 -> exception
+  }
+  catch (const std::exception&)
+  {
+    std::printf("caught\n");
+  }
+  try
+  {
+    project::WrapperThing empty;
+    empty.weight();
+  }
+  catch (const std::logic_error&)
+  {
+    std::printf("empty\n");
+  }
+}
+""")
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-Wall", "-Werror",
+          "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    for f in (os.path.join(r, "thing_mod.F90"), "thing_mod_c_binding.F90", os.path.join(r, "const_thing_mod.F90"),
+              "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f, o in (("thing_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
+        run(gxx + [f, "-o", o], d)
+    run(["gfortran", "thing_mod.o", "thing_mod_c_binding.o", "const_thing_mod.o", "drv.o", "glue.o", "run.o",
+         "-lstdc++", "-o", "m"], d)
+    assert run(["./m"], d).split() == ["25", "caught", "empty"]

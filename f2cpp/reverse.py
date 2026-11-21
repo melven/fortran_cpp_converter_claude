@@ -8,7 +8,9 @@ the pointers (the Fortran library references no symbol of the C++ library).
 - listeners (wrap_listeners): owned by C++; the Fortran object (<Listener>_cpp) is created by the C++
   constructor, set on a wrapped object with set_listener; object arguments are the owner
 - reverse types (wrap_reverse): C struct project_<Type> per C++ object (function pointers, destroy,
-  p_impl, userData); Fortran CWrapper<Thing>_type owns the C++ object (final -> destroy)
+  userData); Fortran CWrapper<Thing>_type owns the C++ object (final -> destroy); the other direction: a
+  Fortran implementation behind such a struct (create_<Thing>_C_from_Fortran, wrap_<method>) is used in C++
+  as Wrapper<Thing>
 - reverse factories (wrap_reverse_factories): as reverse types, registered by the C++ constructor under
   a name in the existing Fortran factory registration
 
@@ -426,7 +428,7 @@ inline {ah}* to_fortran(const std::any& v)
 
     def reverse_type(self, lt, hpp, cpp, fb, typedefs):
         """abstract type implemented in C++: C struct project_<Type> in each C++ object (function pointers,
-        destroy, p_impl, userData); Fortran CWrapper<Thing>_type (owns the C++ object; factories: registered
+        destroy, userData); Fortran CWrapper<Thing>_type (owns the C++ object; factories: registered
         in the Fortran factory registration by the C++ constructor)"""
         prog, cfg = self.prog, self.cfg
         name = prog.type_name(lt.name)
@@ -453,7 +455,7 @@ inline {ah}* to_fortran(const std::any& v)
         members = [f"  void (*{bd.name})({m['c_types']}) = nullptr;" for bd, _, m in live]
         if factory is None:
             members.append(f"  void (*destroy)(struct {ht}*) = nullptr;")
-        members += ["  void* p_impl = nullptr;", "  void* userData = nullptr;"]
+        members += ["  void* userData = nullptr;"]
         typedefs += [f"!typedef struct {ht}", "!{"] + [f"!{x}" for x in members] + [f"!}} {ht};", "!"]
         # --- C++ class
         hpp.emit(0, f"namespace {cls}_private")
@@ -515,8 +517,7 @@ inline {ah}* to_fortran(const std::any& v)
         self.bridges += [f"  !> C struct {ht}: functions of the C++ object", f"  type, bind(C), public :: {st}"] + \
             [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
-            [f"    type(C_PTR) :: p_impl = C_NULL_PTR    !< the Fortran object ({bridge})",
-             "    type(C_PTR) :: userData = C_NULL_PTR  !< the C++ object", f"  end type {st}", ""]
+            ["    type(C_PTR) :: userData = C_NULL_PTR  !< the implementation (C++ or Fortran object)", f"  end type {st}", ""]
         # --- c_wrapper module: the Fortran type implemented by the C++ object
         cw["spec"] += [f"  !> {ft} implemented in C++" + (" (owns the C++ object)" if factory is None else ""),
                        f"  type, extends({ft}), public :: {bridge}", f"    type({st}), pointer :: c => null()",
@@ -529,14 +530,14 @@ inline {ah}* to_fortran(const std::any& v)
         if factory is None:
             cw["procs"] += ["", "  !> deletes the C++ object", f"  subroutine {fin}(this)",
                             f"    type({bridge}), intent(inout) :: this", f"    procedure({cc}_destroy_c), pointer :: f", "",
-                            "    if (.not. associated(this%c)) return", "    this%c%p_impl = C_NULL_PTR",
+                            "    if (.not. associated(this%c)) return",
                             "    if (c_associated(this%c%destroy)) then", "      call c_f_procpointer(this%c%destroy, f)",
                             "      call f(c_loc(this%c))", "    end if", f"  end subroutine {fin}", "",
-                            "  !> x: the Fortran object of the C++ object c (owns it); p_impl: back to x",
+                            "  !> x: the Fortran object of the C++ object c (owns it)",
                             f"  subroutine {wrap}(c, x)", "    type(C_PTR), intent(in) :: c",
                             f"    class({ft}), allocatable, target, intent(out) :: x", "",
                             f"    allocate({bridge} :: x)", "    select type (x)", f"    type is ({bridge})",
-                            "      call c_f_pointer(c, x%c)", "      x%c%p_impl = c_loc(x)", "    end select",
+                            "      call c_f_pointer(c, x%c)", "    end select",
                             f"  end subroutine {wrap}"]
         else:                                   # registration of the C++ factory under a name
             name_in = cfg["wrap_string_in"]
@@ -552,7 +553,137 @@ inline {ah}* to_fortran(const std::any& v)
                  f"  subroutine {unreg}(name) bind(C, name=\"{unreg}\")"] + self.dllexport(unreg) + \
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]
+        if factory is None:                     # the other direction: Fortran implementations used in C++
+            self.fortran_behind(lt, [(bd, iface) for bd, iface, _ in methods if not _["todo"]], hpp, cpp, fb)
         self.report.add("translated", "wrapped-reverse")
+
+    def fortran_behind(self, lt, methods, hpp, cpp, fb):
+        """a Fortran implementation behind the C struct: wrap_<method> (the function pointers),
+        create_<Thing>_C_from_Fortran (fills a struct; stored by the caller) and the C++ Wrapper<Thing>
+        calling the function pointers of a struct (which outlives it)"""
+        prog = self.prog
+        name = prog.type_name(lt.name)
+        cls, ht, cc, ft = name.split("::")[-1], self.c_type_name(lt), self.c_class(lt), lt.spelling or lt.name
+        thing = re.sub(r"^Abstract", "", cc)
+        st, fw, wcls = f"{cc}_c", f"{cc}Wrapper_type", f"Wrapper{re.sub(r'^Abstract', '', cls)}"
+        create = f"create_{thing}_C_from_Fortran"
+        used, entries = set(), []
+        for bd, iface in methods:
+            routine = f"wrap_{bd.name}"
+            if routine in self.wrap_routines:   # several reverse types in the module
+                routine = f"wrap_{cc.lower()}_{bd.name}"
+            self.wrap_routines.add(routine)
+            part = self.fortran_method_c(lt, bd, iface, routine, st, fw)
+            if part is None:
+                continue
+            fb += part["fortran"]
+            entries.append((bd, iface, routine, part))
+        # create_<Thing>_C_from_Fortran
+        self.bridges += [f"  !> a Fortran implementation of {ft} for C (target of userData)", f"  type, public :: {fw}",
+                         f"    class({ft}), pointer :: ptr => null()", f"  end type {fw}", ""]
+        fb += ["", f"  !> the C struct of a Fortran implementation (the caller stores both; fthing must outlive cthing)",
+               f"  subroutine {create}(fthing, cthing, ierr)", f"    type({fw}), target, intent(in) :: fthing",
+               f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
+            [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
+            ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
+        self.public_extra.append(create)
+        # C++ Wrapper<Thing>
+        hpp.emit(0, f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}); the struct outlives it")
+        hpp.emit(0, f"class {wcls} final : public {cls}")
+        hpp.emit(0, "{")
+        hpp.emit(0, "public:")
+        hpp.emit(1, f"{wcls}() = default;  //!< empty object (tests): the methods throw")
+        hpp.emit(1, f"explicit {wcls}({ht}& c) : other_(&c) {{}}")
+        for bd, iface, routine, part in entries:
+            ret, _, params, const = self.signature(self.tr(iface), iface, True)
+            hpp.emit(1, f"{ret} {bd.spelling}({params}){const} override;")
+        hpp.emit(0, "")
+        hpp.emit(0, "private:")
+        hpp.emit(1, f"{ht}* other_ = nullptr;  //!< the struct of the implementation")
+        hpp.emit(0, "};")
+        hpp.emit(0, "")
+        for bd, iface, routine, part in entries:
+            ret, _, params, const = self.signature(self.tr(iface), iface, False)
+            lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
+                     f"  if (other_ == nullptr || other_->{bd.name} == nullptr)",
+                     f'    throw std::logic_error("{wcls}::{bd.spelling}: no implementation");']
+            lines += [f"  {x}" for x in part["cpp_pre"]]
+            call = f"other_->{bd.name}(other_{''.join(', ' + a for a in part['cpp_args'])});"
+            lines.append(f"  {call}")
+            if part["has_err"]:
+                lines.append(f'  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from {wcls}::{bd.spelling}");')
+            lines += [f"  {x}" for x in part["cpp_post"]] + ["}", ""]
+            self.emit_lines(cpp, lines)
+        self.report.add("translated", "wrapped-reverse-fortran")
+
+    def fortran_method_c(self, lt, bd, iface, routine, st, fw):
+        """wrap_<method>: C arguments of the function pointer -> the Fortran implementation (None if an argument
+        kind is not supported here: objects, class(*), created objects)"""
+        tr = self.tr(iface)
+        err = tr.err
+        has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
+        this, cname = iface.pass_arg, f"{self.c_name(lt, routine)}"
+        dummies, sizes, decls, locals_, pre, post, call, cpp_pre, cpp_args, cpp_post = \
+            ["self"], [], ["type(C_PTR), value :: self"], [], [], [], [], [], [], []
+        for a in iface.args:
+            v = iface.vars[a]
+            if a == this or (has_err and a == err) or a == iface.result:
+                continue
+            intent, cn = v.intent or "inout", v.cname
+            if v.base in ("real", "integer") and not v.rank:
+                dummies.append(a)
+                decls.append(f"{self.f_type(v)}, value :: {a}" if intent == "in" else
+                             f"{self.f_type(v)}, intent({intent}) :: {a}")
+                call.append(f"{a}={a}")
+                cpp_args.append(cn if intent == "in" else f"&{cn}")
+            elif v.base == "logical" and not v.rank:
+                dummies.append(a)
+                decls.append(f"logical(C_BOOL), value :: {a}" if intent == "in" else
+                             f"logical(C_BOOL), intent({intent}) :: {a}")
+                locals_.append(f"logical :: {a}_f")
+                if intent != "out":
+                    pre.append(f"{a}_f = {a}")
+                if intent != "in":
+                    post.append(f"{a} = logical({a}_f, C_BOOL)")
+                call.append(f"{a}={a}_f")
+                cpp_args.append(cn if intent == "in" else f"&{cn}")
+            elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
+                dummies += [a, f"{a}_n"]
+                sizes.append(f"integer(C_INT), value :: {a}_n")
+                decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}({a}_n)")
+                call.append(f"{a}={a}")
+                cpp_args += [f"{cn}.data()", f"static_cast<int>({cn}.size())"]
+            else:
+                return None                     # objects / class(*) / created objects: C++ implementations only
+        res_v = iface.vars.get(iface.result) if iface.kind == "function" else None
+        if res_v is not None and (res_v.rank or res_v.base not in ("real", "integer", "logical")):
+            return None
+        if res_v is not None:
+            r = iface.result
+            dummies.append(r)
+            decls.append(f"{self.f_type(res_v)}, intent(out) :: {r}")
+            cpp_pre.append(f"{self.tr(iface).cpp_type(res_v)} {r}{{}};")
+            cpp_args.append(f"&{r}")
+            cpp_post.append(f"return {r};")
+        if has_err:
+            dummies.append(err)
+            decls.append(f"integer(C_INT), intent(out) :: {err}")
+            locals_.append(f"integer :: {err}_f")
+            call.append(f"{err}={err}_f")
+            post.insert(0, f"{err} = {err}_f")
+            cpp_pre.append("int ierr = 0;")
+            cpp_args.append("&ierr")
+        target = f"wrapper%ptr%{bd.name}({', '.join(call)})"
+        body = [f"{iface.result} = {target}" if res_v is not None and res_v.base != "logical" else
+                f"{iface.result} = logical({target}, C_BOOL)" if res_v is not None else f"call {target}"]
+        fortran = ["", f"  !> {bd.spelling} of a Fortran implementation (function pointer {st}%{bd.name})",
+                   f"  subroutine {routine}({', '.join(dummies)}) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + \
+            [f"    {d}" for d in sizes + decls] + \
+            [f"    type({st}), pointer :: self_c", f"    type({fw}), pointer :: wrapper"] + [f"    {d}" for d in locals_] + \
+            ["", "    call c_f_pointer(self, self_c)", "    call c_f_pointer(self_c%userData, wrapper)"] + \
+            [f"    {x}" for x in pre + body + post] + [f"  end subroutine {routine}"]
+        return {"fortran": fortran, "cpp_pre": cpp_pre, "cpp_args": cpp_args, "cpp_post": cpp_post,
+                "has_err": has_err}
 
     def cwrapper_module(self, m):
         """name of the c_wrapper module of module m: project_thing -> project_c_wrapper_thing"""
