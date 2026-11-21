@@ -16,6 +16,8 @@ contains
     x = [1.0, -2.0, 0.5]
     call thing%evaluate(x, y, ierr)
     print '(i0, 4es24.15)', ierr, y, thing%weight()
+    call thing%reset()
+    print '(es24.15)', thing%offset()
     call create_thing_by_name('unknown', config, thing, ierr)
     print '(i0, l2)', ierr, allocated(thing)
   end subroutine use_things

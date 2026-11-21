@@ -210,8 +210,13 @@ class ReverseMixin:
             self.c_includes.add(t.module.name)
 
     def methods_of(self, lt):
-        return [(bd, self.prog.binding_proc(lt, bd)) for bd in lt.bindings.values()
-                if bd.deferred and self.prog.binding_proc(lt, bd) is not None]
+        """all bindings (deferred and with a default implementation, all overridable in Fortran)"""
+        res = []
+        for bd in lt.bindings.values():
+            p = self.prog.binding_proc(lt, bd)
+            if p is not None and not bd.nopass and p.pass_arg:
+                res.append((bd, p))
+        return res
 
     def emit_lines(self, cpp, lines):
         for line in lines:
@@ -270,6 +275,7 @@ class ReverseMixin:
                               f"{name}::~{cls}()", "{", f"  {free}(fortran_);", "}", "",
                               f"{ht}* {cls}_private::toC(const {cls}& l)", "{", "  return l.fortran_;", "}", ""] +
                         [x for _, _, m in live for x in m["cpp"]])
+        self.default_methods(cpp, methods)
         self.needs_cstdio = True
         # --- Fortran: interfaces of the trampolines, bridge type, its procedures, create / free
         for _, _, m in live:
@@ -305,11 +311,20 @@ class ReverseMixin:
         self.report.add("translated", "wrapped-listener")
 
     def pure_virtuals(self, hpp, methods):
+        """deferred: pure virtual; with a default implementation: virtual (definition: default_methods)"""
         for bd, iface, m in methods:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             hpp.emit(0, "")
             self.doc(hpp, iface, 1)
-            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const} = 0;")
+            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const}" + (" = 0;" if bd.deferred else ";"))
+
+    def default_methods(self, cpp, methods):
+        """translated Fortran default implementations of the non-deferred bindings"""
+        for bd, p, m in methods:
+            if not bd.deferred:
+                self.emit_proc(cpp, p, 0)
+                cpp.emit(0, "")
+                self.report.add("translated", "reverse-default-method")
 
     # ------------------------------------------------------------------ reverse types / factories
     def reverse_types(self):
@@ -384,6 +399,7 @@ class ReverseMixin:
                         f"{name}::~{cls}()", "{", f"  {unreg}(name_.c_str());", "}", ""]
         lines += [f"{ht}* {cls}_private::toC(const {cls}& x)", "{", "  return x.c_.get();", "}", ""]
         self.emit_lines(cpp, lines + [x for _, _, m in live for x in m["cpp"]])
+        self.default_methods(cpp, methods)
         self.needs_cstdio = True
         # --- Fortran: interfaces, bind(C) struct, holder (target of p_impl), wrapper type
         for _, _, m in live:

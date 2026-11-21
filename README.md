@@ -241,6 +241,8 @@ LinearThingFactory_type = "linear"
 
 - C struct `project_AbstractThing` per C++ object: one function pointer per deferred binding, `destroy`,
   `p_impl` (back to the Fortran object), `userData` (the C++ object), set by the C++ constructor
+- all bindings are forwarded (Fortran bindings are overridable): deferred ones are pure virtual in C++,
+  those with a default implementation `virtual` with the translated default as definition
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
   (arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`

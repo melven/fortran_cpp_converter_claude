@@ -1880,10 +1880,15 @@ def test_reverse_wrapped_types(tmp_path):
     # C struct per C++ object: function pointers, destroy, p_impl, userData
     assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
            "int, PROJECT_REAL*, int, int*) = nullptr;\n  void (*weight)(struct project_AbstractThing*, PROJECT_REAL*) = " \
-           "nullptr;\n  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
+           "nullptr;\n  void (*reset)(struct project_AbstractThing*) = nullptr;\n  void (*offset)(struct project_AbstractThing*, " \
+           "PROJECT_REAL*) = nullptr;\n  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
            "  void* userData = nullptr;\n} project_AbstractThing;" in h
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
+    # bindings with a default implementation: virtual, the translated default, forwarded as well
+    assert "  virtual void reset();" in th and "  virtual scalar offset() const;" in th
+    assert "void AbstractThing::reset()\n{\n}" in tc and "scalar AbstractThing::offset() const\n{\n  scalar o = 0.0;\n  return o;\n}" in tc
+    assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tb
     assert "  static void evaluate_wrapper(struct project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
            "int y_n, int* ierr);" in th
     assert "  std::unique_ptr<project_AbstractThing> c_;" in th and "#include \"thing_mod.h\"" not in th

@@ -12,6 +12,7 @@ module linear_thing_mod
   contains
     procedure :: evaluate => linear_evaluate
     procedure :: weight => linear_weight
+    procedure :: offset => linear_offset
   end type LinearThing_type
 
   type, extends(AbstractThingFactory_type) :: LinearThingFactory_type
@@ -35,6 +36,12 @@ contains
     real :: w
     w = 2.0 * this%factor
   end function linear_weight
+
+  function linear_offset(this) result(o)
+    class(LinearThing_type), intent(in) :: this
+    real :: o
+    o = this%factor + 0.25
+  end function linear_offset
 
   subroutine linear_create(this, config, thing, ierr)
     class(LinearThingFactory_type), intent(in) :: this
