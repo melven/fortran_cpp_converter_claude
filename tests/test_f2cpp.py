@@ -1920,7 +1920,7 @@ def test_reverse_wrapped_types(tmp_path):
     # Fortran: wrapper types owning / calling the C++ objects
     # (in the c_wrapper module; the binding module has the C struct and the interfaces)
     assert "  type, extends(AbstractThing_type) :: CWrapperThing_type\n" in tw and "    final :: cwrapperthing_final" in tw
-    assert ":: CWrapperThing_type" not in tb and "Holder" not in tb + tw and "      x%c%p_impl = c_loc(x)" in tw
+    assert ":: CWrapperThing_type" not in tb and "Holder" not in tb + tw and "p_impl" not in tb + tw
     assert "  use thing_mod_c_binding, only: AbstractThing_evaluate_c" in tw
     # private modules, public: types, bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
     assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: AbstractThing_evaluate_c\n" in tb
