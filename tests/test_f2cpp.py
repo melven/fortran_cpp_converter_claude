@@ -2138,6 +2138,7 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
            "    type(AbstractThingWrapper_type), target, intent(in) :: fthing\n" \
            "    type(AbstractThing_c), intent(out) :: cthing\n" in b
     assert "  public :: create_Thing_C_from_Fortran\n" in b and "p_impl" not in h + b
+    assert "public :: wrap_" not in b                                  # only used through the function pointers
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv

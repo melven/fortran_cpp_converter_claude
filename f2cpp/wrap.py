@@ -1307,7 +1307,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 b[j] = line.replace(", public ::", " ::")
                 types.append(m.group(2))
         k = b.index("  implicit none")
-        b[k + 1:k + 1] = ["  private"] + [f"  public :: {t}" for t in types] + public_list(b) + \
+        own = [x for x in public_list(b) if x.split("::")[1].strip() not in self.wrap_routines]   # wrap_*: pointers only
+        b[k + 1:k + 1] = ["  private"] + [f"  public :: {t}" for t in types] + own + \
             [f"  public :: {n}" for n in self.public_extra if n in "\n".join(b) and f"  public :: {n}" not in b]
 
 
