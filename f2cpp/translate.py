@@ -173,6 +173,9 @@ class Translator:
             return f"std::complex<{cfg['scalar']}>"
         if v.base == "procedure":
             return self.proc_type(v.tname)
+        if v.base == "type" and v.tname == "*":     # unlimited polymorphic: no C++ counterpart
+            self.note("unlimited-polymorphic", f"class(*) {v.cname}: std::any (check the use)")
+            return "std::any"
         if v.base == "type":
             if v.tname not in self.cfg["type_map"] and self.find_type(v.tname) is None:
                 self.report.add("info", "unknown-type:" + v.tname)
@@ -253,7 +256,7 @@ class Translator:
         if v.rank == 0:
             if v.base == "procedure":
                 return "scalar"
-            if v.base == "type" and v.has("allocatable"):
+            if v.base == "type" and v.has("allocatable") and v.tname != "*":     # class(*): std::any
                 return "uptr"
             return "ptr" if v.has("pointer") else "scalar"
         if v.int_vec:
@@ -1778,6 +1781,12 @@ class Translator:
 
     def s_Allocate_Stmt(self, node, ind):
         tspec, allocs, opts = node.items
+        src = [o for o in items_of(opts) if lname(o.items[0]) == "source"]
+        if src and len(items_of(allocs)) == 1:  # allocate(x, source=v) of class(*): std::any holds a copy
+            x = self.ref(items_of(allocs)[0])
+            if x.var is not None and x.var.base == "type" and x.var.tname == "*":
+                self.emit(ind, f"{x.code} = {self.expr(src[0].items[1]).code};")
+                return
         named = [a for a in items_of(allocs) if cls(a) == "Allocation" and cls(a.items[0]) == "Name"
                  and getattr(self.lookup(lname(a.items[0])), "named_elements", False)]
         if named:                               # named_elements: only the size (elements declared later)
@@ -2132,6 +2141,7 @@ class Translator:
         alias = lname(assoc) if assoc is not None else sel.var.name
         const = "const " if sel.var is not None and (sel.var.is_const or self.in_const_method(sel)) else ""
         obj = par(sel, P_UNARY)
+        any_sel = sel.var is not None and sel.var.base == "type" and sel.var.tname == "*"
         first, saved = True, dict(self.overrides)
         alias_line = None
 
@@ -2152,6 +2162,14 @@ class Translator:
                 if tn is None:
                     self.emit(ind, "} else {" if kw != "if" else "{")
                     continue
+                if any_sel:                     # class(*) as std::any: type() / any_cast
+                    t = self.guard_type(tn)
+                    new = f"{alias}_{re.sub(r'\W', '_', t.split('::')[-1])}"
+                    self.emit(ind, f"{kw} ({obj}.type() == typeid({t})) {{")
+                    self.emit(ind + 1, f"auto& {new} = std::any_cast<const {t}&>({obj});")   # read access
+                    alias_line = (len(self.out) - 1, new)
+                    self.overrides[alias] = Var(alias, new, *self.guard_var(tn), is_const=bool(const))
+                    continue
                 t = self.prog.type_name(lname(tn), self.mod)
                 new = f"{alias}_{re.sub(r'\W', '_', t.split('::')[-1])}"
                 if kind == "TYPE IS":
@@ -2166,6 +2184,23 @@ class Translator:
             else:
                 self.block([c], ind + 1)
         self.overrides = saved
+
+    def guard_type(self, tn):
+        """C++ type of a type guard (intrinsic types of class(*) selectors)"""
+        base = self.guard_var(tn)
+        if base[0] != "type":
+            return self.elem_type(Var("", "", base[0], kind=base[2]))
+        return self.prog.type_name(base[1], self.mod)
+
+    def guard_var(self, tn):
+        """(base, tname, kind) of a type guard's type"""
+        if cls(tn) == "Intrinsic_Type_Spec":
+            base = str(tn.items[0]).lower().replace("double precision", "real")
+            kind = None
+            if tn.items[1] is not None:
+                kind = re.sub(r"\s|kind=|[()]", "", str(tn.items[1]).lower())
+            return base, None, kind
+        return "type", lname(tn), None
 
     def in_const_method(self, x):
         p = self.method_proc()

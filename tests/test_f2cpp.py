@@ -1933,3 +1933,17 @@ def test_reverse_wrapped_types(tmp_path):
         run(["g++"] + [o for o in objs if o != "mixed_main.o"] + ["test_cpp.o", "-lgtest", "-lgtest_main", "-lpthread",
                                                                   "-lgfortran", "-o", "gt"], d)
         assert "[  PASSED  ] 1 test" in run(["./gt"], d)
+
+
+def test_unlimited_polymorphic_as_any(tmp_path):
+    """class(*) (black-box state) in translated code: std::any, select type via type() / any_cast"""
+    translate([os.path.join(CORPUS, "wrapped", "state_mod.F90")], cfg(), str(tmp_path))
+    hpp, cpp = (tmp_path / "state_mod.hpp").read_text(), (tmp_path / "state_mod.cpp").read_text()
+    assert "  std::any p;" in hpp and "#include <any>" in hpp
+    assert "unique_ptr<*>" not in hpp + cpp
+    assert "    checkpoints[i - 1].p = x * i;" in cpp
+    assert ".p.type() == typeid(scalar))" in cpp and "std::any_cast<const scalar&>(" in cpp
+    if not (shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "state_mod.cpp"],
+        str(tmp_path))

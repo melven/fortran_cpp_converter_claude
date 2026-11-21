@@ -768,7 +768,7 @@ class ModuleEmitter:
                 names.add(m.ifaces[n].cname)
         return {x for x in names if x}
 
-    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr"]),
+    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr"]), ("any", ["std::any"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
                        ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
     SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),

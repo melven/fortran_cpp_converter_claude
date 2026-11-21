@@ -286,6 +286,13 @@ parameters. A template that declares the object (`"Type {self}(...);"`) replaces
 an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
 (`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
 
+## Unlimited polymorphic objects
+
+`class(*), allocatable :: p` (black-box data) is translated as `std::any p;` (noted as
+`unlimited-polymorphic`): `allocate(p, source=v)` → `p = v;`, `select type (q => p)` / `type is (real)` →
+`p.type() == typeid(scalar)` / `std::any_cast<const scalar&>(p)` (read access). In a wrapped module (`-W`)
+such a type is a wrapped class instead (`wrap_owned` for arrays of it passed to / from C++).
+
 ## Objects that are neither copyable nor movable
 
 `[named_elements] variable_type = ""` (or the C++ class name): local arrays of the type become one
