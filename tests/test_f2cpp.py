@@ -1882,8 +1882,9 @@ def test_reverse_wrapped_types(tmp_path):
     # C struct per C++ object: function pointers, destroy, p_impl, userData
     assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
            "int, PROJECT_REAL*, int, int*) = nullptr;\n  void (*weight)(struct project_AbstractThing*, PROJECT_REAL*) = " \
-           "nullptr;\n  void (*reset)(struct project_AbstractThing*) = nullptr;\n  void (*offset)(struct project_AbstractThing*, " \
-           "PROJECT_REAL*) = nullptr;\n  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
+           "nullptr;\n  void (*reset)(struct project_AbstractThing*) = nullptr;\n" in h
+    assert "  void (*save_state)(struct project_AbstractThing*, void**, int*, void (**)(void*), int*) = nullptr;\n" in h
+    assert "  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
            "  void* userData = nullptr;\n} project_AbstractThing;" in h
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
@@ -1957,3 +1958,73 @@ def test_unlimited_polymorphic_as_any(tmp_path):
         return
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "state_mod.cpp"],
         str(tmp_path))
+
+
+def test_wrapped_unlimited_polymorphic_state(tmp_path):
+    """class(*) state of a wrapped class: Fortran data in a std::any (FortranState) through C++ and back"""
+    d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
+    src = os.path.join(w, "fstate_mod.F90")
+    translate([], cfg(), d, wrap=[src])
+    hpp, cpp = (tmp_path / "fstate_mod.hpp").read_text(), (tmp_path / "fstate_mod.cpp").read_text()
+    b = (tmp_path / "fstate_mod_c_binding.F90").read_text()
+    assert "  void get_state(std::any& state) const;" in hpp and "  void set_state(const std::any& state);" in hpp
+    assert "struct FortranState" in hpp and "#include <any>" in hpp
+    assert "  state = f2cpp_any::from_fortran(state_p, state_k, &project_fstate_mod_any_release);" in cpp
+    assert "    call f2cpp_any_from_view(state, state_kind, state_f)\n" in b and "    call f2cpp_any_back(state, state_kind, state_f)" in b
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""program drv
+  use, intrinsic :: iso_c_binding
+  use fstate_mod
+  use fstate_mod_c_binding, only: project_Counter_setup, project_Counter_destroy
+  implicit none
+  interface
+    subroutine run(h) bind(C, name="run")
+      import :: C_PTR
+      type(C_PTR), value :: h
+    end subroutine
+  end interface
+  type(Counter_type), target :: c
+  type(C_PTR) :: h
+  c%n = 5
+  h = project_Counter_setup(c)
+  call run(h)
+  call project_Counter_destroy(h)
+  print '(i0)', c%n
+end program drv
+""")
+    (tmp_path / "run.cpp").write_text(r"""#include "fstate_mod.hpp"
+#include "fstate_mod.h"
+#include <cstdio>
+extern "C" void run(project_Counter* h)
+{
+  auto c = project::Counter_private::wrapFromC(*h);
+  std::any st;
+  c->get_state(st);                   // Fortran data: FortranState in the std::any
+  std::any copy = st;                 // copies share it
+  c->n() = 99;
+  c->set_state(copy);                 // back to Fortran: 5
+  std::printf("%d\n", c->n());
+  try
+  {
+    c->set_state(std::any(3));        // C++ data: not an integer for Fortran -> ierr -> exception
+  }
+  catch (const std::exception&)
+  {
+    std::printf("caught\n");
+  }
+}
+""")
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-Wall", "-Werror",
+          "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    for f in (src, "fstate_mod_c_binding.F90", "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f, o in (("fstate_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
+        run(gxx + [f, "-o", o], d)
+    run(["gfortran", "fstate_mod.o", "fstate_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
+    assert run(["./m"], d).split() == ["5", "caught", "5"]
+    if shutil.which("valgrind"):
+        out = subprocess.run(["valgrind", "--error-exitcode=3", "--leak-check=full", "./m"], cwd=d,
+                             capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr                      # no errors, no leaks (counted as errors)

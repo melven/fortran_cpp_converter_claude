@@ -52,6 +52,30 @@ class ReverseMixin:
                 continue
             intent = v.intent or "inout"
             rev = v.tname if v.base == "type" else None
+            if v.base == "type" and v.tname == "*" and not v.rank:         # class(*): std::any in C++
+                self.any_used = True
+                if intent == "out":             # C++ data -> CppAny_type, Fortran data (back) -> moved
+                    c_params += [f"void** {a}", f"int* {a}_kind", f"void (**{a}_del)(void*)"]
+                    f_dummies += [a, f"{a}_kind", f"{a}_del"]
+                    f_decls += [f"type(C_PTR), intent(out) :: {a}", f"integer(C_INT), intent(out) :: {a}_kind",
+                                f"type(C_FUNPTR), intent(out) :: {a}_del"]
+                    locals_ += [f"type(C_PTR) :: {a}_p", f"integer(C_INT) :: {a}_k", f"type(C_FUNPTR) :: {a}_d"]
+                    actuals += [f"{a}_p", f"{a}_k", f"{a}_d"]
+                    post.append(f"call f2cpp_any_from_c({a}_p, {a}_k, {a}_d, {a})")
+                    cpp_init.append(f"*{a} = nullptr;")
+                    cpp_pre.append(f"std::any {a}_v;")
+                    cpp_args.append(f"{a}_v")
+                    cpp_post.append(f"f2cpp_any::to_c(std::move({a}_v), {a}, {a}_kind, {a}_del);")
+                else:                           # C++ data (CppAny_type) -> its std::any
+                    c_params += [f"const void* {a}", f"int {a}_kind"]
+                    f_dummies += [a, f"{a}_kind"]
+                    f_decls += [f"type(C_PTR), value :: {a}", f"integer(C_INT), value :: {a}_kind"]
+                    locals_ += [f"type(C_PTR) :: {a}_p", f"integer(C_INT) :: {a}_k"]
+                    pre.append(f"call f2cpp_any_view({a}, {a}_p, {a}_k)" if not v.has("allocatable") else
+                               f"call f2cpp_any_view_alloc({a}, {a}_p, {a}_k)")
+                    actuals += [f"{a}_p", f"{a}_k"]
+                    cpp_args.append(f"f2cpp_any::ref({a}, {a}_kind)")
+                continue
             if v.base == "type" and not v.rank and rev in self.reverse_types() and v.has("allocatable") \
                     and intent == "out":        # created object (factory): owned by Fortran
                 rt = prog.find_type(rev, self.mod)
@@ -185,7 +209,8 @@ class ReverseMixin:
         res["c_params"] = ", ".join(c_params)
         # C++ declaration / definition: the C++ real type (same type as the C macro, which is not in the .hpp)
         res["cpp_params"] = re.sub(rf"\b{re.escape(cfg['c_real'])}\b", cfg["scalar"], res["c_params"])
-        res["c_types"] = ", ".join(re.sub(r"\s*\w+$", "", c) for c in c_params)
+        res["c_types"] = ", ".join(re.sub(r"(\(\*+)\w+\)", r"\1)", c) if "(*" in c else re.sub(r"\s*\w+$", "", c)
+                                   for c in c_params)       # parameter types (function pointers: without name)
         call = f"{cpp_obj}->{bd.spelling}({', '.join(cpp_args)});"
         if res_v is not None:
             call = f"*{iface.result} = {call}"
@@ -225,6 +250,162 @@ class ReverseMixin:
     def emit_lines(self, cpp, lines):
         for line in lines:
             cpp.emit((len(line) - len(line.lstrip())) // 2, line.strip()) if line.strip() else cpp.emit(0, "")
+
+    # ------------------------------------------------------------------ class(*) <-> std::any
+    def any_release_name(self):
+        return f"{self.cfg['c_prefix']}_{self.mod.spelling}_any_release"
+
+    def any_fortran(self):
+        """(declarations, procedures) of the binding: holders of C++ data in Fortran / Fortran data in C++.
+        kind at the C interface: 0 empty, 1 C++ data (std::any*), 2 Fortran data (FortranAny_type holder)"""
+        rel = self.any_release_name()
+        spec = ["  abstract interface", "    !> C++ deleter of a std::any", "    subroutine f2cpp_any_delete_c(p) bind(C)",
+                "      import", "      type(C_PTR), value :: p", "    end subroutine f2cpp_any_delete_c", "  end interface", "",
+                "  !> C++ data (std::any) in Fortran: passed back to C++ only (move_alloc, never copied)",
+                "  type, public :: CppAny_type", "    type(C_PTR) :: p = C_NULL_PTR           !< std::any*",
+                "    type(C_FUNPTR) :: del = C_NULL_FUNPTR   !< deletes it (C++); null: not owned",
+                "  contains", "    final :: f2cpp_cppany_final", "  end type CppAny_type", "",
+                "  !> Fortran data (class(*)) held by C++ (FortranState)", "  type, public :: FortranAny_type",
+                "    class(*), allocatable :: p", "  end type FortranAny_type", ""]
+        procs = ["", "  subroutine f2cpp_cppany_final(this)", "    type(CppAny_type), intent(inout) :: this",
+                 "    procedure(f2cpp_any_delete_c), pointer :: f", "",
+                 "    if (c_associated(this%p) .and. c_associated(this%del)) then",
+                 "      call c_f_procpointer(this%del, f)", "      call f(this%p)", "    end if", "    this%p = C_NULL_PTR",
+                 "  end subroutine f2cpp_cppany_final", "",
+                 "  !> x from C (kind 1: C++ data, owned now; 2: Fortran data back from C++, moved; 0: unallocated)",
+                 "  subroutine f2cpp_any_from_c(p, k, d, x)", "    type(C_PTR), intent(in) :: p",
+                 "    integer(C_INT), intent(in) :: k", "    type(C_FUNPTR), intent(in) :: d",
+                 "    class(*), allocatable, intent(out) :: x", "    type(FortranAny_type), pointer :: h", "",
+                 "    if (k == 1) then", "      allocate(CppAny_type :: x)", "      select type (x)",
+                 "      type is (CppAny_type)", "        x%p = p", "        x%del = d", "      end select",
+                 "    else if (k == 2) then", "      call c_f_pointer(p, h)", "      call move_alloc(h%p, x)",
+                 "      deallocate(h)", "    end if", "  end subroutine f2cpp_any_from_c", "",
+                 "  !> C view of x: C++ data (kind 1); Fortran data cannot be used by C++ (kind -1)",
+                 "  subroutine f2cpp_any_view(x, p, k)", "    class(*), intent(in) :: x", "    type(C_PTR), intent(out) :: p",
+                 "    integer(C_INT), intent(out) :: k", "", "    p = C_NULL_PTR", "    k = -1", "    select type (x)",
+                 "    type is (CppAny_type)", "      p = x%p", "      k = 1", "    end select",
+                 "  end subroutine f2cpp_any_view", "",
+                 "  subroutine f2cpp_any_view_alloc(x, p, k)", "    class(*), allocatable, intent(in) :: x",
+                 "    type(C_PTR), intent(out) :: p", "    integer(C_INT), intent(out) :: k", "",
+                 "    p = C_NULL_PTR", "    k = 0", "    if (allocated(x)) call f2cpp_any_view(x, p, k)",
+                 "  end subroutine f2cpp_any_view_alloc", "",
+                 "  !> x to C (moved): C++ data back (kind 1, the std::any*), Fortran data in a holder (kind 2)",
+                 "  subroutine f2cpp_any_to_c(x, p, k)", "    class(*), allocatable, intent(inout) :: x",
+                 "    type(C_PTR), intent(out) :: p", "    integer(C_INT), intent(out) :: k",
+                 "    type(FortranAny_type), pointer :: h", "", "    p = C_NULL_PTR", "    k = 0",
+                 "    if (.not. allocated(x)) return", "    select type (x)", "    type is (CppAny_type)",
+                 "      p = x%p", "      x%p = C_NULL_PTR                       ! not deleted here: C++ owns it again",
+                 "      k = 1", "    end select", "    if (k == 1) then", "      deallocate(x)", "      return", "    end if",
+                 "    allocate(h)", "    call move_alloc(x, h%p)", "    p = c_loc(h)", "    k = 2", "  end subroutine f2cpp_any_to_c", "",
+                 "  !> Fortran data for a Fortran procedure from C (kind 2: holder, moved there and back; 1: C++ data)",
+                 "  subroutine f2cpp_any_from_view(p, k, x)", "    type(C_PTR), intent(in) :: p",
+                 "    integer(C_INT), intent(in) :: k", "    class(*), allocatable, intent(inout) :: x",
+                 "    type(FortranAny_type), pointer :: h", "",
+                 "    if (k == 2) then", "      call c_f_pointer(p, h)", "      call move_alloc(h%p, x)",
+                 "    else if (k == 1) then", "      allocate(CppAny_type :: x)          ! not owned (no deleter)",
+                 "      select type (x)", "      type is (CppAny_type)", "        x%p = p", "      end select", "    end if",
+                 "  end subroutine f2cpp_any_from_view", "",
+                 "  subroutine f2cpp_any_back(p, k, x)", "    type(C_PTR), intent(in) :: p",
+                 "    integer(C_INT), intent(in) :: k", "    class(*), allocatable, intent(inout) :: x",
+                 "    type(FortranAny_type), pointer :: h", "",
+                 "    if (k == 2) then", "      call c_f_pointer(p, h)", "      call move_alloc(x, h%p)",
+                 "    else if (allocated(x)) then", "      deallocate(x)", "    end if", "  end subroutine f2cpp_any_back", "",
+                 "!@c_declaration", f"!  void {rel}(void* holder);", "!@end_c_declaration",
+                 "  !> releases Fortran data held by C++ (FortranState)",
+                 f"  subroutine {rel}(holder) bind(C, name=\"{rel}\")"] + self.dllexport(rel) + \
+            ["    type(C_PTR), value :: holder", "    type(FortranAny_type), pointer :: h", "",
+             "    if (.not. c_associated(holder)) return", "    call c_f_pointer(holder, h)", "    deallocate(h)",
+             f"  end subroutine {rel}"]
+        return spec, procs
+
+    ANY_CPP = """#ifndef F2CPP_ANY_SUPPORT
+#define F2CPP_ANY_SUPPORT
+//! Fortran data (class(*)) held by C++ in a std::any (as std::shared_ptr<FortranState>); released in Fortran
+struct FortranState
+{
+  FortranState(void* h, void (*r)(void*)) : handle(h), release(r) {}
+  ~FortranState()
+  {
+    if (release != nullptr && handle != nullptr)
+      release(handle);
+  }
+  FortranState(const FortranState&) = delete;
+  FortranState& operator=(const FortranState&) = delete;
+  void* handle = nullptr;               //!< the Fortran holder
+  void (*release)(void*) = nullptr;     //!< Fortran: deallocates it
+};
+
+//! class(*) <-> std::any at the C interface (kind 0: empty, 1: C++ data, 2: Fortran data)
+namespace f2cpp_any
+{
+inline void delete_any(void* p)
+{
+  delete static_cast<std::any*>(p);
+}
+
+//! to Fortran (moved): C++ data on the heap (deleter), Fortran data back to Fortran
+inline void to_c(std::any&& v, void** p, int* kind, void (**del)(void*))
+{
+  *p = nullptr;
+  *kind = 0;
+  *del = nullptr;
+  if (!v.has_value())
+    return;
+  if (v.type() == typeid(std::shared_ptr<FortranState>))
+  {
+    auto s = std::any_cast<std::shared_ptr<FortranState>>(v);
+    *p = s->handle;
+    s->handle = nullptr;                // owned by Fortran again
+    *kind = 2;
+    return;
+  }
+  *p = new std::any(std::move(v));
+  *kind = 1;
+  *del = &delete_any;
+}
+
+//! from Fortran for a C++ method: C++ data only
+inline const std::any& ref(const void* p, int kind)
+{
+  static const std::any empty;
+  if (kind == 1)
+    return *static_cast<const std::any*>(p);
+  if (kind == 0)
+    return empty;
+  throw std::invalid_argument("Fortran data (class(*)) passed to a C++ implementation");
+}
+
+//! to Fortran for a Fortran procedure (not moved): Fortran data (kind 2) or a view of C++ data (kind 1)
+inline void view(const std::any& v, void** p, int* kind)
+{
+  *p = nullptr;
+  *kind = 0;
+  if (!v.has_value())
+    return;
+  if (v.type() == typeid(std::shared_ptr<FortranState>))
+  {
+    *p = std::any_cast<const std::shared_ptr<FortranState>&>(v)->handle;
+    *kind = 2;
+    return;
+  }
+  *p = const_cast<std::any*>(&v);
+  *kind = 1;
+}
+
+//! from a Fortran procedure: C++ data back (kind 1, deleted here) or Fortran data (kind 2, owned now)
+inline std::any from_fortran(void* p, int kind, void (*release)(void*))
+{
+  if (kind == 1)
+  {
+    std::unique_ptr<std::any> v(static_cast<std::any*>(p));
+    return std::move(*v);
+  }
+  if (kind == 2)
+    return std::make_shared<FortranState>(p, release);
+  return {};
+}
+}  // namespace f2cpp_any
+#endif"""
 
     # ------------------------------------------------------------------ listeners
     def bridge_name(self, lt):

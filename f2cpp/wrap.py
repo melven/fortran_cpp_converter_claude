@@ -304,6 +304,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     return None, f"argument {v.cname} (wrap_owned array: intent(in) / intent(out))"
                 res.append((a, "owned-" + v.intent, [n or f"{a}_n1"]))
                 continue
+            if v.base == "type" and v.tname == "*" and not v.rank and v.has("allocatable") and \
+                    v.intent in ("in", "out"):          # class(*): std::any in C++
+                res.append((a, "any-" + v.intent, None))
+                continue
             if v.base in ("procedure", "type", "complex", "unknown"):
                 return None, f"argument {v.cname} ({v.base})"
             if v.base == "character":
@@ -607,6 +611,25 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 pre.append(f"if (c_associated({a})) allocate({a}_f, source={self.cfg['wrap_string_in'][1]}({a}))")
                 call.append(f"{a}={a}_f")
                 glue.append(f"{v.cname} ? {v.cname}->c_str() : nullptr")
+            elif kind in ("any-in", "any-out"):     # class(*) <-> std::any (see f2cpp_any)
+                self.any_used = True
+                cn = v.cname
+                decls += [f"type(C_PTR), {'value' if kind == 'any-in' else 'intent(out)'} :: {a}",
+                          f"integer(C_INT), {'value' if kind == 'any-in' else 'intent(out)'} :: {a}_kind",
+                          f"class(*), allocatable :: {a}_f"]
+                f_args.append(f"{a}_kind")
+                call.append(f"{a}={a}_f")
+                if kind == "any-in":            # Fortran data moved into the call and back; C++ data viewed
+                    c_args += [f"void* {a}", f"int {a}_kind"]
+                    pre.append(f"call f2cpp_any_from_view({a}, {a}_kind, {a}_f)")
+                    post.append(f"call f2cpp_any_back({a}, {a}_kind, {a}_f)")
+                    glue += [("pre", f"void* {cn}_p = nullptr;"), ("pre", f"int {cn}_k = 0;"),
+                             ("pre", f"f2cpp_any::view({cn}, &{cn}_p, &{cn}_k);"), f"{cn}_p", f"{cn}_k"]
+                else:                           # Fortran data (holder) or C++ data back
+                    c_args += [f"void** {a}", f"int* {a}_kind"]
+                    post.append(f"call f2cpp_any_to_c({a}_f, {a}, {a}_kind)")
+                    glue += [("pre", f"void* {cn}_p = nullptr;"), ("pre", f"int {cn}_k = 0;"), f"&{cn}_p", f"&{cn}_k",
+                             ("post", f"{cn} = f2cpp_any::from_fortran({cn}_p, {cn}_k, &{self.any_release_name()});")]
             elif kind == "listener":           # the C++ listener's Fortran bridge object; user: this C++ object
                 lt = self.prog.find_type(v.tname, self.mod)
                 bridge = f"{self.c_class(lt)}_cpp"
@@ -968,6 +991,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
+        self.any_used = False                       # class(*) arguments: holders, f2cpp_any
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.needs_cstdio = False
         stem_h = os.path.basename(stem) + ".h"
@@ -1152,7 +1176,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                           if t.name not in cfg["unwrap_types"] and t.name not in values})
         if handles:
             h += [""] + [f"struct {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
-        h += ["", self.open_ns(), ""]
+        h += ["", self.open_ns(), ""] + ([self.ANY_CPP, ""] if self.any_used else [])
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
         classes = [t for t in self.wrapped_types() if t.name not in cfg["unwrap_types"]]
@@ -1204,6 +1228,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
+        if self.any_used:
+            spec, procs = self.any_fortran()
+            b += spec
+            fb += procs
         b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
         inside = False                              # !@c_declaration blocks in the first column
         for k, line in enumerate(b):

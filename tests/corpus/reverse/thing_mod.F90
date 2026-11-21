@@ -11,6 +11,8 @@ module thing_mod
     procedure(weight_iface), deferred :: weight
     procedure :: reset => thing_reset          ! default: nothing to do
     procedure :: offset => thing_offset        ! default: 0, overridden in C++
+    procedure(save_iface), deferred :: save_state
+    procedure(restore_iface), deferred :: restore_state
   end type AbstractThing_type
 
   abstract interface
@@ -28,6 +30,20 @@ module thing_mod
       class(AbstractThing_type), intent(in) :: this
       real :: w
     end function weight_iface
+    !> the internal state (black box for the caller)
+    subroutine save_iface(this, state, ierr)
+      import :: AbstractThing_type
+      class(AbstractThing_type), intent(in) :: this
+      class(*), allocatable, intent(out) :: state
+      integer, intent(out) :: ierr
+    end subroutine save_iface
+    !> restores a state of save_state
+    subroutine restore_iface(this, state, ierr)
+      import :: AbstractThing_type
+      class(AbstractThing_type), intent(inout) :: this
+      class(*), allocatable, intent(in) :: state
+      integer, intent(out) :: ierr
+    end subroutine restore_iface
   end interface
 contains
 

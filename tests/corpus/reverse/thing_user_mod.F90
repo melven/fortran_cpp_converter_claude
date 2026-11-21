@@ -7,7 +7,8 @@ module thing_user_mod
 contains
   subroutine use_things()
     type(Config_type) :: config
-    class(AbstractThing_type), allocatable :: thing
+    class(AbstractThing_type), allocatable :: thing, other
+    class(*), allocatable :: state, kept
     real :: x(3), y(3)
     integer :: ierr
     config%scale = 1.5
@@ -18,6 +19,12 @@ contains
     print '(i0, 4es24.15)', ierr, y, thing%weight()
     call thing%reset()
     print '(es24.15)', thing%offset()
+    config%scale = 4.0
+    call create_thing_by_name('linear', config, other, ierr)
+    call other%save_state(state, ierr)               ! black box (C++ data in the C++ build)
+    call move_alloc(state, kept)
+    call thing%restore_state(kept, ierr)
+    print '(i0, es24.15)', ierr, thing%weight()      ! 2 * 4.0
     call create_thing_by_name('unknown', config, thing, ierr)
     print '(i0, l2)', ierr, allocated(thing)
   end subroutine use_things
