@@ -246,8 +246,10 @@ LinearThingFactory_type = "linear"
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
   (arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
-- Fortran `CWrapperThing_type` (binding module) extends the abstract type, calls the function pointers,
-  owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)` makes one
+- the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions); the
+  module `project_c_wrapper_<module>` (file of the same name) has `CWrapperThing_type`: extends the abstract
+  type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
+  makes one (`p_impl` points to it); factories: `CWrapperThingFactory_type` and register / unregister
 - factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
   in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor
   unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)`: `release()` to Fortran

@@ -66,7 +66,9 @@ class ReverseMixin:
                 pre.append(f"{a}_p = C_NULL_PTR")
                 actuals.append(f"{a}_p")
                 post.append(f"if (c_associated({a}_p)) call {self.c_name(rt, 'wrap')}({a}_p, {a})")
-                self.use_binding(rt, [self.c_name(rt, "wrap")])
+                if rt.module is not self.mod:   # its c_wrapper module (and its C header for the struct)
+                    self.extra_uses.add(f"  use {self.cwrapper_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
+                    self.c_includes.add(rt.module.name)
                 cpp_init.append(f"*{a} = nullptr;")
                 cpp_pre.append(f"std::unique_ptr<{rcls}> {a}_u;")
                 cpp_args.append(f"{a}_u")
@@ -430,8 +432,9 @@ inline {ah}* to_fortran(const std::any& v)
         name = prog.type_name(lt.name)
         cls, ht, cc = name.split("::")[-1], self.c_type_name(lt), self.c_class(lt)
         st, bridge, ft = f"{cc}_c", self.bridge_name(lt), lt.spelling or lt.name
-        holder = f"{cc}Holder_type"
         factory = cfg["wrap_reverse_factories"].get(lt.name)
+        cw = self.cw                            # the Fortran wrapper types go into the c_wrapper module
+        saved_uses, self.extra_uses = self.extra_uses, cw["uses"]
         methods, cpp_only = [], []
         for bd, iface in self.methods_of(lt):
             if not bd.deferred and self.translated_here(lt, bd, iface):      # wrap_translate: C++ only
@@ -444,6 +447,7 @@ inline {ah}* to_fortran(const std::any& v)
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
             m["proc"] = proc
             methods.append((bd, iface, m))
+        self.extra_uses = saved_uses
         live = [m for m in methods if not m[2]["todo"]]
         # --- C struct (in the c_declaration block; struct ... for its own type)
         members = [f"  void (*{bd.name})({m['c_types']}) = nullptr;" for bd, _, m in live]
@@ -499,47 +503,48 @@ inline {ah}* to_fortran(const std::any& v)
         self.emit_lines(cpp, lines + [x for _, _, m in live for x in m["cpp"]])
         self.default_methods(cpp, all_methods)
         self.needs_cstdio = True
-        # --- Fortran: interfaces, bind(C) struct, holder (target of p_impl), wrapper type
+        # --- Fortran binding: interfaces of the functions, bind(C) struct (what C sees)
         for _, _, m in live:
             self.bridges += m["abstract"]
+        cw["binding_names"] += [f"{cc}_{bd.name}_c" for bd, _, _ in live] + [st]
         if factory is None:
             self.bridges += ["  abstract interface", f"    !> {cls}::destroy_wrapper",
                              f"    subroutine {cc}_destroy_c(self) bind(C)", "      import",
                              "      type(C_PTR), value :: self", f"    end subroutine {cc}_destroy_c", "  end interface", ""]
+            cw["binding_names"].append(f"{cc}_destroy_c")
         self.bridges += [f"  !> C struct {ht}: functions of the C++ object", f"  type, bind(C), public :: {st}"] + \
             [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
-            ["    type(C_PTR) :: p_impl = C_NULL_PTR    !< the Fortran object (holder)",
-             "    type(C_PTR) :: userData = C_NULL_PTR  !< the C++ object", f"  end type {st}", "",
-             f"  !> target of p_impl: the Fortran object of a C++ object", f"  type, public :: {holder}",
-             f"    class({ft}), pointer :: ptr => null()", f"  end type {holder}", "",
-             f"  !> {ft} implemented in C++" + (" (owns the C++ object)" if factory is None else ""),
-             f"  type, extends({ft}), public :: {bridge}", f"    type({st}), pointer :: c => null()",
-             f"    type({holder}), pointer :: holder => null()", "  contains"] + \
+            [f"    type(C_PTR) :: p_impl = C_NULL_PTR    !< the Fortran object ({bridge})",
+             "    type(C_PTR) :: userData = C_NULL_PTR  !< the C++ object", f"  end type {st}", ""]
+        # --- c_wrapper module: the Fortran type implemented by the C++ object
+        cw["spec"] += [f"  !> {ft} implemented in C++" + (" (owns the C++ object)" if factory is None else ""),
+                       f"  type, extends({ft}), public :: {bridge}", f"    type({st}), pointer :: c => null()",
+                       "  contains"] + \
             [f"    procedure :: {bd.spelling} => {m['proc']}" for bd, _, m in methods] + \
             ([f"    final :: {bridge[:-5].lower()}_final"] if factory is None else []) + [f"  end type {bridge}", ""]
         for _, _, m in methods:
-            fb += m["fortran"]
+            cw["procs"] += m["fortran"]
         fin, wrap = f"{bridge[:-5].lower()}_final", self.c_name(lt, "wrap")
         if factory is None:
-            fb += ["", "  !> deletes the C++ object", f"  subroutine {fin}(this)", f"    type({bridge}), intent(inout) :: this",
-                   f"    procedure({cc}_destroy_c), pointer :: f", "",
-                   "    if (associated(this%c)) then", "      this%c%p_impl = C_NULL_PTR",
-                   "      if (c_associated(this%c%destroy)) then", "        call c_f_procpointer(this%c%destroy, f)",
-                   "        call f(c_loc(this%c))", "      end if", "    end if",
-                   "    if (associated(this%holder)) deallocate(this%holder)", f"  end subroutine {fin}", "",
-                   f"  !> x: the Fortran object of the C++ object c (owns it)", f"  subroutine {wrap}(c, x)",
-                   "    type(C_PTR), intent(in) :: c", f"    class({ft}), allocatable, target, intent(out) :: x", "",
-                   f"    allocate({bridge} :: x)", "    select type (x)", f"    type is ({bridge})",
-                   "      call c_f_pointer(c, x%c)", "      allocate(x%holder)", "      x%holder%ptr => x",
-                   "      x%c%p_impl = c_loc(x%holder)", "    end select", f"  end subroutine {wrap}"]
+            cw["procs"] += ["", "  !> deletes the C++ object", f"  subroutine {fin}(this)",
+                            f"    type({bridge}), intent(inout) :: this", f"    procedure({cc}_destroy_c), pointer :: f", "",
+                            "    if (.not. associated(this%c)) return", "    this%c%p_impl = C_NULL_PTR",
+                            "    if (c_associated(this%c%destroy)) then", "      call c_f_procpointer(this%c%destroy, f)",
+                            "      call f(c_loc(this%c))", "    end if", f"  end subroutine {fin}", "",
+                            "  !> x: the Fortran object of the C++ object c (owns it); p_impl: back to x",
+                            f"  subroutine {wrap}(c, x)", "    type(C_PTR), intent(in) :: c",
+                            f"    class({ft}), allocatable, target, intent(out) :: x", "",
+                            f"    allocate({bridge} :: x)", "    select type (x)", f"    type is ({bridge})",
+                            "      call c_f_pointer(c, x%c)", "      x%c%p_impl = c_loc(x)", "    end select",
+                            f"  end subroutine {wrap}"]
         else:                                   # registration of the C++ factory under a name
             name_in = cfg["wrap_string_in"]
-            self.extra_uses.add(f"  use {name_in[0]}, only: {name_in[1]}")
-            fb += ["", "!@c_declaration", f"!  void {reg}({ht}* factory, const char* name);",
-                   f"!  void {unreg}(const char* name);", "!@end_c_declaration",
-                   "  !> registers the C++ factory under name (Fortran factory registration)",
-                   f"  subroutine {reg}(factory, name) bind(C, name=\"{reg}\")"] + self.dllexport(reg) + \
+            cw["uses"].add(f"  use {name_in[0]}, only: {name_in[1]}")
+            cw["procs"] += ["", "!@c_declaration", f"!  void {reg}({ht}* factory, const char* name);",
+                            f"!  void {unreg}(const char* name);", "!@end_c_declaration",
+                            "  !> registers the C++ factory under name (Fortran factory registration)",
+                            f"  subroutine {reg}(factory, name) bind(C, name=\"{reg}\")"] + self.dllexport(reg) + \
                 ["    type(C_PTR), value :: factory, name", f"    type({bridge}) :: f", "",
                  "    call c_f_pointer(factory, f%c)",
                  f"    call {factory['register']}({name_in[1]}(name), f)      ! stores a copy",
@@ -548,3 +553,10 @@ inline {ah}* to_fortran(const std::any& v)
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]
         self.report.add("translated", "wrapped-reverse")
+
+    def cwrapper_module(self, m):
+        """name of the c_wrapper module of module m: project_thing -> project_c_wrapper_thing"""
+        sp, pre = m.spelling or m.name, self.cfg["c_prefix"]
+        if sp.lower().startswith(pre.lower() + "_"):
+            return f"{sp[:len(pre) + 1]}c_wrapper_{sp[len(pre) + 1:]}"
+        return f"{pre}_c_wrapper_{sp}"

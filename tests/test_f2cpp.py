@@ -1891,6 +1891,8 @@ def test_reverse_wrapped_types(tmp_path):
     th, tc, tb = ((tmp_path / f).read_text() for f in ("thing_mod.hpp", "thing_mod.cpp", "thing_mod_c_binding.F90"))
     fh, fc, fb = ((tmp_path / f).read_text() for f in ("thing_factory_mod.hpp", "thing_factory_mod.cpp",
                                                          "thing_factory_mod_c_binding.F90"))
+    tw = (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()          # the Fortran types implemented in C++
+    fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
     h, lh, lc = ((tmp_path / f).read_text() for f in ("thing_mod.h", "linear_thing_mod.hpp", "linear_thing_mod.cpp"))
     # C struct per C++ object: function pointers, destroy, p_impl, userData
     assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
@@ -1903,7 +1905,7 @@ def test_reverse_wrapped_types(tmp_path):
     # bindings with a default implementation: virtual, the translated default, forwarded as well
     assert "  virtual void reset();" in th and "  virtual scalar offset() const;" in th
     assert "void AbstractThing::reset()\n{\n}" in tc and "scalar AbstractThing::offset() const\n{\n  scalar o = 0.0;\n  return o;\n}" in tc
-    assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tb
+    assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tw
     assert "  static void evaluate_wrapper(struct project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
            "int y_n, int* ierr);" in th
     assert "  //! internal wrapper for evaluate\n  static void evaluate_wrapper(" in th
@@ -1916,15 +1918,19 @@ def test_reverse_wrapped_types(tmp_path):
     assert "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;\n" \
            "    thing_u.release(); // NOLINT(bugprone-unused-return-value)" in fc
     # Fortran: wrapper types owning / calling the C++ objects
-    assert "  type, extends(AbstractThing_type) :: CWrapperThing_type\n" in tb
-    # private module, public: bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
-    assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_wrap\n" in tb
-    assert "  public :: CWrapperThing_type\n" in tb and "  public :: AbstractThing_evaluate_c\n" in tb
-    assert "public :: f2cpp_any_from_c" not in tb and "public :: cwrapperthing_evaluate" not in tb and "    final :: cwrapperthing_final" in tb
+    # (in the c_wrapper module; the binding module has the C struct and the interfaces)
+    assert "  type, extends(AbstractThing_type) :: CWrapperThing_type\n" in tw and "    final :: cwrapperthing_final" in tw
+    assert ":: CWrapperThing_type" not in tb and "Holder" not in tb + tw and "      x%c%p_impl = c_loc(x)" in tw
+    assert "  use thing_mod_c_binding, only: AbstractThing_evaluate_c" in tw
+    # private modules, public: types, bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
+    assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: AbstractThing_evaluate_c\n" in tb
+    assert "  implicit none\n  private\n  public :: CWrapperThing_type\n  public :: project_AbstractThing_wrap\n" in tw
+    assert "public :: cwrapperthing_evaluate" not in tw
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
-           "int(size(y_c), C_INT), ierr_c)" in tb
-    assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fb
-    assert "    call register_thing_factory(str_array_ptr_to_str(name), f)" in fb
+           "int(size(y_c), C_INT), ierr_c)" in tw
+    assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fw
+    assert "  use project_c_wrapper_thing_mod, only: project_AbstractThing_wrap" in fw
+    assert "    call register_thing_factory(str_array_ptr_to_str(name), f)" in fw
     # translated implementation: name constructor of the factory base, global instance
     assert "class LinearThingFactory final : public AbstractThingFactory\n{\npublic:\n  using AbstractThingFactory::AbstractThingFactory;" in lh
     assert 'namespace LinearThingFactory_private\n{\nLinearThingFactory instance("linear");' in lc
@@ -1941,11 +1947,13 @@ def test_reverse_wrapped_types(tmp_path):
          "ref_main.o", "-o", "ref"], os.path.join(d, "ref"))
     ref = run(["./ref"], os.path.join(d, "ref"))
     fsrc = [os.path.join(SUPPORT, "project_str.F90")] + wrapped + [os.path.join(r, "thing_user_mod.F90"), "config_mod_c_binding.F90",
-            "thing_mod_c_binding.F90", "thing_factory_mod_c_binding.F90", os.path.join(r, "mixed_main.F90")]
+            "thing_mod_c_binding.F90", "project_c_wrapper_thing_mod.F90", "thing_factory_mod_c_binding.F90",
+            "project_c_wrapper_thing_factory_mod.F90", os.path.join(r, "mixed_main.F90")]
     for f in fsrc:
         run(ff + [f], d)
     # the Fortran library references no symbol of the C++ library
-    for o in ("thing_mod_c_binding.o", "thing_factory_mod_c_binding.o", "config_mod_c_binding.o"):
+    for o in ("thing_mod_c_binding.o", "thing_factory_mod_c_binding.o", "config_mod_c_binding.o",
+              "project_c_wrapper_thing_mod.o", "project_c_wrapper_thing_factory_mod.o"):
         assert "_Z" not in run(["nm", "-u", o], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod"):
@@ -2069,7 +2077,7 @@ def test_reverse_class_star_is_todo(tmp_path):
 end module rs_mod
 """)
     translate([], cfg(wrap_reverse=["abstracts_type"]), str(tmp_path), wrap=[str(tmp_path / "rs_mod.F90")])
-    b = (tmp_path / "rs_mod_c_binding.F90").read_text()
+    b = (tmp_path / "project_c_wrapper_rs_mod.F90").read_text()
     assert "! TODO(f2cpp): argument state: class(*) (C++ data is not passed to Fortran; translate the caller)" in b
     assert 'error stop "cwrappers_save_state:' in b
 

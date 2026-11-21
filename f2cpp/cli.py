@@ -81,11 +81,18 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
     prog.decide_int_vectors([m for _, m in todo])
     for path, m in todo:
         if m in wrapped:
-            hpp, cpp, binding = WrapEmitter(prog, m, report, path).generate()
+            emitter = WrapEmitter(prog, m, report, path)
+            hpp, cpp, binding, cwrapper = emitter.generate()
             out = os.path.join(outdir, prog.file_stem(m.name) + "_c_binding.F90")
             with open(out, "w") as f:
                 f.write(binding)
             written.append(out)
+            if cwrapper is not None:                    # Fortran types implemented by C++ objects
+                out = os.path.join(outdir, os.path.dirname(prog.file_stem(m.name)), emitter.cwrapper_module(m) + ".F90")
+                with open(out, "w") as f:
+                    f.write(cwrapper)
+                written.append(out)
+                binding += "\n" + cwrapper             # its C declarations are in the same .h
             from .wrap import c_header                  # normally generated from the binding by the build
             stem = prog.file_stem(m.name)
             out = os.path.join(outdir, stem + ".h")
