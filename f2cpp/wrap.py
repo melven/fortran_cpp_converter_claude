@@ -18,13 +18,14 @@ from fparser.two import Fortran2003 as F
 from .emit import ModuleEmitter, BANNER, squeeze, strip_blank
 from .model import cls, lname, items_of
 from .translate import TODO, Untranslatable
+from .reverse import ReverseMixin
 
 
 def lower_camel(name):
     return name[:1].lower() + name[1:]
 
 
-class WrapEmitter(ModuleEmitter):
+class WrapEmitter(ReverseMixin, ModuleEmitter):
     """emits header, glue code and C binding of a wrapped module"""
 
     # ------------------------------------------------------------------ names
@@ -829,181 +830,6 @@ class WrapEmitter(ModuleEmitter):
                 decls.append(f"integer(C_INT), value :: {n}")
                 glue.append(f"static_cast<int>({cn}.size())")
 
-    def listener(self, lt, hpp, cpp, fb, typedefs):
-        """abstract listener type: C++ class with pure virtual methods and private static trampolines; Fortran
-        bridge type extending it (in the binding) that calls the trampolines through function pointers passed
-        at creation (no symbol of the C++ library is referenced by the Fortran library)"""
-        prog = self.prog
-        name = prog.type_name(lt.name)
-        cls, ht = name.split("::")[-1], self.c_type_name(lt)
-        bridge, ft = f"{self.c_class(lt)}_cpp", lt.spelling or lt.name
-        create, free = self.c_name(lt, "create"), self.c_name(lt, "free")
-        typedefs.append(f"!typedef struct {ht} {ht};")
-        methods = []
-        for bd in lt.bindings.values():
-            iface = prog.binding_proc(lt, bd)
-            if bd.deferred and iface is not None:
-                methods.append((bd, iface, self.listener_method(lt, bd, iface, bridge, cls)))
-        live = [m for m in methods if not m[2]["todo"]]
-        # --- C++ class
-        hpp.emit(0, f"namespace {cls}_private")
-        hpp.emit(0, "{")
-        hpp.emit(0, f"{ht}* toC(const {cls}& l);  //!< the Fortran object of the listener")
-        hpp.emit(0, "}")
-        hpp.emit(0, "")
-        hpp.emit(0, f"class {name}")
-        hpp.emit(0, "{")
-        hpp.emit(0, "public:")
-        hpp.emit(1, f"{cls}();  //!< creates its Fortran object")
-        hpp.emit(1, f"virtual ~{cls}();  //!< frees it: unset the listener before")
-        hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to Fortran")
-        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;")
-        for bd, iface, m in methods:
-            ret, _, params, const = self.signature(self.tr(iface), iface, True)
-            hpp.emit(0, "")
-            self.doc(hpp, iface, 1)
-            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const} = 0;")
-        hpp.emit(0, "")
-        hpp.emit(0, "private:")
-        for bd, iface, m in live:
-            hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']});  //!< called from Fortran")
-        hpp.emit(1, f"{ht}* fortran_ = nullptr;  //!< the Fortran object ({bridge}) calling this object")
-        hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& l);")
-        hpp.emit(0, "};")
-        hpp.emit(0, "")
-        fns = "".join(f", &{cls}::{m['tramp']}" for _, _, m in live)
-        lines = [f"{name}::{cls}() : fortran_({create}(this{fns}))", "{", "}", "",
-                 f"{name}::~{cls}()", "{", f"  {free}(fortran_);", "}", "",
-                 f"{ht}* {cls}_private::toC(const {cls}& l)", "{", "  return l.fortran_;", "}", ""]
-        for _, _, m in live:
-            lines += m["cpp"]
-        for line in lines:
-            ind = (len(line) - len(line.lstrip())) // 2
-            cpp.emit(ind, line.strip()) if line.strip() else cpp.emit(0, "")
-        self.needs_cstdio = True
-        # --- Fortran: interfaces of the trampolines, bridge type, its procedures, create / free
-        for _, _, m in live:
-            self.bridges += m["abstract"]
-        self.bridges += [f"  !> {ft} implemented in C++: calls the C++ object through function pointers",
-                         f"  type, extends({ft}), public :: {bridge}",
-                         "    type(C_PTR) :: userData = C_NULL_PTR !< the C++ listener",
-                         "    type(C_PTR) :: user = C_NULL_PTR     !< C++ object of the owner (set_listener)",
-                         "    class(*), pointer :: owner => null() !< Fortran object of the owner"] + \
-            [f"    type(C_FUNPTR) :: {m['fn']} = C_NULL_FUNPTR   !< {cls}::{m['tramp']}" for _, _, m in live] + \
-            ["  contains"] + [f"    procedure :: {bd.spelling} => {m['proc']}" for bd, _, m in methods] + \
-            [f"  end type {bridge}", ""]
-        for _, _, m in methods:
-            fb += m["fortran"]
-        if not any(line.startswith("  logical function listener_same") for line in fb):
-            fb += ["", "  !> is x the Fortran object of p", "  logical function listener_same(p, x)",
-                   "    class(*), pointer, intent(in) :: p", "    class(*), target, intent(in) :: x",
-                   "    listener_same = associated(p, x)", "  end function listener_same"]
-        c_fns = "".join(f", void (*{m['fn']})({m['c_types']})" for _, _, m in live)
-        f_fns = "".join(f", {m['fn']}" for _, _, m in live)
-        fb += ["", "!@c_declaration", f"!  {ht}* {create}(void* userData{c_fns});", f"!  void {free}({ht}* listener);",
-               "!@end_c_declaration", f"  !> Fortran object of the C++ listener cpp (with its trampolines)",
-               f"  function {create}(userData{f_fns}) result(listener) bind(C, name=\"{create}\")"] + self.dllexport(create) + \
-            ["    type(C_PTR), value :: userData"] + [f"    type(C_FUNPTR), value :: {m['fn']}" for _, _, m in live] + \
-            ["    type(C_PTR) :: listener", f"    type({bridge}), pointer :: b", "", "    allocate(b)", "    b%userData = userData"] + \
-            [f"    b%{m['fn']} = {m['fn']}" for _, _, m in live] + ["    listener = c_loc(b)", f"  end function {create}", "",
-             f"  subroutine {free}(listener) bind(C, name=\"{free}\")"] + self.dllexport(free) + \
-            ["    type(C_PTR), value :: listener", f"    type({bridge}), pointer :: b", "",
-             "    if (.not. c_associated(listener)) return", "    call c_f_pointer(listener, b)", "    deallocate(b)",
-             f"  end subroutine {free}"]
-        self.report.add("translated", "wrapped-listener")
-
-    def listener_method(self, lt, bd, iface, bridge, cls):
-        """parts of one deferred binding: bridge procedure (arguments to C, call through the function pointer),
-        Fortran interface and C++ definition of the trampoline (calls the virtual method; exceptions -> ierr)"""
-        prog = self.prog
-        proc, fn, tramp = f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{bd.name}_fn", f"{bd.name}_wrapper"
-        aiface = f"{self.c_class(lt)}_{bd.name}_c"
-        err = self.tr(iface).err
-        has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
-        this = iface.pass_arg
-        decl_nodes, c_params, f_dummies, f_decls, locals_, checks, body, actuals, cpp_args = \
-            [], ["void* userData"], ["userData"], ["type(C_PTR), value :: userData"], [], [], [], [f"{this}%userData"], []
-        todo = None
-        fail = (f"{err} = -1" if has_err else f'error stop "{proc}: called for another object than its owner"')
-        for a in iface.args:
-            v = iface.vars[a]
-            if v.node is not None and v.node not in decl_nodes:
-                decl_nodes.append(v.node)
-            if a == this or (has_err and a == err):
-                continue
-            if v.intent != "in":
-                todo = f"argument {v.cname}: only intent(in)"
-            elif v.base == "type" and not v.rank:            # only the owner: its C++ object
-                c_params.append(f"void* {a}")
-                f_dummies.append(a)
-                f_decls.append(f"type(C_PTR), value :: {a}")
-                checks += [f"if (.not. listener_same({this}%owner, {a})) then", f"  {fail}", "  return", "end if"]
-                actuals.append(f"{this}%user")
-                xcls = prog.type_name(v.tname, self.mod)
-                cpp_args.append(f"*static_cast<const {xcls}*>({a})")
-            elif v.base in ("real", "integer", "logical") and not v.rank:
-                conv = {"real": "real", "integer": "int", "logical": "logical"}[v.base]
-                kind = {"real": "C_REAL", "integer": "C_INT", "logical": "C_BOOL"}[v.base]
-                c_params.append(f"{self.c_type(v)} {a}")
-                f_dummies.append(a)
-                f_decls.append(f"{self.f_type(v)}, value :: {a}")
-                locals_.append(f"{self.f_type(v)} :: {a}_c")
-                body.append(f"{a}_c = {conv}({a}, {kind})")
-                actuals.append(f"{a}_c")
-                cpp_args.append(a)
-            elif v.base in ("real", "integer") and v.rank == 1:
-                c_params += [f"const {self.c_type(v)}* {a}", f"int {a}_n"]
-                f_dummies += [a, f"{a}_n"]
-                f_decls += [f"type(C_PTR), value :: {a}", f"integer(C_INT), value :: {a}_n"]
-                locals_ += [f"{self.f_type(v)}, allocatable, target :: {a}_c(:)", f"type(C_PTR) :: {a}_p"]
-                body += [f"allocate({a}_c(size({a})))", f"{a}_c(:) = {a}", f"{a}_p = C_NULL_PTR",
-                         f"if (size({a}_c) > 0) {a}_p = c_loc({a}_c(1))"]
-                actuals += [f"{a}_p", f"int(size({a}_c), C_INT)"]
-                et = self.tr(iface).eigen_type(v, 1)
-                cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")
-            else:
-                todo = f"argument {v.cname}: {self.component_kind(v)}"
-        if has_err:
-            c_params.append(f"int* {err}")
-            f_dummies.append(err)
-            f_decls.append(f"integer(C_INT), intent(out) :: {err}")
-            locals_.append(f"integer(C_INT) :: {err}_c")
-            actuals.append(f"{err}_c")
-        out = ["", f"  !> {bd.spelling} of the C++ listener: {cls}::{tramp}"]
-        if todo:
-            self.report.add("todo", f"wrap-listener:{bd.name}")
-            out.append(f"  ! {TODO}: {todo}")
-        out.append(f"  subroutine {proc}({', '.join(iface.args)})")
-        for node in decl_nodes:                 # the interface of the deferred binding, the bridge as object
-            text = str(node)
-            if this in [lname(e.items[0]) for e in items_of(node.items[2])]:
-                text = re.sub(rf"(?i)class\s*\(\s*{re.escape(lt.name)}\s*\)", f"class({bridge})", text)
-            out.append(f"    {text}")
-        res = {"todo": todo, "proc": proc, "fn": fn, "tramp": tramp}
-        if todo:
-            res["fortran"] = out + [f'    error stop "{proc}: {todo}"', f"  end subroutine {proc}"]
-            return res
-        out += [f"    procedure({aiface}), pointer :: f"] + [f"    {d}" for d in locals_] + [""]
-        out += [f"    {x}" for x in (([f"{err} = 0"] if has_err else []) + checks + body)]
-        out += [f"    call c_f_procpointer({this}%{fn}, f)", f"    call f({', '.join(actuals)})"]
-        if has_err:
-            out.append(f"    {err} = {err}_c")
-        res["fortran"] = out + [f"  end subroutine {proc}"]
-        res["abstract"] = ["  abstract interface", f"    !> {cls}::{tramp}",
-                           f"    subroutine {aiface}({', '.join(f_dummies)}) bind(C)", "      import"] + \
-            [f"      {d}" for d in f_decls] + [f"    end subroutine {aiface}", "  end interface", ""]
-        res["c_params"] = ", ".join(c_params)
-        # C++ declaration / definition: the C++ real type (same type as the C macro, which is not in the .hpp)
-        res["cpp_params"] = re.sub(rf"\b{re.escape(self.cfg['c_real'])}\b", self.cfg["scalar"], res["c_params"])
-        res["c_types"] = ", ".join(re.sub(r"\s*\w+$", "", c) for c in c_params)
-        on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
-        res["cpp"] = [f"void {cls}::{tramp}({res['cpp_params']})", "{"] + ([f"  *{err} = 0;"] if has_err else []) + \
-            ["  try", "  {", f"    static_cast<{cls}*>(userData)->{bd.spelling}({', '.join(cpp_args)});", "  }",
-             "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
-             f'    std::fprintf(stderr, "{cls}::{bd.spelling}: %s\\n", e.what());'] + on_error + \
-            ["  }", "  catch (...)", "  {"] + on_error + ["  }", "}", ""]
-        return res
-
     def not_wrapped(self, t, p, reason, hdecl, cpp, bname=None):
         tr = self.tr(p)
         ret, fname, params, const = self.signature(tr, p, False)
@@ -1138,7 +964,7 @@ class WrapEmitter(ModuleEmitter):
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
-        self.cpp_global, self.bridges = [], []      # (unused), Fortran types of listeners
+        self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.needs_cstdio = False
         stem_h = os.path.basename(stem) + ".h"
         values = self.value_types()
@@ -1160,6 +986,9 @@ class WrapEmitter(ModuleEmitter):
                 continue
             if t.name in cfg["wrap_listeners"]:
                 self.listener(t, hpp, cpp, fb, typedefs)
+                continue
+            if t.name in self.reverse_types():
+                self.reverse_type(t, hpp, cpp, fb, typedefs)
                 continue
             name = self.prog.type_name(t.name)
             ht = self.c_type_name(t)
@@ -1278,6 +1107,10 @@ class WrapEmitter(ModuleEmitter):
                     hpp.emit(1, f"{prog.type_name(td.name)} {v.cname}_;  //!< C++ copy of the constant {v.cname}")
             hpp.emit(0, "};")
             hpp.emit(0, "")
+        for m in sorted(self.c_includes):              # C headers of other modules (reverse types)
+            rstem = prog.modules[m].spelling if m in cfg["module_headers"] else os.path.basename(prog.file_stem(m))
+            if f'!#include "{rstem}.h"' not in typedefs:
+                typedefs.insert(0, f'!#include "{rstem}.h"')
         from .prepass import CPP_MARK
         for p in mod.procs.values():
             for c in p.doc:                             # #ifdef ... around procedures: in all three files
@@ -1339,8 +1172,6 @@ class WrapEmitter(ModuleEmitter):
              f'#include "{os.path.basename(stem)}.h"', ""] + (["#include <cstdio>", ""] if self.needs_cstdio else []) + \
             [self.open_ns(), ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
-        if self.cpp_global:                         # Fortran -> C++ (declared extern "C" in the .h)
-            c += ["#include <cstdio>", "#include <exception>", ""] + self.cpp_global
 
         # binding module
         single, real = cfg["c_single_precision"], cfg["c_real"]

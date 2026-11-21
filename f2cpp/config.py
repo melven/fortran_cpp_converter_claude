@@ -156,6 +156,13 @@ DEFAULTS = {
     # abstract types used as listeners (only deferred bindings with intent(in) arguments): a C++ class with
     # pure virtual methods; its objects can be set as listener of wrapped objects
     "wrap_listeners": [],
+    # abstract types implemented in C++ (C struct per C++ object, Fortran CWrapper<Thing>_type owning it)
+    "wrap_reverse": [],
+    # abstract factories implemented in C++: type -> {register = "proc", unregister = "proc"} of the
+    # Fortran factory registration (call register(name, factory), call unregister(name))
+    "wrap_reverse_factories": {},
+    # translated factories: type -> name of the global instance (<Factory>_private::instance("name"))
+    "reverse_factory_instances": {},
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
@@ -227,6 +234,10 @@ def load(path=None, **overrides):
     cfg["named_element_lists"] = {k.lower(): v for k, v in cfg["named_element_lists"].items()}
     cfg["wrap_handle_member"] = {k.lower(): v for k, v in cfg["wrap_handle_member"].items()}
     cfg["wrap_listeners"] = [t.lower() for t in cfg["wrap_listeners"]]
+    cfg["wrap_reverse"] = [t.lower() for t in cfg["wrap_reverse"]]
+    cfg["wrap_reverse_factories"] = {k.lower(): {a.lower(): p for a, p in v.items()}
+                                     for k, v in cfg["wrap_reverse_factories"].items()}
+    cfg["reverse_factory_instances"] = {k.lower(): v for k, v in cfg["reverse_factory_instances"].items()}
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
     for key, val in overrides.items():
         if val is not None:

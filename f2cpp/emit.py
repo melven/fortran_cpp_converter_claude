@@ -195,6 +195,9 @@ class ModuleEmitter:
         final = " final" if closed and not t.children and not t.abstract else ""
         tr.emit(ind, f"class {name}{final}{base} {{")
         tr.emit(ind, "public:")
+        if t.parent and any(a.name in self.cfg["wrap_reverse_factories"] for a in prog.ancestors(t)):
+            parent = prog.type_name(t.parent, self.mod)     # factory implemented in C++: its name constructor
+            tr.emit(ind + 1, f"using {parent}::{parent.split('::')[-1]};")
         mine = [p for p in t.module.procs.values() if p.method_of == t.name]
         callbacks = [q for m in prog.modules.values() for q in m.procs.values()
                      if q.cb_method and prog.find_type(q.method_of, q.module) is t]
@@ -1003,7 +1006,14 @@ class ModuleEmitter:
         if cpp_priv.out or protos_priv.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \
                  protos_priv.out + ["", "}  // namespace", ""]
-        c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
+        inst = []                               # global instances of factories implemented in C++
+        for t in mod.types.values():
+            if t.name in cfg["reverse_factory_instances"]:
+                fac = self.prog.type_name(t.name, mod).split("::")[-1]
+                inst += [f"namespace {fac}_private", "{",
+                         f'{fac} instance("{cfg["reverse_factory_instances"][t.name]}");  //!< registers the factory',
+                         "}", ""]
+        c += strip_blank(cpp.out) + ([""] + inst if inst else []) + ["", f"}}  // namespace {self.ns}", ""]
         return "\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c)))
 
     def missing_modules(self):
