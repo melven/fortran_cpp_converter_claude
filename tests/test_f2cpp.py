@@ -92,7 +92,7 @@ def test_expressions(out):
     assert "void expm(const mat& A, scalar t, mat& E)" in cpp
     assert "ierr" not in cpp
     assert "P = As * P;" in cpp
-    assert "aug(Eigen::seq(0, n - 1), Eigen::seq(n, n + p - 1)) = B;" in cpp
+    assert "aug.block(0, n, n, p) = B;" in cpp
     assert "nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;" in cpp
     assert 'if (!(s <= max_squarings)) throw std::logic_error("assertion failed: s <= max_squarings");' in cpp
     assert "PROJECT_" not in cpp and "project_macros" not in cpp
@@ -164,14 +164,14 @@ def test_features(out):
     # lower bound -1 and indirect access through an index array with lower bound 0
     assert "ghost.resize(n + 2);" in poly and "idx.resize(m + 1);" in poly and "ghost(0) = -10.0;" in poly
     assert "res = ghost((idx(Eigen::seq(1, Eigen::last)).array() + 1));" in poly
-    assert "ghost((idx(Eigen::seq(1, 2)).array() + 1)) = 1.5 * ghost((idx(Eigen::seq(1, 2)).array() + 1));" in poly
+    assert "ghost((idx.segment(1, 2).array() + 1)) = 1.5 * ghost((idx.segment(1, 2).array() + 1));" in poly
     assert "// TODO(f2cpp):" not in poly
     assert "degree = c.size() - 1;" in poly and "coeff.resize(degree + 1);" in poly
     assert "for (int k = c.size() - 1 - 1; k >= 0; --k)" in poly and "y = y * x + c(k);" in poly
     assert "vec w(c.size());" in poly and "w(k - 1) = k * c(k);" in poly
-    assert "d(Eigen::seq(0, n - 1)) = w(Eigen::seq(0, n - 1));" in poly
+    assert "d.segment(0, n) = w(Eigen::seq(0, n - 1));" in poly
     assert "mat p(c.size() - 1 + 1, x.size());" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
-    assert "hist[k] = (k + 1) * table(Eigen::seq(0, 1), Eigen::seq(0, 1));" in poly
+    assert "hist[k] = (k + 1) * table.block(0, 0, 2, 2);" in poly
     assert "h.phi[k](0, 0) = dt * k + h.phi[0].rows();" in cpp
     assert "phi.resize(h.phi.size());" in cpp
     assert "for (std::size_t k_ = 0; k_ < h.phi.size(); ++k_) phi[k_] = h.phi[k_].cast<scalar>();" in cpp
@@ -234,7 +234,7 @@ def test_features(out):
     assert "fill(y(Eigen::seq(1, Eigen::last)), 1.0);\n  if (false /* TODO(f2cpp): error flag, replace by " \
            "try/catch: ierr /= 0 */)\n  {\n    std::cout << \"accumulate failed\" << std::endl;\n    return;\n  }" in cpp
     assert "fill(w, 0.0);" in cpp                      # keyword arguments reordered, ierr removed
-    assert "m = project::mean(samples(Eigen::seq(0, n - 1)));" in cpp
+    assert "m = project::mean(samples.segment(0, n));" in cpp
     assert "b = (a.array() > 0.0).select(a, b);" in cpp
     assert "  }\n  else if (k >= 3 && k <= max_items)\n  {\n" in cpp
     # other untranslatable condition
@@ -343,7 +343,7 @@ def test_eigen_placeholders_default(tmp_path):
     translate([str(tmp_path / "s_mod.F90")], config.load(), str(tmp_path))
     cpp = (tmp_path / "s_mod.cpp").read_text()
     assert "x(Eigen::seq(1, Eigen::placeholders::last)) = a(Eigen::seq(1, Eigen::placeholders::last), 0);" in cpp
-    assert "a(Eigen::placeholders::all, Eigen::seq(0, 1)).setZero();" in cpp
+    assert "a.middleCols(0, 2).setZero();" in cpp
 
 
 def test_missing_modules(tmp_path):
@@ -726,12 +726,12 @@ end module lam_mod
 
 def test_aliasing(out):
     poly = read(out, "poly_mod.cpp")
-    assert "x(Eigen::seq(1, n - 1)) = x(Eigen::seq(0, n - 2)).eval();" in poly           # overlapping
+    assert "x.segment(1, n - 1) = x.segment(0, n - 1).eval();" in poly           # overlapping
     assert "x = x(Eigen::seq(n - 1, 0, -1)).eval();" in poly
     assert "a = (a + a.transpose()).eval();" in poly and "a.transposeInPlace();" in poly
     assert "a.col(0) = a * a.col(1);" in poly                     # products are evaluated by Eigen
     assert "a.row(1).transpose() = a.row(0).transpose() * 2.0;" in poly   # same or disjoint rows
-    assert "a(Eigen::seq(0, 1), 2) = (a(Eigen::seq(1, 2), 2) + a(Eigen::seq(0, 1), 0)).eval();" in poly
+    assert "a.col(2).segment(0, 2) = (a.col(2).segment(1, 2) + a.col(0).segment(0, 2)).eval();" in poly
     assert "eval()" not in read(out, "block_lu_mod.cpp")
 
 
@@ -815,7 +815,7 @@ end module cache_mod
     assert "mutable vec tmp;  //!< scratch space" in hpp
     assert "class MutableRealArray1d" not in (tmp_path / "mutable_mod.hpp").read_text()
     assert "if (tmp.size() > 0) tmp.resize(0);" in cpp and "tmp.resize(n);" in cpp and "tmp.setZero();" in cpp
-    assert "tmp(Eigen::seq(0, n - 1)) = 2.0 * x(Eigen::seq(0, n - 1));" in cpp
+    assert "tmp.segment(0, n) = 2.0 * x.segment(0, n);" in cpp
     assert "tmp(0) = tmp(0) + 1.0;" in cpp and "scalar s = tmp.sum();" in cpp
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", "cache_mod.cpp"],
         str(tmp_path))
@@ -906,17 +906,17 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "int project_tagged_length(const char* msg, const char* tag);" in h
     assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
     assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
-    assert "    if (c_associated(tag)) tag_f = str_array_ptr_to_str(tag)\n" \
+    assert "    if (c_associated(tag)) allocate(tag_f, source=str_array_ptr_to_str(tag))\n" \
            "    res = tagged_length(msg=str_array_ptr_to_str(msg), tag=tag_f)" in binding
     user = read((d,), "solver_user_mod.cpp")
     assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
     os.makedirs(os.path.join(d, "f"))
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
     for src, obj in ((os.path.join(SUPPORT, "project_str.F90"), "f/str.o"),
                      (os.path.join(w, "mysolver_mod.F90"), "f/mysolver.o"),
                      ("mysolver_mod_c_binding.F90", "f/binding.o"),
                      (os.path.join(SUPPORT, "mysolver_factory.F90"), "f/factory.o")):
-        run(ff + [src, "-o", obj], d)
+        run(ff + [src, "-o", obj] + (["-Werror=realloc-lhs-all"] if "binding" in src else []), d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for src, obj in (("mysolver_mod.cpp", "glue.o"), ("solver_user_mod.cpp", "user.o"),
                      (os.path.join(SUPPORT, "wrap_driver.cpp"), "drv.o")):
@@ -940,7 +940,7 @@ def test_wrapped_module_end_to_end(tmp_path):
            "const bool* modelmask, int modelmask_n1);" in h
     assert "    logical(C_BOOL), pointer :: modelmask_c(:)\n    logical, allocatable :: modelmask_f(:)\n" in binding
     assert "    if (c_associated(modelmask)) then\n      call c_f_pointer(modelmask, modelmask_c, [modelmask_n1])\n" \
-           "      modelmask_f = modelmask_c\n    end if\n" in binding
+           "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
     assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
            "static_cast<int>(modelMask.size()) : 0);" in cpp
     assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x=x(1:obj%n), pos=pos_f)\n" \
@@ -1063,7 +1063,7 @@ def test_wrapped_class_hierarchy(tmp_path):
     assert read((d,), "body_mod.cpp").startswith("//! @file body_mod.cpp\n//! @brief C++ wrapper: Abstract bodies")
     assert bh.startswith("//! @file body_mod.hpp\n//! @brief Abstract bodies")
     os.makedirs(os.path.join(d, "f"))
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS, "-J", "f"]
     objs = []
     for src in (os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90"), "body_mod_c_binding.F90",
                 "sphere_mod_c_binding.F90", os.path.join(SUPPORT, "body_factory.F90")):
@@ -1474,7 +1474,7 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
              "holder_mod.cpp"], str(tmp_path))
     if shutil.which("gfortran"):
-        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
         for src in (os.path.join(w, "offsets_mod.F90"), os.path.join(w, "holder_mod.F90"), "holder_mod_c_binding.F90"):
             run(ff + [src], str(tmp_path))
 
@@ -1526,7 +1526,7 @@ end program drv
                                         '  for (int i = 0; i < b->arr_offset1().size(); ++i)\n'
                                         '    std::printf("%d %d\\n", b->arr_offset1()(i), b->arr_offset2()(i));\n'
                                         '  std::printf("%d\\n", project::sum_offsets(*b));\n}\n')
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "blocks_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
@@ -1624,7 +1624,7 @@ end program drv
         '  m->x() = 7.0;\n'
         '  m->restore(moved);                          // last checkpoint: 2 * 1.5\n'
         '}\n')
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "state_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
@@ -1635,7 +1635,8 @@ end program drv
 
 
 def test_wrapped_listener(tmp_path):
-    """abstract listener type implemented in C++: Fortran bridge type calling the C++ object"""
+    """abstract listener type implemented in C++: Fortran bridge type calling private static trampolines of the
+    C++ class through function pointers (no C++ symbol referenced by the Fortran library)"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
     (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
@@ -1644,13 +1645,18 @@ def test_wrapped_listener(tmp_path):
     hpp, cpp = (tmp_path / "listen_mod.hpp").read_text(), (tmp_path / "listen_mod.cpp").read_text()
     b, h = (tmp_path / "listen_mod_c_binding.F90").read_text(), (tmp_path / "listen_mod.h").read_text()
     assert "  virtual void state_changed(const Thing& thing, scalar old, const vec& history) = 0;" in hpp
+    assert "private:\n  static void state_changed_wrapper(void* userData, void* thing, scalar old, const scalar* history, " \
+           "int history_n, int* ierr);  //!< called from Fortran" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
-    assert "  type, extends(AbstractListener_type), public :: AbstractListener_cpp\n" in b
-    assert "    if (listener_same(this%owner, thing)) then\n      thing_cpp = this%user\n" in b
-    assert "      listener_f%user = listener_user\n      listener_f%owner => obj\n" in b
-    assert "void project_AbstractListener_state_changed(void* cpp, void* thing_cpp, project_Thing* thing, " \
-           "PROJECT_REAL old, const PROJECT_REAL* history, int history_n);" in h
-    assert "project_Thing_set_listener(handle_, listener ? AbstractListener_private::toC(listener->get()) : nullptr, " in cpp
+    assert "project_AbstractListener* project_AbstractListener_create(void* userData, void (*state_changed_fn)(void*, void*, " \
+           "PROJECT_REAL, const PROJECT_REAL*, int, int*));" in h
+    assert "AbstractListener::AbstractListener() : fortran_(project_AbstractListener_create(this, " \
+           "&AbstractListener::state_changed_wrapper))" in cpp
+    assert "    type(C_FUNPTR) :: state_changed_fn = C_NULL_FUNPTR" in b
+    assert "    call c_f_procpointer(this%state_changed_fn, f)\n" \
+           "    call f(this%userData, this%user, old_c, history_p, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
+    assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
+    assert "extern" not in cpp and "    *ierr = -1;" in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv
@@ -1677,12 +1683,14 @@ end program drv
     (tmp_path / "run.cpp").write_text(r"""#include "listen_mod.hpp"
 #include "listen_mod.h"
 #include <cstdio>
+#include <stdexcept>
 struct L : project::AbstractListener
 {
   const project::Thing* expected = nullptr;
   void state_changed(const project::Thing& thing, project::scalar old, const project::vec& history) override
   {
     std::printf("%g %g %g %d\n", thing.value(), old, history(1), &thing == expected ? 1 : 0);
+    if (thing.value() > 3.5) throw std::runtime_error("too large");
   }
 };
 extern "C" void run(project_Thing* h1, project_Thing* h2)
@@ -1693,21 +1701,38 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
   l.expected = t1.get();
   t1->set_listener(std::ref(l));
   t1->set_value(2.0);                 // the owner itself: 2 0 2 1
-  t2->set_listener(std::ref(l));      // owner now t2
-  t1->set_value(3.0);                 // temporary wrapper of t1: 3 2 3 0
+  try
+  {
+    t1->set_value(4.0);               // the listener throws -> ierr -> exception
+  }
+  catch (const std::exception&)
+  {
+    std::printf("caught\n");
+  }
+  t2->set_listener(std::ref(l));      // owner now t2: a change of t1 is an error
+  try
+  {
+    t1->set_value(3.0);
+  }
+  catch (const std::exception&)
+  {
+    std::printf("other\n");
+  }
   t1->set_listener(std::nullopt);
   t2->set_listener(std::nullopt);
 }
 """)
-    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS]
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS]
     for f in (src, "listen_mod_c_binding.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f, o in (("listen_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
+    # the Fortran objects alone: no undefined C++ symbols
+    undefined = run(["nm", "-u", "listen_mod_c_binding.o"], d)
+    assert "AbstractListener" not in undefined.replace("project_AbstractListener", "")
     run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:3] == ["2 0 2 1", "3 2 3 0", "F"]
-
+    assert run(["./m"], d).split("\n")[:5] == ["2 0 2 1", "4 2 4 1", "caught", "other", "F"]
 
 def test_wrapped_handle_member_name(tmp_path):
     """name of the handle member per root type (hand-written base classes); derived classes use it"""
@@ -1748,5 +1773,89 @@ end module lng_mod
     names = re.findall(r"^\s*(?:end )?(?:subroutine|function)\s+(\w+)", b, flags=re.M)
     assert names and max(len(n) for n in names) <= 63
     if shutil.which("gfortran"):
-        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-ffree-line-length-none", "-I" + CORPUS,
+        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS,
              str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))
+
+
+def test_named_elements(tmp_path):
+    """non-copyable / non-movable C++ objects: local arrays become one named variable per element"""
+    (tmp_path / "x.toml").write_text('[named_elements]\nVariable_type = ""\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    n = os.path.join(CORPUS, "named")
+    translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
+    cpp = (tmp_path / "test_var_mod.cpp").read_text()
+    assert '  Variable inputs_1("firstInputOutput_rank0", "", 0);' in cpp
+    assert '  Variable inputs_2("secondInputOutput_rank1", "", 1, {2}, {"2"});' in cpp
+    assert '  Variable outputs_1("thirdInputOutput_rank3", "", 2, {1, 3}, {"1", "3"});' in cpp
+    assert "  model.assignVariables({}, {inputs_1, inputs_2}, {outputs_1});" in cpp
+    assert "  ASSERT_EQ(1, inputs_2.rank);" in cpp
+    assert "std::vector<Variable>" not in cpp
+    assert "not translated (named-elements-index)" in cpp           # vars(i) = ... in a loop
+
+    (tmp_path / "y.toml").write_text('[named_elements]\nVariable_type = ""\n'
+                                     '[named_element_lists]\nVariable_type = "VariableVector"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "y.toml")])
+    translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
+    cpp = (tmp_path / "test_var_mod.cpp").read_text()
+    assert "  model.assignVariables(VariableVector{}, VariableVector{inputs_1, inputs_2}, " \
+           "VariableVector{outputs_1});" in cpp
+    # allocatable with a literal allocate: the size; deallocate: nothing
+    assert '  Variable params_1("p", "kg", 0);' in cpp and "  model.assignVariables(VariableVector{params_1}, " in cpp
+    assert "params.resize" not in cpp and "params.clear" not in cpp
+    # assigned again: counted up, the list uses the current variable
+    assert '  Variable params_2("q", "s", 0);' in cpp and "  model.assignVariables(VariableVector{params_2}, " in cpp
+    # constructor function (generic interface with the type's name)
+    (tmp_path / "vc_mod.F90").write_text("""module vc_mod
+  implicit none
+  type :: Var_type
+    character(len=:), allocatable :: name
+  end type Var_type
+  interface Var_type
+    module procedure new_var
+  end interface
+contains
+  function new_var(name) result(v)
+    character(len=*), intent(in) :: name
+    type(Var_type) :: v
+    v%name = name
+  end function new_var
+  subroutine use_vars()
+    type(Var_type) :: vs(1)
+    vs(1) = Var_type('a')
+  end subroutine use_vars
+end module vc_mod
+""")
+    (tmp_path / "z.toml").write_text('[named_elements]\nVar_type = ""\n')
+    translate([str(tmp_path / "vc_mod.F90")], config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "z.toml")]),
+              str(tmp_path))
+    assert '  Var vs_1("a");' in (tmp_path / "vc_mod.cpp").read_text()
+
+
+def test_slices_segment_block(tmp_path):
+    """contiguous slices whose length follows from cancelling identical terms: segment / block; else Eigen::seq"""
+    (tmp_path / "sl_mod.F90").write_text("""module sl_mod
+  implicit none
+contains
+  subroutine s(x, a, offset, n, lo, hi, k)
+    real, intent(inout) :: x(:), a(:, :)
+    integer, intent(in) :: offset, n, lo, hi, k
+    x(offset+1:offset+n) = 1.0
+    x(offset:offset+n-1) = 2.0
+    x(2*k:2*k+n) = 3.0
+    x(lo:hi) = 4.0
+    x(1:n:2) = 5.0
+    x(offset+1:n) = 6.0
+    a(offset+1:offset+3, k:k+n-1) = 7.0
+    a(1:n, k) = 8.0
+    a(k, 2:n) = 9.0
+  end subroutine s
+end module sl_mod
+""")
+    translate([str(tmp_path / "sl_mod.F90")], cfg(), str(tmp_path))
+    cpp = (tmp_path / "sl_mod.cpp").read_text()
+    for line in ("x.segment(offset, n).setConstant(1.0);", "x.segment(offset - 1, n).setConstant(2.0);",
+                 "x.segment(2 * k - 1, n + 1).setConstant(3.0);", "x(Eigen::seq(lo - 1, hi - 1)).setConstant(4.0);",
+                 "x(Eigen::seq(0, n - 1, 2)).setConstant(5.0);", "x(Eigen::seq(offset, n - 1)).setConstant(6.0);",
+                 "a.block(offset, k - 1, 3, n).setConstant(7.0);", "a.col(k - 1).segment(0, n).setConstant(8.0);",
+                 "a.row(k - 1).segment(1, n - 1).transpose().setConstant(9.0);"):
+        assert line in cpp, line

@@ -1,0 +1,43 @@
+module test_var_mod
+  use funit
+  use var_mod, only: Variable_type, Model_type
+  implicit none
+contains
+  @test
+  subroutine test_assign
+    type(Model_type) :: model
+    type(Variable_type) :: empty(0), inputs(2), outputs(1)
+    integer :: ierr
+    inputs(1) = Variable_type('firstInputOutput_rank0', '', rank=0)
+    inputs(2) = Variable_type('secondInputOutput_rank1', '', rank=1, dim=(/2/), dimComment=(/'2'/))
+    outputs(1) = Variable_type('thirdInputOutput_rank3', '', rank=2, dim=(/1,3/), dimComment=(/'1','3'/))
+    call model%assignVariables(empty, inputs, outputs, ierr)
+    @assertEqual(0, ierr)
+    @assertEqual(3, model%n)
+    @assertEqual(1, inputs(2)%rank)
+  end subroutine test_assign
+
+  @test
+  subroutine test_allocatable
+    type(Model_type) :: model
+    type(Variable_type), allocatable :: params(:)
+    integer :: ierr
+    allocate(params(1))
+    params(1) = Variable_type('p', 'kg', rank=0)
+    call model%assignVariables(params, params, params, ierr)
+    @assertEqual(3, model%n)
+    params(1) = Variable_type('q', 's', rank=0)        ! again: a new variable params_2
+    call model%assignVariables(params, params, params, ierr)
+    @assertEqual(3, model%n)
+    deallocate(params)
+  end subroutine test_allocatable
+
+  @test
+  subroutine test_loop
+    type(Variable_type) :: vars(2)
+    integer :: i
+    do i = 1, 2
+      vars(i) = Variable_type('v', '', rank=0)      ! not a literal index: TODO
+    end do
+  end subroutine test_loop
+end module test_var_mod

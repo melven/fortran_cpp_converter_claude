@@ -68,6 +68,7 @@ with less precise output (calls are passed through unchanged).
 | other `pointer` (non-owning member, re-associated local) | `T*` with `TODO(f2cpp)` — decide by hand |
 | `optional` | `intent(in)` arrays: `const vec& w = vec()`, `present(w)` → `w.size() > 0` (`optional_arrays = "optional"`: `std::optional`); other `intent(in)` values: `std::optional<T>`; out/inout and objects: `std::optional<std::reference_wrapper<T>>` |
 | `a(i)`, `a(i:j, k)`, `a(:, k)`, `a(i, :)` | `a(i - 1)`, `a(Eigen::seq(i - 1, j - 1), k - 1)`, `a.col(k - 1)`, `a.row(i - 1).transpose()` |
+| `x(o+1:o+n)`, `a(o:o+n-1, k:k+m-1)` (length from cancelling identical `+`/`-` terms) | `x.segment(o, n)`, `a.block(o - 1, k - 1, n, m)` (also `col(..).segment`, `middleRows` / `middleCols`); otherwise `Eigen::seq` |
 | `matmul`, `transpose`, `dot_product`, `sum`, `maxval`, `abs`, `size`, ... | Eigen equivalents |
 | elementwise `*`, `/`, `**`, array ± scalar, `where (m) a = b` | `cwiseProduct`, `.array()` expressions, `select` |
 | `do`, `do while`, `if`, `select case`, `exit`, `cycle` | `for`, `while`, `if` / `else if` chains, `break`, `continue` |
@@ -214,13 +215,16 @@ one owned object per element (`allocate(e, source=arr(i))` + `setup`), `intent(i
 into a Fortran array (`X_private::toC` gives the handles).
 
 Listeners: `wrap_listeners = ["AbstractListener_type"]` (abstract type with deferred bindings, `intent(in)`
-arguments: wrapped objects, real / integer / logical scalars, real / integer rank-1 arrays): C++ class
-`AbstractListener` with pure virtual methods (non-copyable: its Fortran object knows its address). The
-binding defines `AbstractListener_cpp` extending the Fortran type (`cpp`: the C++ listener, `user` / `owner`:
-the C++ / Fortran object it was set on); its methods call `extern "C"` functions in the glue that call the
-C++ method. An object argument that is the owner is passed as the owner's C++ object, others as temporary
-wrappers. `set_listener(std::optional<std::reference_wrapper<AbstractListener>>)` passes the listener's
-Fortran object; unset it before the listener is destroyed. Exceptions in listeners terminate.
+arguments: the owner object, real / integer / logical scalars, real / integer rank-1 arrays; error flag). C++:
+class `AbstractListener` with pure virtual methods (no error argument) and private static trampolines
+`state_changed_wrapper(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr; without error flag:
+terminate); non-copyable (its Fortran object knows its address). The binding defines
+`AbstractListener_cpp` extending the Fortran type: `userData` (the C++ listener), `user` / `owner` (the C++ /
+Fortran object it was set on) and one `type(C_FUNPTR)` per method, passed by the C++ constructor to
+`project_AbstractListener_create`; its methods call through them (`c_f_procpointer`), so the Fortran
+library references no symbol of the C++ library. Object arguments must be the owner (else `ierr = -1`).
+`set_listener(std::optional<std::reference_wrapper<AbstractListener>>)`; unset it before the listener
+is destroyed.
 
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
@@ -255,6 +259,15 @@ parameters. A template that declares the object (`"Type {self}(...);"`) replaces
 `project::config::solverXConfig_wrapper config(tixiHandle, xml_path);`. `examples/eigen_solvers.toml` shows
 an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
 (`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
+
+## Objects that are neither copyable nor movable
+
+`[named_elements] variable_type = ""` (or the C++ class name): local arrays of the type become one
+variable per element. `inputs(1) = Variable_type('a', '', rank=0)` → `Variable inputs_1("a", "", 0);` (each assignment declares the next variable `inputs_<n>`, counted per array; uses refer to the current one), array constructors in its arguments as braced lists (`(/1, 3/)` → `{1, 3}`, `(/'a'/)` → `{"a"}`),
+`inputs(2)%rank` → `inputs_2.rank`, the whole array as argument → `{inputs_1, inputs_2}` (`{}` for
+size 0). With `[named_element_lists] variable_type = "VariableVector"` the list is typed:
+`VariableVector{inputs_1, inputs_2}` (needed where arguments are forwarded, e.g. `std::make_unique<T>(...)`). Sizes from the declaration or a literal `allocate` (then no code; `deallocate`: nothing), literal indices; the
+right-hand side a structure constructor or a constructor function (generic interface named like the type); other uses (loops, copies, `size`, reassignment) are TODOs.
 
 ## Wrapper types
 

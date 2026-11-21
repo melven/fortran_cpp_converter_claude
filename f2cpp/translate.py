@@ -38,6 +38,11 @@ class X:
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
+
+
+class Seq(str):
+    """code of an Eigen::seq slice; seg: (start, length) if contiguous with a simple length"""
+    seg = None
 REL_OPS = {".lt.": "<", ".le.": "<=", ".gt.": ">", ".ge.": ">=", ".eq.": "==", ".ne.": "!=",
            "<": "<", "<=": "<=", ">": ">", ">=": ">=", "==": "==", "/=": "!="}
 MATH1 = {"sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh"}
@@ -60,6 +65,8 @@ class Translator:
 
     def __init__(self, program, module, proc, report):
         self.prog, self.mod, self.proc, self.report = program, module, proc, report
+        self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
+        self.brace_arrays = False   # array constructors as braced lists
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -403,6 +410,12 @@ class Translator:
         if local is None and n in self.cfg["constant_map"]:        # local names hide the mapping
             return X(self.cfg["constant_map"][n])
         v = self.lookup(n)
+        if v is not None and v.named_elements:  # the whole array: braced list of the element variables
+            k = self.named_count(v)
+            lst = self.cfg["named_element_lists"].get(v.tname, "")
+            cur = self.named.get(v.name, ({}, 0))[0]
+            return X(lst + "{" + ", ".join(cur.get(i, f"{v.cname}_{i}") for i in range(1, k + 1)) + "}", 1, "type",
+                     100, v, v.tname, whole=True)
         if v is not None and n in self.shift and n not in self.overrides:
             return X(f"{v.cname} + {self.shift[n]}", 0, "integer", P_ADD, v)
         if v is None:
@@ -452,6 +465,8 @@ class Translator:
                 self.plain_args(items_of(args))
             callee = f"(*{v.cname})" if v.opt_kind else v.cname
             return self.result_x(f"{callee}({', '.join(argc)})", iface)
+        if v is not None and v.named_elements:
+            return self.named_element(v, items_of(args))
         if v is not None and cls(node) != "Intrinsic_Function_Reference" or (v is not None and v.rank > 0):
             return self.subscript(self.x_Name(name_node), v, items_of(args))
         if n in self.cfg["function_map"]:
@@ -755,9 +770,82 @@ class Translator:
         a = self.index0(lo, lb) if lo is not None else "0"
         b = self.index0(hi, lb) if hi is not None else self.cfg["eigen_placeholders"] + "::last"
         c = f", {self.expr(step).code}" if step is not None else ""
-        return "seq", f"Eigen::seq({a}, {b}{c})"
+        code = Seq(f"Eigen::seq({a}, {b}{c})")
+        if step is None and hi is not None and (lb is None or lo is not None):
+            n = self.slice_length(lo, hi)
+            if n is not None:                   # contiguous with a simple length: segment / block
+                code.seg = (a, n)
+        return "seq", code
+
+    def slice_length(self, lo, hi):
+        """length hi - lo + 1 of a slice by cancelling identical +/- terms of lo and hi (as written); None
+        unless what remains of lo is a literal (lo None: 1)"""
+        def terms(node, sign, out):
+            k = cls(node)
+            if k == "Level_2_Expr" and node.items[1] in ("+", "-"):
+                terms(node.items[0], sign, out)
+                terms(node.items[2], sign if node.items[1] == "+" else -sign, out)
+            elif k == "Int_Literal_Constant":
+                out.append((sign, None, int(str(node.items[0]))))
+            elif k == "Level_2_Unary_Expr" and str(node.items[0]).strip() in ("+", "-"):
+                terms(node.items[1], sign if str(node.items[0]).strip() == "+" else -sign, out)
+            else:
+                out.append((sign, node, re.sub(r"\s+", "", str(node)).lower()))
+        th, tl = [], []
+        terms(hi, 1, th)
+        if lo is not None:
+            terms(lo, 1, tl)
+        else:
+            tl = [(1, None, 1)]
+        const = sum(sg * v for sg, n, v in th if n is None) - sum(sg * v for sg, n, v in tl if n is None) + 1
+        rest = [t for t in th if t[1] is not None]
+        for sg, n, key in [t for t in tl if t[1] is not None]:
+            hit = next((t for t in rest if t[0] == sg and t[2] == key), None)
+            if hit is None:
+                return None                     # lo has a term that hi does not have
+            rest.remove(hit)
+        if not rest:
+            return str(const) if const >= 0 else None
+        if len(rest) > 2:
+            return None                         # not simpler than the end index
+        code = ""
+        for sg, n, _ in rest:
+            x = self.expr(n)
+            if x.rank:
+                return None
+            code += (f"{par(x, P_ADD)}" if not code and sg > 0 else
+                     f"{' + ' if sg > 0 else ' - '}{par(x, P_ADD, True)}" if code else f"-{par(x, P_UNARY)}")
+        return code if const == 0 else f"{code} {'+' if const > 0 else '-'} {abs(const)}"
+
+    def named_count(self, v):
+        """number of elements of a named_elements array (literal size, lower bound 1)"""
+        lo, hi = v.dims[0] if v.dims else (None, None)
+        if hi is None and v.named_size is not None:         # allocate(x(2)) before
+            return v.named_size
+        if hi is None or not str(hi).strip().isdigit() or (lo is not None and str(lo).strip() != "1"):
+            raise Untranslatable("named-elements-size")
+        return int(str(hi).strip())
+
+    def named_element(self, v, subs):
+        """inputs(2) -> X of the variable inputs_2"""
+        if len(subs) != 1 or cls(subs[0]) != "Int_Literal_Constant":
+            raise Untranslatable("named-elements-index")
+        k = int(str(subs[0].items[0]))
+        return X(self.named.get(v.name, ({}, 0))[0].get(k, f"{v.cname}_{k}"), 0, "type", 100, None, v.tname)
+
+    def new_named_element(self, v, subs):
+        """inputs(k) = ...: a new C++ variable (counted up per array: an element assigned again gets a new one)"""
+        if len(subs) != 1 or cls(subs[0]) != "Int_Literal_Constant":
+            raise Untranslatable("named-elements-index")
+        cur, n = self.named.get(v.name, ({}, 0))
+        name = f"{v.cname}_{n + 1}"
+        cur[int(str(subs[0].items[0]))] = name
+        self.named[v.name] = (cur, n + 1)
+        return name
 
     def subscript(self, x, v, subs):
+        if v is not None and v.named_elements:
+            return self.named_element(v, subs)
         res = self.subscript_(x, v, subs)
         if v.elem_uptr and res.rank == 0:      # unique_ptr element: pointer-like
             res.raw, res.code, res.prec, res.uptr_elem = res.code, "*" + res.code, P_UNARY, True
@@ -795,7 +883,20 @@ class Translator:
             res.code = f"{base}({idx})" if v.base not in ("type", "character") else f"{base}[{idx}]"
             return res
         res.rank = sum(k != "idx" for k in kinds)
-        if len(sc) == 1:
+        seg = [getattr(c, "seg", None) for _, c in sc]
+        if len(sc) == 1 and seg[0]:             # contiguous slices with a simple length
+            res.code = f"{base}.segment({seg[0][0]}, {seg[0][1]})"
+        elif len(sc) == 2 and seg[0] and seg[1]:
+            res.code = f"{base}.block({seg[0][0]}, {seg[1][0]}, {seg[0][1]}, {seg[1][1]})"
+        elif len(sc) == 2 and seg[0] and kinds[1] == "idx":
+            res.code = f"{base}.col({sc[1][1]}).segment({seg[0][0]}, {seg[0][1]})"
+        elif len(sc) == 2 and seg[1] and kinds[0] == "idx":
+            res.code = f"{base}.row({sc[0][1]}).segment({seg[1][0]}, {seg[1][1]}).transpose()"
+        elif len(sc) == 2 and seg[0] and kinds[1] == "all":
+            res.code = f"{base}.middleRows({seg[0][0]}, {seg[0][1]})"
+        elif len(sc) == 2 and seg[1] and kinds[0] == "all":
+            res.code = f"{base}.middleCols({seg[1][0]}, {seg[1][1]})"
+        elif len(sc) == 1:
             res.code = base if kinds[0] == "all" else f"{base}({sc[0][1]})"
         elif kinds == ["all", "all"]:
             res.code = base
@@ -902,6 +1003,8 @@ class Translator:
 
     def x_Array_Constructor(self, node):
         xs = self.ac_items(node)
+        if self.brace_arrays:                   # constructor arguments of named_elements: {1, 2} / {"a", "b"}
+            return X("{" + ", ".join(x.code for x in xs) + "}", 1, xs[0].base if xs else "unknown")
         if all(x.base == "character" for x in xs):
             return X("std::vector<std::string>{" + ", ".join(x.code for x in xs) + "}", 1, "character")
         # operands of the comma initialiser: << binds stronger than comparisons and logical operators
@@ -1315,6 +1418,25 @@ class Translator:
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
+        if cls(lhs_n) == "Part_Ref" and getattr(self.lookup(lname(lhs_n.items[0])), "named_elements", False):
+            # inputs(1) = Variable_type(...) -> Variable inputs_1(...);  (declaration of the element)
+            v = self.lookup(lname(lhs_n.items[0]))
+            self.named_element(v, items_of(lhs_n.items[1]))              # literal index
+            if cls(rhs_n) not in ("Structure_Constructor", "Part_Ref", "Function_Reference") or \
+                    lname(rhs_n.items[0]) != v.tname:
+                raise Untranslatable("named-elements-assignment")
+            self.brace_arrays = True
+            try:
+                rhs = self.expr(rhs_n)          # structure constructor T{...} or constructor function f(...)
+            finally:
+                self.brace_arrays = False
+            t = self.elem_type(v)
+            m = re.fullmatch(r"([\w:<>]+)([({])(.*)([)}])", rhs.code, re.S)
+            if m is None or "({"[")}".index(m.group(4))] != m.group(2):
+                raise Untranslatable("named-elements-assignment")
+            cpp_cls = self.cfg["named_elements"].get(v.tname) or t
+            self.emit(ind, f"{cpp_cls} {self.new_named_element(v, items_of(lhs_n.items[1]))}({m.group(3)});")
+            return
         lhs = self.ref(lhs_n)
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
@@ -1656,6 +1778,18 @@ class Translator:
 
     def s_Allocate_Stmt(self, node, ind):
         tspec, allocs, opts = node.items
+        named = [a for a in items_of(allocs) if cls(a) == "Allocation" and cls(a.items[0]) == "Name"
+                 and getattr(self.lookup(lname(a.items[0])), "named_elements", False)]
+        if named:                               # named_elements: only the size (elements declared later)
+            if len(named) != len(items_of(allocs)):
+                raise Untranslatable("named-elements-allocate")
+            for a in named:
+                shape = items_of(a.items[1])
+                lo, hi = shape[0].items if cls(shape[0]) == "Allocate_Shape_Spec" else (None, shape[0])
+                if len(shape) != 1 or not str(hi).strip().isdigit() or (lo is not None and str(lo).strip() != "1"):
+                    raise Untranslatable("named-elements-size")
+                self.lookup(lname(a.items[0])).named_size = int(str(hi).strip())
+            return
         for o in items_of(opts):
             if lname(o.items[0]) != "stat":
                 raise Untranslatable("allocate-option:" + lname(o.items[0]))
@@ -1694,6 +1828,9 @@ class Translator:
                 self.emit(ind, f"{name}.assign({self.nested_ctor(v, dims)});")
 
     def s_Deallocate_Stmt(self, node, ind):
+        if all(cls(a) == "Name" and getattr(self.lookup(lname(a)), "named_elements", False)
+               for a in items_of(node.items[0])):
+            return                              # named_elements: end of scope
         for a in items_of(node.items[0]):
             x = self.ref(a)
             st = "uptr" if x.uptr_elem else self.storage(x.var) if x.var is not None else None
@@ -1730,6 +1867,7 @@ class Translator:
         cond = X(self.condition(node.items[0]))
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
+        sub.named = self.named
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
             self.overrides, self.shift, self.loop_local, self.loop_decl
         sub.stmt(node.items[1], 0)
