@@ -1883,7 +1883,6 @@ def test_reverse_wrapped_types(tmp_path):
     assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
            "int, PROJECT_REAL*, int, int*) = nullptr;\n  void (*weight)(struct project_AbstractThing*, PROJECT_REAL*) = " \
            "nullptr;\n  void (*reset)(struct project_AbstractThing*) = nullptr;\n" in h
-    assert "  void (*save_state)(struct project_AbstractThing*, void**, int*, void (**)(void*), int*) = nullptr;\n" in h
     assert "  void (*destroy)(struct project_AbstractThing*) = nullptr;\n  void* p_impl = nullptr;\n" \
            "  void* userData = nullptr;\n} project_AbstractThing;" in h
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
@@ -1972,9 +1971,14 @@ def test_wrapped_unlimited_polymorphic_state(tmp_path):
     hpp, cpp = (tmp_path / "fstate_mod.hpp").read_text(), (tmp_path / "fstate_mod.cpp").read_text()
     b = (tmp_path / "fstate_mod_c_binding.F90").read_text()
     assert "  void get_state(std::any& state) const;" in hpp and "  void set_state(const std::any& state);" in hpp
-    assert "struct FortranState" in hpp and "#include <any>" in hpp
-    assert "  state = f2cpp_any::from_fortran(state_p, state_k, &project_fstate_mod_any_release);" in cpp
-    assert "    call f2cpp_any_from_view(state, state_kind, state_f)\n" in b and "    call f2cpp_any_back(state, state_kind, state_f)" in b
+    h = (tmp_path / "fstate_mod.h").read_text()
+    assert "class FortranState" in hpp and "#include <any>" in hpp and "struct project_FortranAny;" in hpp
+    assert "void project_Counter_get_state(const project_Counter* counter, project_FortranAny** state, int* ierr);" in h
+    assert "void project_Counter_set_state(project_Counter* counter, project_FortranAny* state, int* ierr);" in h
+    assert "  state = f2cpp_any::from_fortran(state_h, &project_fstate_mod_any_release);" in cpp
+    assert "project_Counter_set_state(handle_, f2cpp_any::to_fortran(state), &ierr);" in cpp
+    assert "    call f2cpp_any_from_holder(state, state_f)\n" in b and "    call f2cpp_any_back(state, state_f)" in b
+    assert "CppAny" not in b + hpp and "kind" not in h
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv
@@ -2011,7 +2015,7 @@ extern "C" void run(project_Counter* h)
   std::printf("%d\n", c->n());
   try
   {
-    c->set_state(std::any(3));        // C++ data: not an integer for Fortran -> ierr -> exception
+    c->set_state(std::any(3));        // C++ data cannot be passed to Fortran -> std::invalid_argument
   }
   catch (const std::exception&)
   {
@@ -2032,3 +2036,26 @@ extern "C" void run(project_Counter* h)
         out = subprocess.run(["valgrind", "--error-exitcode=3", "--leak-check=full", "./m"], cwd=d,
                              capture_output=True, text=True)
         assert out.returncode == 0, out.stderr                      # no errors, no leaks (counted as errors)
+
+
+def test_reverse_class_star_is_todo(tmp_path):
+    """class(*) arguments of reverse-wrapped methods: C++ data is not passed to Fortran (translate the caller)"""
+    (tmp_path / "rs_mod.F90").write_text("""module rs_mod
+  implicit none
+  type, abstract :: AbstractS_type
+  contains
+    procedure(save_iface), deferred :: save_state
+  end type AbstractS_type
+  abstract interface
+    subroutine save_iface(this, state)
+      import :: AbstractS_type
+      class(AbstractS_type), intent(in) :: this
+      class(*), allocatable, intent(out) :: state
+    end subroutine save_iface
+  end interface
+end module rs_mod
+""")
+    translate([], cfg(wrap_reverse=["abstracts_type"]), str(tmp_path), wrap=[str(tmp_path / "rs_mod.F90")])
+    b = (tmp_path / "rs_mod_c_binding.F90").read_text()
+    assert "! TODO(f2cpp): argument state: class(*) (C++ data is not passed to Fortran; translate the caller)" in b
+    assert 'error stop "cwrappers_save_state:' in b

@@ -13,8 +13,6 @@ module linear_thing_mod
     procedure :: evaluate => linear_evaluate
     procedure :: weight => linear_weight
     procedure :: offset => linear_offset
-    procedure :: save_state => linear_save
-    procedure :: restore_state => linear_restore
   end type LinearThing_type
 
   type, extends(AbstractThingFactory_type) :: LinearThingFactory_type
@@ -44,26 +42,6 @@ contains
     real :: o
     o = this%factor + 0.25
   end function linear_offset
-
-  subroutine linear_save(this, state, ierr)
-    class(LinearThing_type), intent(in) :: this
-    class(*), allocatable, intent(out) :: state
-    integer, intent(out) :: ierr
-    ierr = 0
-    allocate(state, source=this%factor)
-  end subroutine linear_save
-
-  subroutine linear_restore(this, state, ierr)
-    class(LinearThing_type), intent(inout) :: this
-    class(*), allocatable, intent(in) :: state
-    integer, intent(out) :: ierr
-    ierr = -1
-    select type (state)
-    type is (real)
-      this%factor = state
-      ierr = 0
-    end select
-  end subroutine linear_restore
 
   subroutine linear_create(this, config, thing, ierr)
     class(LinearThingFactory_type), intent(in) :: this

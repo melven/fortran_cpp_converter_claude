@@ -298,17 +298,11 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 `p.type() == typeid(scalar)` / `std::any_cast<const scalar&>(p)` (read access). In a wrapped module (`-W`)
 such a type is a wrapped class instead (`wrap_owned` for arrays of it passed to / from C++).
 
-`class(*), allocatable` arguments (`intent(out)` / `intent(in)`) of wrapped methods and of reverse-wrapped
-methods are passed as black boxes in both directions, moved and never copied:
-
-| data | in Fortran | in C++ |
-|---|---|---|
-| produced by C++ | `CppAny_type` (binding module): the `std::any*`, deleted by its final procedure | the `std::any` itself again |
-| produced by Fortran | the `class(*)` object itself again | `std::any` with `std::shared_ptr<FortranState>` (copies share it; the last one releases the Fortran holder) |
-
-At the C interface: pointer + `kind` (0 empty, 1 C++ data, 2 Fortran data); helpers `f2cpp_any` (C++) and
-`f2cpp_any_*` (binding). Fortran data passed to a C++ implementation (or C++ data the Fortran code does
-not know) is an error (`ierr = -1` / exception).
+`class(*), allocatable` arguments (`intent(out)` / `intent(in)`) of wrapped methods: Fortran data held by
+C++ and passed back, moved and never copied. C: the opaque holder `project_FortranAny*` (NULL: unallocated);
+C++: `std::any` with a `std::shared_ptr<FortranState>` (copies share it, the last one releases the holder in
+Fortran: `project_<module>_any_release`). C++ data in a `std::any` cannot be passed to Fortran
+(`std::invalid_argument`); `class(*)` arguments of reverse-wrapped methods are TODOs (translate the caller).
 
 ## Objects that are neither copyable nor movable
 
