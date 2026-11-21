@@ -2089,6 +2089,12 @@ end module rs_mod
     b = (tmp_path / "project_c_wrapper_rs_mod.F90").read_text()
     assert "! TODO(f2cpp): argument state: class(*) (C++ data is not passed to Fortran; translate the caller)" in b
     assert 'error stop "cwrappers_save_state:' in b
+    # the other direction (Fortran implementation behind the struct): TODO in the binding, the C++ wrapper throws
+    fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod.hpp", "rs_mod.cpp"))
+    assert "    ! TODO(f2cpp): save_state not wrapped (argument state: class(*)): C++ WrapperS::save_state throws\n" in fb
+    assert "  void save_state(std::any& state) const override;" in hpp
+    assert "void WrapperS::save_state(std::any& state) const\n{\n  // TODO(f2cpp): argument state: class(*)\n" \
+           '  throw std::logic_error("WrapperS::save_state: not wrapped (argument state: class(*))");' in cpp
 
 
 def test_wrap_translate_guards(tmp_path):

@@ -560,7 +560,7 @@ inline {ah}* to_fortran(const std::any& v)
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]
         if factory is None:                     # the other direction: Fortran implementations used in C++
-            self.fortran_behind(lt, [(bd, iface) for bd, iface, _ in methods if not _["todo"]], hpp, cpp, fb)
+            self.fortran_behind(lt, [(bd, iface, m["todo"]) for bd, iface, m in methods], hpp, cpp, fb)
         self.report.add("translated", "wrapped-reverse")
 
     def fortran_behind(self, lt, methods, hpp, cpp, fb):
@@ -573,15 +573,16 @@ inline {ah}* to_fortran(const std::any& v)
         thing = re.sub(r"^Abstract", "", cc)
         st, fw, wcls = f"{cc}_c", f"{cc}Wrapper_type", f"Wrapper{re.sub(r'^Abstract', '', cls)}"
         create = f"create_{thing}_C_from_Fortran"
-        used, entries = set(), []
-        for bd, iface in methods:
+        used, entries, todos = set(), [], []
+        for bd, iface, todo in methods:         # todo: no function pointer in the struct
             routine = f"wrap_{bd.name}"
             if routine in self.wrap_routines:   # several reverse types in the module
                 routine = f"wrap_{cc.lower()}_{bd.name}"
-            self.wrap_routines.add(routine)
             part = self.fortran_method_c(lt, bd, iface, routine, st, fw)
-            if part is None:
+            if todo or "todo" in part:          # C++: throws (a function pointer in the struct stays null)
+                todos.append((bd, iface, part.get("todo", todo)))
                 continue
+            self.wrap_routines.add(routine)
             fb += part["fortran"]
             entries.append((bd, iface, routine, part))
         # create_<Thing>_C_from_Fortran
@@ -591,6 +592,8 @@ inline {ah}* to_fortran(const std::any& v)
                f"  subroutine {create}(fthing, cthing, ierr)", f"    type({fw}), target, intent(in) :: fthing",
                f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
             [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
+            [f"    ! {TODO}: {bd.spelling} not wrapped ({todo}): C++ {wcls}::{bd.spelling} throws"
+             for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
         self.public_extra.append(create)
         # C++ Wrapper<Thing>
@@ -600,7 +603,7 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(0, "public:")
         hpp.emit(1, f"{wcls}() = default;  //!< empty object (tests): the methods throw")
         hpp.emit(1, f"explicit {wcls}({ht}& c) : other_(&c) {{}}")
-        for bd, iface, routine, part in entries:
+        for bd, iface in [(e[0], e[1]) for e in entries] + [(t[0], t[1]) for t in todos]:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             hpp.emit(1, f"{ret} {bd.spelling}({params}){const} override;")
         hpp.emit(0, "")
@@ -620,11 +623,16 @@ inline {ah}* to_fortran(const std::any& v)
                 lines.append(f'  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from {wcls}::{bd.spelling}");')
             lines += [f"  {x}" for x in part["cpp_post"]] + ["}", ""]
             self.emit_lines(cpp, lines)
+        for bd, iface, todo in todos:
+            ret, _, params, const = self.signature(self.tr(iface), iface, False)
+            self.report.add("todo", f"wrap-reverse-fortran:{bd.name}")
+            self.emit_lines(cpp, [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{", f"  // {TODO}: {todo}",
+                                  f'  throw std::logic_error("{wcls}::{bd.spelling}: not wrapped ({todo})");', "}", ""])
         self.report.add("translated", "wrapped-reverse-fortran")
 
     def fortran_method_c(self, lt, bd, iface, routine, st, fw):
-        """wrap_<method>: C arguments of the function pointer -> the Fortran implementation (None if an argument
-        kind is not supported here: objects, class(*), created objects)"""
+        """wrap_<method>: C arguments of the function pointer -> the Fortran implementation ({"todo": reason} if an
+        argument kind is not supported here: objects, class(*), created objects)"""
         tr = self.tr(iface)
         err = tr.err
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
@@ -659,11 +667,11 @@ inline {ah}* to_fortran(const std::any& v)
                 decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}({a}_n)")
                 call.append(f"{a}={a}")
                 cpp_args += [f"{cn}.data()", f"static_cast<int>({cn}.size())"]
-            else:
-                return None                     # objects / class(*) / created objects: C++ implementations only
+            else:                               # objects / class(*) / created objects: C++ implementations only
+                return {"todo": f"argument {cn}: {self.component_kind(v)}"}
         res_v = iface.vars.get(iface.result) if iface.kind == "function" else None
         if res_v is not None and (res_v.rank or res_v.base not in ("real", "integer", "logical")):
-            return None
+            return {"todo": f"result {res_v.cname}: {self.component_kind(res_v)}"}
         if res_v is not None:
             r = iface.result
             dummies.append(r)
