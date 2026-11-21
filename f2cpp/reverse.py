@@ -265,7 +265,7 @@ class ReverseMixin:
         hpp.emit(0, "")
         hpp.emit(0, "private:")
         for bd, iface, m in live:
-            hpp.emit(1, f"//! internal wrapper for {bd.spelling} (called from Fortran)")
+            hpp.emit(1, f"//! internal wrapper for {bd.spelling}")
             hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']});")
         hpp.emit(1, f"{ht}* fortran_ = nullptr;  //!< the Fortran object ({bridge}) calling this object")
         hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& l);")
@@ -377,10 +377,10 @@ class ReverseMixin:
         hpp.emit(0, "")
         hpp.emit(0, "private:")
         for bd, iface, m in live:
-            hpp.emit(1, f"//! internal wrapper for {bd.spelling} (called from Fortran)")
+            hpp.emit(1, f"//! internal wrapper for {bd.spelling}")
             hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']});")
         if factory is None:
-            hpp.emit(1, "//! internal wrapper for the destruction (called from Fortran: the object is owned there)")
+            hpp.emit(1, "//! internal wrapper for the destruction (the object is owned by the caller)")
             hpp.emit(1, f"static void destroy_wrapper({ht}* self);")
         hpp.emit(1, f"std::unique_ptr<{ht}> c_;  //!< the C struct of this object")
         if factory is not None:

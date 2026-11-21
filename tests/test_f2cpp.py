@@ -1645,10 +1645,10 @@ def test_wrapped_listener(tmp_path):
     hpp, cpp = (tmp_path / "listen_mod.hpp").read_text(), (tmp_path / "listen_mod.cpp").read_text()
     b, h = (tmp_path / "listen_mod_c_binding.F90").read_text(), (tmp_path / "listen_mod.h").read_text()
     assert "  virtual void state_changed(const Thing& thing, scalar old, const vec& history) = 0;" in hpp
-    assert "private:\n  //! internal wrapper for state_changed (called from Fortran)\n" \
+    assert "private:\n  //! internal wrapper for state_changed\n" \
            "  static void state_changed_wrapper(void* userData, void* thing, scalar old, const scalar* history, " \
            "int history_n, int* ierr);" in hpp
-    assert "  //! internal wrapper for state_changed (called from Fortran)\n  static void state_changed_wrapper(" in hpp
+    assert "  //! internal wrapper for state_changed\n  static void state_changed_wrapper(" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
     assert "project_AbstractListener* project_AbstractListener_create(void* userData, void (*state_changed_fn)(void*, void*, " \
            "PROJECT_REAL, const PROJECT_REAL*, int, int*));" in h
@@ -1893,8 +1893,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tb
     assert "  static void evaluate_wrapper(struct project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
            "int y_n, int* ierr);" in th
-    assert "  //! internal wrapper for evaluate (called from Fortran)\n  static void evaluate_wrapper(" in th
-    assert "  //! internal wrapper for the destruction (called from Fortran: the object is owned there)\n" \
+    assert "  //! internal wrapper for evaluate\n  static void evaluate_wrapper(" in th
+    assert "  //! internal wrapper for the destruction (the object is owned by the caller)\n" \
            "  static void destroy_wrapper(" in th
     assert "  std::unique_ptr<project_AbstractThing> c_;" in th and "#include \"thing_mod.h\"" not in th
     assert "  std::unique_ptr<AbstractThing> owner(static_cast<AbstractThing*>(self->userData));  // deletes it" in tc
