@@ -1663,8 +1663,12 @@ def test_wrapped_listener(tmp_path):
            "int history_n, int* ierr);" in hpp
     assert "  //! internal wrapper for state_changed\n  static void state_changed_wrapper(" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
-    assert "project_AbstractListener* project_AbstractListener_create(void* userData, void (*state_changed_fn)(void*, void*, " \
-           "PROJECT_REAL, const PROJECT_REAL*, int, int*));" in h
+    assert "typedef void (*project_AbstractListener_state_changed)(void*, void*, PROJECT_REAL, const PROJECT_REAL*, " \
+           "int, int*);" in h
+    assert "project_AbstractListener* project_AbstractListener_create(void* userData, " \
+           "project_AbstractListener_state_changed state_changed_fn);" in h
+    assert "!@end_c_declaration\n  abstract interface\n    !> AbstractListener::state_changed_wrapper\n" \
+           "    subroutine project_AbstractListener_state_changed(userData, thing, old, history, history_n, ierr) bind(C)" in b
     assert "AbstractListener::AbstractListener() : fortran_(project_AbstractListener_create(this, " \
            "&AbstractListener::state_changed_wrapper))" in cpp
     assert "    type(C_FUNPTR) :: state_changed_fn = C_NULL_FUNPTR" in b
@@ -1894,12 +1898,17 @@ def test_reverse_wrapped_types(tmp_path):
     tw = (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()          # the Fortran types implemented in C++
     fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
     h, lh, lc = ((tmp_path / f).read_text() for f in ("thing_mod.h", "linear_thing_mod.hpp", "linear_thing_mod.cpp"))
-    # C struct per C++ object: function pointers, destroy, p_impl, userData
-    assert "typedef struct project_AbstractThing\n{\n  void (*evaluate)(struct project_AbstractThing*, const PROJECT_REAL*, " \
-           "int, PROJECT_REAL*, int, int*) = nullptr;\n  void (*weight)(struct project_AbstractThing*, PROJECT_REAL*) = " \
-           "nullptr;\n  void (*reset)(struct project_AbstractThing*) = nullptr;\n" in h
-    assert "  void (*destroy)(struct project_AbstractThing*) = nullptr;\n" \
-           "  void* userData = nullptr;\n} project_AbstractThing;" in h and "p_impl" not in h
+    # C struct per C++ object: function pointers (typedefs named like the abstract interfaces), destroy, userData
+    assert "typedef struct project_AbstractThing project_AbstractThing;" in h
+    assert "typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*, const PROJECT_REAL*, int, " \
+           "PROJECT_REAL*, int, int*);" in h
+    assert "struct project_AbstractThing\n{\n  project_AbstractThing_evaluate evaluate = nullptr;\n" \
+           "  project_AbstractThing_weight weight = nullptr;\n  project_AbstractThing_reset reset = nullptr;\n" in h
+    assert "  project_AbstractThing_destroy destroy = nullptr;\n  void* userData = nullptr;\n};" in h and "p_impl" not in h
+    assert h.index("typedef void (*project_AbstractThing_destroy)") < h.index("struct project_AbstractThing\n{")
+    assert "!typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*, const PROJECT_REAL*, int, " \
+           "PROJECT_REAL*, int, int*);\n!@end_c_declaration\n  abstract interface\n" \
+           "    !> AbstractThing::evaluate_wrapper\n    subroutine project_AbstractThing_evaluate(" in tb
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
     # bindings with a default implementation: virtual, the translated default, forwarded as well
@@ -1921,9 +1930,9 @@ def test_reverse_wrapped_types(tmp_path):
     # (in the c_wrapper module; the binding module has the C struct and the interfaces)
     assert "  type, extends(AbstractThing_type) :: CWrapperThing_type\n" in tw and "    final :: cwrapperthing_final" in tw
     assert ":: CWrapperThing_type" not in tb and "Holder" not in tb + tw and "p_impl" not in tb + tw
-    assert "  use thing_mod_c_binding, only: AbstractThing_evaluate_c" in tw
+    assert "  use thing_mod_c_binding, only: project_AbstractThing_evaluate" in tw
     # private modules, public: types, bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
-    assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: AbstractThing_evaluate_c\n" in tb
+    assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_evaluate\n" in tb
     assert "  implicit none\n  private\n  public :: CWrapperThing_type\n  public :: project_AbstractThing_wrap\n" in tw
     assert "public :: cwrapperthing_evaluate" not in tw
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
@@ -2132,7 +2141,8 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert "class WrapperThing final : public AbstractThing\n{\npublic:\n  WrapperThing() = default;" in hpp
     assert "  explicit WrapperThing(project_AbstractThing& c) : other_(&c) {}" in hpp
     assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
-    assert "  subroutine wrap_evaluate(self, x, x_n, y, y_n, ierr) bind(C, name=\"project_AbstractThing_wrap_evaluate\")" in b
+    # no binding label (no global symbol): only the target of a function pointer
+    assert "  subroutine wrap_evaluate(self, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
     assert "    call c_f_pointer(self_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x=x, y=y, ierr=ierr_f)" in b
     assert "  subroutine create_Thing_C_from_Fortran(fthing, cthing, ierr)\n" \
            "    type(AbstractThingWrapper_type), target, intent(in) :: fthing\n" \

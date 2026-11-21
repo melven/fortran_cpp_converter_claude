@@ -186,14 +186,12 @@ class ReverseMixin:
             r = iface.result
             out.append(f"    {r} = logical({r}_c)" if res_v.base == "logical" else f"    {r} = {r}_c")
         res["fortran"] = out + [f"  end {kw} {proc}"]
-        res["abstract"] = ["  abstract interface", f"    !> {cls}::{tramp}",
-                           f"    subroutine {aiface}({', '.join(f_dummies)}) bind(C)", "      import"] + \
-            [f"      {d}" for d in f_decls] + [f"    end subroutine {aiface}", "  end interface", ""]
         res["c_params"] = ", ".join(c_params)
         # C++ declaration / definition: the C++ real type (same type as the C macro, which is not in the .hpp)
         res["cpp_params"] = re.sub(rf"\b{re.escape(cfg['c_real'])}\b", cfg["scalar"], res["c_params"])
         res["c_types"] = ", ".join(re.sub(r"(\(\*+)\w+\)", r"\1)", c) if "(*" in c else re.sub(r"\s*\w+$", "", c)
                                    for c in c_params)       # parameter types (function pointers: without name)
+        res["abstract"] = self.abstract_interface(aiface, res["c_types"], f"{cls}::{tramp}", f_dummies, f_decls)
         call = f"{cpp_obj}->{bd.spelling}({', '.join(cpp_args)});"
         if res_v is not None:
             call = f"*{iface.result} = {call}"
@@ -205,6 +203,13 @@ class ReverseMixin:
              f'    std::fprintf(stderr, "{cls}::{bd.spelling}: %s\\n", e.what());'] + on_error + \
             ["  }", "  catch (...)", "  {"] + on_error + ["  }", "}", ""]
         return res
+
+    def abstract_interface(self, name, c_types, doc, dummies, decls):
+        """abstract interface (bind(C)) with the C typedef of its function pointer (same name)"""
+        c_types = re.sub(r"\bstruct (\w+)\*", r"\1*", c_types)        # the forward declaration comes first
+        return ["!@c_declaration", f"!typedef void (*{name})({c_types});", "!@end_c_declaration",
+                "  abstract interface", f"    !> {doc}", f"    subroutine {name}({', '.join(dummies)}) bind(C)",
+                "      import"] + [f"      {d}" for d in decls] + [f"    end subroutine {name}", "  end interface", ""]
 
     def fortran_decl(self, v):
         """type of a scalar result declared by the function prefix"""
@@ -337,10 +342,10 @@ inline {ah}* to_fortran(const std::any& v)
         for bd, iface in self.methods_of(lt):
             this = iface.pass_arg
             m = self.forward(lt, bd, iface, proc=f"{self.c_class(lt).lower()}_cpp_{bd.name}",
-                             aiface=f"{self.c_class(lt)}_{bd.name}_c", funptr=f"{this}%{bd.name}_fn",
+                             aiface=f"{ht}_{bd.name}", funptr=f"{this}%{bd.name}_fn",
                              self_c="void* userData", self_dummy="userData", self_actual=f"{this}%userData",
                              cpp_obj=f"static_cast<{cls}*>(userData)", cls=cls, objects="owner")
-            m["fn"], m["proc"] = f"{bd.name}_fn", f"{self.c_class(lt).lower()}_cpp_{bd.name}"
+            m["fn"], m["proc"], m["typedef"] = f"{bd.name}_fn", f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{ht}_{bd.name}"
             methods.append((bd, iface, m))
         live = [m for m in methods if not m[2]["todo"]]
         # --- C++ class
@@ -390,7 +395,7 @@ inline {ah}* to_fortran(const std::any& v)
             fb += ["", "  !> is x the Fortran object of p", "  logical function listener_same(p, x)",
                    "    class(*), pointer, intent(in) :: p", "    class(*), target, intent(in) :: x",
                    "    listener_same = associated(p, x)", "  end function listener_same"]
-        c_fns = "".join(f", void (*{m['fn']})({m['c_types']})" for _, _, m in live)
+        c_fns = "".join(f", {m['typedef']} {m['fn']}" for _, _, m in live)
         f_fns = "".join(f", {m['fn']}" for _, _, m in live)
         fb += ["", "!@c_declaration", f"!  {ht}* {create}(void* userData{c_fns});", f"!  void {free}({ht}* listener);",
                "!@end_c_declaration", "  !> Fortran object of the C++ listener (with its trampolines)",
@@ -444,7 +449,7 @@ inline {ah}* to_fortran(const std::any& v)
                 continue
             this = iface.pass_arg
             proc = f"{bridge[:-5].lower()}_{bd.name}"
-            m = self.forward(lt, bd, iface, proc=proc, aiface=f"{cc}_{bd.name}_c", funptr=f"{this}%c%{bd.name}",
+            m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.name}", funptr=f"{this}%c%{bd.name}",
                              self_c=f"struct {ht}* self", self_dummy="self", self_actual=f"c_loc({this}%c)",
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
             m["proc"] = proc
@@ -452,11 +457,11 @@ inline {ah}* to_fortran(const std::any& v)
         self.extra_uses = saved_uses
         live = [m for m in methods if not m[2]["todo"]]
         # --- C struct (in the c_declaration block; struct ... for its own type)
-        members = [f"  void (*{bd.name})({m['c_types']}) = nullptr;" for bd, _, m in live]
+        typedefs.append(f"!typedef struct {ht} {ht};")       # forward declaration (the struct: after the typedefs)
+        members = [f"  {ht}_{bd.name} {bd.name} = nullptr;" for bd, _, m in live]
         if factory is None:
-            members.append(f"  void (*destroy)(struct {ht}*) = nullptr;")
+            members.append(f"  {ht}_destroy destroy = nullptr;")
         members += ["  void* userData = nullptr;"]
-        typedefs += [f"!typedef struct {ht}", "!{"] + [f"!{x}" for x in members] + [f"!}} {ht};", "!"]
         # --- C++ class
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
@@ -508,13 +513,14 @@ inline {ah}* to_fortran(const std::any& v)
         # --- Fortran binding: interfaces of the functions, bind(C) struct (what C sees)
         for _, _, m in live:
             self.bridges += m["abstract"]
-        cw["binding_names"] += [f"{cc}_{bd.name}_c" for bd, _, _ in live] + [st]
+        cw["binding_names"] += [f"{ht}_{bd.name}" for bd, _, _ in live] + [st]
         if factory is None:
-            self.bridges += ["  abstract interface", f"    !> {cls}::destroy_wrapper",
-                             f"    subroutine {cc}_destroy_c(self) bind(C)", "      import",
-                             "      type(C_PTR), value :: self", f"    end subroutine {cc}_destroy_c", "  end interface", ""]
-            cw["binding_names"].append(f"{cc}_destroy_c")
-        self.bridges += [f"  !> C struct {ht}: functions of the C++ object", f"  type, bind(C), public :: {st}"] + \
+            self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", f"{cls}::destroy_wrapper", ["self"],
+                                                    ["type(C_PTR), value :: self"])
+            cw["binding_names"].append(f"{ht}_destroy")
+        self.bridges += ["!@c_declaration", f"!struct {ht}", "!{"] + [f"!{x}" for x in members] + ["!};",
+                         "!@end_c_declaration", f"  !> C struct {ht}: functions of the C++ object",
+                         f"  type, bind(C), public :: {st}"] + \
             [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
             ["    type(C_PTR) :: userData = C_NULL_PTR  !< the implementation (C++ or Fortran object)", f"  end type {st}", ""]
@@ -529,7 +535,7 @@ inline {ah}* to_fortran(const std::any& v)
         fin, wrap = f"{bridge[:-5].lower()}_final", self.c_name(lt, "wrap")
         if factory is None:
             cw["procs"] += ["", "  !> deletes the C++ object", f"  subroutine {fin}(this)",
-                            f"    type({bridge}), intent(inout) :: this", f"    procedure({cc}_destroy_c), pointer :: f", "",
+                            f"    type({bridge}), intent(inout) :: this", f"    procedure({ht}_destroy), pointer :: f", "",
                             "    if (.not. associated(this%c)) return",
                             "    if (c_associated(this%c%destroy)) then", "      call c_f_procpointer(this%c%destroy, f)",
                             "      call f(c_loc(this%c))", "    end if", f"  end subroutine {fin}", "",
@@ -622,7 +628,7 @@ inline {ah}* to_fortran(const std::any& v)
         tr = self.tr(iface)
         err = tr.err
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
-        this, cname = iface.pass_arg, f"{self.c_name(lt, routine)}"
+        this = iface.pass_arg
         dummies, sizes, decls, locals_, pre, post, call, cpp_pre, cpp_args, cpp_post = \
             ["self"], [], ["type(C_PTR), value :: self"], [], [], [], [], [], [], []
         for a in iface.args:
@@ -677,7 +683,7 @@ inline {ah}* to_fortran(const std::any& v)
         body = [f"{iface.result} = {target}" if res_v is not None and res_v.base != "logical" else
                 f"{iface.result} = logical({target}, C_BOOL)" if res_v is not None else f"call {target}"]
         fortran = ["", f"  !> {bd.spelling} of a Fortran implementation (function pointer {st}%{bd.name})",
-                   f"  subroutine {routine}({', '.join(dummies)}) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + \
+                   f"  subroutine {routine}({', '.join(dummies)}) bind(C, name=\"\")"] + \
             [f"    {d}" for d in sizes + decls] + \
             [f"    type({st}), pointer :: self_c", f"    type({fw}), pointer :: wrapper"] + [f"    {d}" for d in locals_] + \
             ["", "    call c_f_pointer(self, self_c)", "    call c_f_pointer(self_c%userData, wrapper)"] + \
