@@ -841,10 +841,10 @@ def test_wrapped_module_end_to_end(tmp_path):
     assert "typedef struct project_SolverParams\n{\n  int maxit = 0;\n  PROJECT_REAL tol = 0;\n  bool restart = false;\n" \
            "  PROJECT_REAL w[2] = {};\n} project_SolverParams;" in h
     assert "!typedef struct project_MySolver\n!{\n!  void* p_impl = nullptr;\n" in binding
-    assert "  type, bind(C), public :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
+    assert "  type, bind(C) :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
            "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
            "    real(C_REAL) :: weights(3) = 0\n    type(SolverParams_c) :: params\n  end type MySolver_c" in binding
-    assert "  type, bind(C), public :: SolverParams_c\n    integer(C_INT) :: maxit = 0\n" in binding
+    assert "  type, bind(C) :: SolverParams_c\n    integer(C_INT) :: maxit = 0\n" in binding
     # setup / destroy (Fortran only): C struct with the constants, const getters only
     assert "  function project_MySolver_setup(obj) result(handle)\n    type(MySolver_type), target :: obj\n" in binding
     assert "    allocate(this_c)\n    this_c%p_impl = c_loc(obj)\n    this_c%n = obj%n\n    this_c%diag = C_NULL_PTR\n    this_c%diag_size = 0\n    if (allocated(obj%diag)) then\n" \
@@ -1051,7 +1051,7 @@ def test_wrapped_class_hierarchy(tmp_path):
     assert "  friend std::unique_ptr<sphere> sphere_private::wrapFromC(project_body& c);" in sh
     assert "explicit sphere" not in sh                                 # body(project_body&) is inherited
     assert "volume" not in sh and "handle_" not in sh                  # overrides dispatch in the base class
-    assert "  type, public :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
+    assert "  type :: bodyWrapper_type\n    class(body_type), pointer :: ptr => null()" in \
         read((d,), "body_mod_c_binding.F90")
     assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in sb
     assert "    call c_f_pointer(sphere, this_c)\n    call c_f_pointer(this_c%p_impl, wrapper)\n" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
@@ -1377,7 +1377,7 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     assert "  // TODO(f2cpp): no getter for component listOfOther (type(A_type), rank 1, allocatable;" in bh
     assert "  // TODO(f2cpp): binding version not wrapped: nopass" in bh
     assert "// TODO(f2cpp): module variable b_count not wrapped" in bh
-    assert "type, public :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
+    assert "type :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
     assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
 
 
@@ -1904,7 +1904,11 @@ def test_reverse_wrapped_types(tmp_path):
     assert "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;\n" \
            "    thing_u.release(); // NOLINT(bugprone-unused-return-value)" in fc
     # Fortran: wrapper types owning / calling the C++ objects
-    assert "  type, extends(AbstractThing_type), public :: CWrapperThing_type\n" in tb and "    final :: cwrapperthing_final" in tb
+    assert "  type, extends(AbstractThing_type) :: CWrapperThing_type\n" in tb
+    # private module, public: bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
+    assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_wrap\n" in tb
+    assert "  public :: CWrapperThing_type\n" in tb and "  public :: AbstractThing_evaluate_c\n" in tb
+    assert "public :: f2cpp_any_from_c" not in tb and "public :: cwrapperthing_evaluate" not in tb and "    final :: cwrapperthing_final" in tb
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
            "int(size(y_c), C_INT), ierr_c)" in tb
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fb

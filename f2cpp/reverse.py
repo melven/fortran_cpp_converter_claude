@@ -62,6 +62,7 @@ class ReverseMixin:
                     locals_ += [f"type(C_PTR) :: {a}_p", f"integer(C_INT) :: {a}_k", f"type(C_FUNPTR) :: {a}_d"]
                     actuals += [f"{a}_p", f"{a}_k", f"{a}_d"]
                     post.append(f"call f2cpp_any_from_c({a}_p, {a}_k, {a}_d, {a})")
+                    self.any_helpers.add("f2cpp_any_from_c")
                     cpp_init.append(f"*{a} = nullptr;")
                     cpp_pre.append(f"std::any {a}_v;")
                     cpp_args.append(f"{a}_v")
@@ -73,6 +74,7 @@ class ReverseMixin:
                     locals_ += [f"type(C_PTR) :: {a}_p", f"integer(C_INT) :: {a}_k"]
                     pre.append(f"call f2cpp_any_view({a}, {a}_p, {a}_k)" if not v.has("allocatable") else
                                f"call f2cpp_any_view_alloc({a}, {a}_p, {a}_k)")
+                    self.any_helpers |= {"f2cpp_any_view"} | ({"f2cpp_any_view_alloc"} if v.has("allocatable") else set())
                     actuals += [f"{a}_p", f"{a}_k"]
                     cpp_args.append(f"f2cpp_any::ref({a}, {a}_kind)")
                 continue
@@ -316,7 +318,20 @@ class ReverseMixin:
             ["    type(C_PTR), value :: holder", "    type(FortranAny_type), pointer :: h", "",
              "    if (.not. c_associated(holder)) return", "    call c_f_pointer(holder, h)", "    deallocate(h)",
              f"  end subroutine {rel}"]
-        return spec, procs
+        blocks, cur = [], []
+        for line in procs:                      # only the helpers that are used (private: unused ones warn)
+            cur.append(line)
+            if re.match(r"\s*end subroutine \w+", line):
+                blocks.append(cur)
+                cur = []
+        blocks.append(cur)
+        keep = []
+        for blk in blocks:
+            m = next((re.match(r"\s*subroutine (\w+)", x) for x in blk if re.match(r"\s*subroutine \w+", x)), None)
+            name = m.group(1) if m else None
+            if name is None or name in self.any_helpers or name in ("f2cpp_cppany_final", rel):
+                keep += blk
+        return spec, keep
 
     ANY_CPP = """#ifndef F2CPP_ANY_SUPPORT
 #define F2CPP_ANY_SUPPORT

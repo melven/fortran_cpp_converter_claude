@@ -622,12 +622,14 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 if kind == "any-in":            # Fortran data moved into the call and back; C++ data viewed
                     c_args += [f"void* {a}", f"int {a}_kind"]
                     pre.append(f"call f2cpp_any_from_view({a}, {a}_kind, {a}_f)")
+                    self.any_helpers |= {"f2cpp_any_from_view", "f2cpp_any_back"}
                     post.append(f"call f2cpp_any_back({a}, {a}_kind, {a}_f)")
                     glue += [("pre", f"void* {cn}_p = nullptr;"), ("pre", f"int {cn}_k = 0;"),
                              ("pre", f"f2cpp_any::view({cn}, &{cn}_p, &{cn}_k);"), f"{cn}_p", f"{cn}_k"]
                 else:                           # Fortran data (holder) or C++ data back
                     c_args += [f"void** {a}", f"int* {a}_kind"]
                     post.append(f"call f2cpp_any_to_c({a}_f, {a}, {a}_kind)")
+                    self.any_helpers.add("f2cpp_any_to_c")
                     glue += [("pre", f"void* {cn}_p = nullptr;"), ("pre", f"int {cn}_k = 0;"), f"&{cn}_p", f"&{cn}_k",
                              ("post", f"{cn} = f2cpp_any::from_fortran({cn}_p, {cn}_k, &{self.any_release_name()});")]
             elif kind == "listener":           # the C++ listener's Fortran bridge object; user: this C++ object
@@ -991,7 +993,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
-        self.any_used = False                       # class(*) arguments: holders, f2cpp_any
+        self.any_used, self.any_helpers = False, set()  # class(*) arguments: holders, f2cpp_any, used helpers
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.needs_cstdio = False
         stem_h = os.path.basename(stem) + ".h"
@@ -1243,7 +1245,38 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 inside = False
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
+        types = []                                  # public: one statement per name (types included)
+        for j, line in enumerate(b):
+            m = re.match(r"(\s*type,\s*(?:[\w()]+,\s*)*)public\s*::\s*(\w+)", line)
+            if m and not line.lstrip().startswith("!"):
+                b[j] = line.replace(", public ::", " ::")
+                types.append(m.group(2))
+        k = b.index("  implicit none")
+        b[k + 1:k + 1] = ["  private"] + [f"  public :: {t}" for t in types] + public_list(b)
         return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
+
+
+def public_list(lines):
+    """public statement of the binding module: bind(C) procedures, setup / destroy / wrap (used from Fortran)
+    and the abstract interfaces (types are declared public themselves)"""
+    names, in_abstract, after_contains = [], False, False
+    for line in lines:
+        t = line.split("!")[0].strip().lower()
+        if t == "contains" and not line.startswith("    "):
+            after_contains = True
+        if t.startswith("abstract interface"):
+            in_abstract = True
+        elif t.startswith("end interface"):
+            in_abstract = False
+        m = re.match(r"(?:\w+\s+)*(subroutine|function)\s+(\w+)\s*\(", line.split("!")[0].strip(), re.I)
+        if not m:
+            continue
+        name = m.group(2)
+        if in_abstract or (after_contains and line.startswith("  ") and not line.startswith("   ") and
+                           ("bind(c" in t or re.search(r"_(setup|destroy|wrap)$", name.lower()))):
+            if name not in names:
+                names.append(name)
+    return [f"  public :: {n}" for n in names]
 
 
 def short_names(fb):

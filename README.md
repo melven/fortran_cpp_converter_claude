@@ -257,6 +257,9 @@ LinearThingFactory_type = "linear"
 - the Fortran library references no symbol of the C++ library (registration at run time); a global
   factory instance in a static library is only constructed if its object file is linked
 
+The binding module is `private`; one `public ::` statement per name for the types, the `bind(C)`
+procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran).
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and
