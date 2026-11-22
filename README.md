@@ -273,7 +273,7 @@ The binding module is `private`; one `public ::` statement per name for the type
 procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran). Layout of the
 binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; the C prologue (`stdbool.h`,
 macros, forward declarations) between `implicit none` and `private`; sections `public declarations`,
-`interface declarations` (one `abstract interface` block), `type declarations` (comment line `!====...`).
+`interface declarations` (one `abstract interface` block; bodies with explicit `import` list and `implicit none`), `type declarations` (comment line `!====...`).
 C declarations longer than `c_decl_width` (100): one parameter per line; code lines over 132 characters are
 continued (`&`). C++ declarations without Fortran
 documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).

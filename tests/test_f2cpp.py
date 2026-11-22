@@ -1923,6 +1923,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert "!" + " " * 47 + "int*);\n!@end_c_declaration\n" \
            "    !> AbstractThing::evaluate_wrapper\n    subroutine project_AbstractThing_evaluate(" in tb
     assert "    end subroutine project_AbstractThing_evaluate\n\n!@c_declaration\n!typedef void (*project_AbstractThing_weight)" in tb
+    assert "    subroutine project_AbstractThing_evaluate(self, x, x_n, y, y_n, ierr) bind(C)\n" \
+           "      import C_PTR, C_INT\n      implicit none\n      type(C_PTR), value :: self\n" in tb and "      import C_PTR, C_REAL\n" in tb and "      import\n" not in tb
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
     # bindings with a default implementation: virtual, the translated default, forwarded as well

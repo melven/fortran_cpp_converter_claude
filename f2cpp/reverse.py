@@ -209,7 +209,20 @@ class ReverseMixin:
         c_types = re.sub(r"\bstruct (\w+)\*", r"\1*", c_types)        # the forward declaration comes first
         return ["!@c_declaration", f"!typedef void (*{name})({c_types});", "!@end_c_declaration",
                 "  abstract interface", f"    !> {doc}", f"    subroutine {name}({', '.join(dummies)}) bind(C)",
-                "      import"] + [f"      {d}" for d in decls] + [f"    end subroutine {name}", "  end interface", ""]
+                f"      import {', '.join(self.imported(decls))}",
+                "      implicit none"] + [f"      {d}" for d in decls] + \
+            [f"    end subroutine {name}", "  end interface", ""]
+
+    @staticmethod
+    def imported(decls):
+        """kinds / types the declarations of an interface body refer to (explicit import list)"""
+        names = []
+        for d in decls:
+            for n in re.findall(r"(?i)\b(?:type|class|integer|real|logical|complex|character)\s*\(\s*(?:kind\s*=\s*)?"
+                                r"([A-Za-z_]\w*)", d):
+                if n not in names:
+                    names.append(n)
+        return names
 
     def fortran_decl(self, v):
         """type of a scalar result declared by the function prefix"""
