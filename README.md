@@ -254,7 +254,7 @@ LinearThingFactory_type = "linear"
 - all bindings are forwarded (Fortran bindings are overridable): deferred ones are pure virtual in C++,
   those with a default implementation `virtual` with the translated default as definition
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
-  (arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
+  (`noexcept`; arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
 - the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions, each with a C
   function pointer typedef of the same name, e.g. `project_AbstractThing_evaluate`, used by the struct); the
@@ -295,8 +295,9 @@ constants.
 
 Supported so far: classes and class hierarchies, public module procedures (C name
 `project_<procedure>`, `c_procedure_names` for others), methods
-with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, explicit shapes or
-`wrap_sizes`), input string (`str_array_ptr_to_str`), optional scalar, optional string and optional array (`NULL`; binding: disassociated pointer = absent) arguments, logical arrays (copied between `bool` and `logical`; optional: unallocated = absent), `intent(in)` / `inout` arrays of unknown size (extra C parameter `int x_n1` from `x.size()`), scalar
+with scalar, rank-1/2 array (sizes from `wrap_sizes`, `CHK_ARGUMENT(size(x) == this%n)`, `allocate`, explicit
+shapes; for `intent(out)` finally from the documentation `!< ..., dimension (this\%n)`, report info
+`wrap-size-from-doc`), input string (`str_array_ptr_to_str`), optional scalar, optional string and optional array (`NULL`; binding: disassociated pointer = absent) arguments, logical arrays (copied between `bool` and `logical`; optional: unallocated = absent), `intent(in)` / `inout` arrays of unknown size (extra C parameter `int x_n1` from `x.size()`), scalar
 function results. Other methods are declared and throw `std::logic_error` (TODO). Configuration:
 `c_prefix` (default: the namespace in lower case, `project_MySolver_apply`), `c_class_names`
 (shorter class names in C names), `c_real` / `c_single_precision` (default `PROJECT_REAL` /

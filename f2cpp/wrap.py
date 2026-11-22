@@ -214,8 +214,41 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         return [f"#ifdef {m}", f"  {m} :: {cname}", "#endif"] if m else []
 
     # ------------------------------------------------------------------ analysis
-    def array_sizes(self, p, t):
-        """{(dummy, dim or None): Fortran expression node} from size checks and explicit shapes"""
+    def doc_sizes(self, p):
+        """{(dummy, dim): Fortran expression node} from the documentation ('!< ..., dimension (this\\%n, 3)')"""
+        sizes = {}
+        for names, lines in p.param_docs:
+            text = " ".join(lines).replace("\\%", "%")
+            m = re.search(r"(?i)\bdimension\s*\(", text)
+            if not m:
+                continue
+            depth, cur, extents = 0, "", []
+            for ch in text[m.end():]:
+                if ch == ")" and depth == 0:
+                    extents.append(cur.strip())
+                    break
+                depth += {"(": 1, ")": -1}.get(ch, 0)
+                if ch == "," and depth == 0:
+                    extents.append(cur.strip())
+                    cur = ""
+                else:
+                    cur += ch
+            else:
+                continue                        # unbalanced
+            try:
+                nodes = [F.Expr(e) for e in extents]
+            except Exception:                   # not a Fortran expression: ignored
+                continue
+            for a in names:
+                v = p.vars.get(a)
+                if v is not None and v.rank == len(nodes):
+                    for k, node in enumerate(nodes):
+                        sizes[(a, k + 1)] = node
+        return sizes
+
+    def array_sizes(self, p, t, doc=False):
+        """{(dummy, dim or None): Fortran expression node} from size checks, allocate and explicit shapes;
+        doc: also from the documentation (lowest precedence; used for intent(out) arrays)"""
         tr = self.tr(p)
         sizes = {}
         execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
@@ -246,6 +279,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 for k, (lo, hi) in enumerate(v.dims):
                     if lo is None:
                         sizes.setdefault((a, k + 1), hi)
+        if doc:
+            for (a, dim), node in self.doc_sizes(p).items():
+                if (a, dim) not in sizes and not (dim == 1 and (a, None) in sizes):
+                    sizes[(a, dim)] = node
         return sizes
 
     def fortran_size(self, p, sizes, a, dim, depth=0):
@@ -280,7 +317,19 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
     def wrappable(self, p, t):
         """-> (list of (dummy, kind, sizes), None) or (None, reason)"""
         err = self.tr(p).err
-        sizes = self.array_sizes(p, t)
+        sizes, doc_sizes = self.array_sizes(p, t), self.array_sizes(p, t, doc=True)
+        bname = next((b.name for b in t.bindings.values() if b.deferred and b.iface == p.name), None) \
+            if t is not None else None          # deferred: the interface
+        key = f"{t.name}%{bname or (p.bind_name or p.name).lower()}" if t is not None else p.name
+
+        def from_doc(a, dims):                  # intent(out): the documented size as the last resort
+            if None not in dims:
+                return dims
+            dims = [self.fortran_size(p, doc_sizes, a, d) for d in
+                    ([None] if p.vars[a].rank == 1 else range(1, p.vars[a].rank + 1))]
+            if None not in dims:
+                self.report.add("info", f"wrap-size-from-doc:{key}:{a}")
+            return dims
         res = []
         for a in p.args:
             if a in (p.pass_arg, err):
@@ -298,6 +347,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 if why:
                     return None, why
                 n = self.fortran_size(p, sizes, a, None)
+                if v.intent == "out":
+                    n = from_doc(a, [n])[0]
                 if v.intent == "out" and n is None:
                     return None, f"size of argument {v.cname} unknown (size check or wrap_sizes)"
                 if v.intent not in ("in", "out"):
@@ -323,6 +374,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if v.rank > 2 or v.has("allocatable") or v.has("pointer"):
                 return None, f"argument {v.cname} (array: rank 1 / 2, not allocatable / pointer)"
             dims = [self.fortran_size(p, sizes, a, d + 1 if v.rank == 2 else None) for d in range(v.rank)]
+            if v.intent == "out":
+                dims = from_doc(a, dims)
             if None in dims and (v.intent or "inout") != "out":
                 dims = [f"{a}_n{d + 1}" for d in range(v.rank)]      # size passed from C++
             elif None in dims:
@@ -718,7 +771,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     call.append(f"{a}={a}_2d")
                 # C++: the C interface has no sizes -> out arrays get the size of the Fortran check,
                 # the others are checked before the call (the binding would read / write past the end)
-                sizes = self.array_sizes(p, t)
+                sizes = self.array_sizes(p, t, doc=intent == "out")
                 nodes = [sizes.get((a, None)) or sizes.get((a, 1))] if v.rank == 1 else \
                     [sizes.get((a, 1)), sizes.get((a, 2))]
                 try:
@@ -827,7 +880,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             post += [f"{a}(1:{n}) = C_NULL_PTR", f"if (allocated({a}_f)) then",
                      f"  do {a}_i = 1, min({n}, size({a}_f))", f"    allocate({a}_e, source={a}_f({a}_i))",
                      f"    {a}({a}_i) = {self.c_name(ot, 'setup')}({a}_e)", "  end do", "end if"]
-            node = self.array_sizes(p, t).get((a, None)) or self.array_sizes(p, t).get((a, 1))
+            sizes = self.array_sizes(p, t, doc=True)
+            node = sizes.get((a, None)) or sizes.get((a, 1))
             try:
                 size = self.tr(p).expr(node).code if node is not None else None
             except Untranslatable:

@@ -1667,7 +1667,7 @@ def test_wrapped_listener(tmp_path):
     assert "  virtual void state_changed(const Thing& thing, scalar old, const vec& history) = 0;" in hpp
     assert "private:\n  //! internal wrapper for state_changed\n" \
            "  static void state_changed_wrapper(void* userData, void* thing, scalar old, const scalar* history, " \
-           "int history_n, int* ierr);" in hpp
+           "int history_n, int* ierr) noexcept;" in hpp
     assert "  //! internal wrapper for state_changed\n  static void state_changed_wrapper(" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
     assert "typedef void (*project_AbstractListener_state_changed)(void*, void*, PROJECT_REAL, const PROJECT_REAL*, " \
@@ -1936,7 +1936,7 @@ def test_reverse_wrapped_types(tmp_path):
     assert "void AbstractThing::reset()\n{\n}" in tc and "scalar AbstractThing::offset() const\n{\n  scalar o = 0.0;\n  return o;\n}" in tc
     assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tw
     assert "  static void evaluate_wrapper(struct project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
-           "int y_n, int* ierr);" in th
+           "int y_n, int* ierr) noexcept;" in th
     assert "  //! internal wrapper for evaluate\n  static void evaluate_wrapper(" in th
     assert "  //! internal wrapper for the destruction (the object is owned by the caller)\n" \
            "  static void destroy_wrapper(" in th
@@ -2264,3 +2264,23 @@ extern "C" void run(project_AbstractThing* c)
     run(["gfortran", "thing_mod.o", "thing_mod_c_binding.o", "const_thing_mod.o", "drv.o", "glue.o", "cw.o", "run.o",
          "-lstdc++", "-o", "m"], d)
     assert run(["./m"], d).split() == ["25", "caught", "empty"]
+
+
+def test_wrap_sizes_from_documentation(tmp_path):
+    """sizes of intent(out) arrays without size check (deferred bindings, default implementations):
+    from the documentation "dimension (...)" (lowest precedence, reported as info)"""
+    d = str(tmp_path)
+    report, _ = translate([], cfg(), d, wrap=[os.path.join(CORPUS, "wrapped", "shape_mod.F90")])
+    cpp, b = read((d,), "shape_mod.cpp"), read((d,), "shape_mod_c_binding.F90")
+    assert "void shape::areas(vec& a) const\n{\n  a.resize(nSurface());\n" in cpp
+    assert "void shape::normals(mat& nrm) const\n{\n  nrm.resize(3, nSurface());\n" in cpp
+    assert "    call obj%areas(a=a(1:obj%nSurface), ierr=ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
+    info = report.files[os.path.join(CORPUS, "wrapped", "shape_mod.F90")]["info"]
+    assert info["wrap-size-from-doc:shape_type%areas:a"] == 1 and info["wrap-size-from-doc:shape_type%normals:nrm"] == 1
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+          "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    for f in (os.path.join(CORPUS, "wrapped", "shape_mod.F90"), "shape_mod_c_binding.F90"):
+        run(ff + [f], d)
+    cxx((d,), "shape_mod")

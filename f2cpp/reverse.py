@@ -196,7 +196,7 @@ class ReverseMixin:
         if res_v is not None:
             call = f"*{iface.result} = {call}"
         on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
-        res["cpp"] = [f"void {cls}::{tramp}({res['cpp_params']})", "{"] + \
+        res["cpp"] = [f"void {cls}::{tramp}({res['cpp_params']}) noexcept", "{"] + \
             ([f"  *{err} = 0;"] if has_err else []) + [f"  {x}" for x in cpp_init] + \
             ["  try", "  {"] + [f"    {x}" for x in cpp_pre + [call] + cpp_post] + ["  }",
              "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
@@ -381,7 +381,7 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(0, "private:")
         for bd, iface, m in live:
             hpp.emit(1, f"//! internal wrapper for {bd.spelling}")
-            hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']});")
+            hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']}) noexcept;")
         hpp.emit(1, f"{ht}* fortran_ = nullptr;  //!< the Fortran object ({bridge}) calling this object")
         hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& l);")
         hpp.emit(0, "};")
@@ -499,10 +499,10 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(0, "private:")
         for bd, iface, m in live:
             hpp.emit(1, f"//! internal wrapper for {bd.spelling}")
-            hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']});")
+            hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']}) noexcept;")
         if factory is None:
             hpp.emit(1, "//! internal wrapper for the destruction (the object is owned by the caller)")
-            hpp.emit(1, f"static void destroy_wrapper({ht}* self);")
+            hpp.emit(1, f"static void destroy_wrapper({ht}* self) noexcept;")
         hpp.emit(1, f"std::unique_ptr<{ht}> c_;  //!< the C struct of this object")
         if factory is not None:
             hpp.emit(1, "std::string name_;  //!< registered name")
@@ -515,7 +515,7 @@ inline {ah}* to_fortran(const std::any& v)
         if factory is None:
             lines = [f"{name}::{cls}() : c_(std::make_unique<{ht}>())", "{"] + init + ["}", "",
                      f"{name}::~{cls}() = default;", "",
-                     f"void {cls}::destroy_wrapper({ht}* self)", "{",
+                     f"void {cls}::destroy_wrapper({ht}* self) noexcept", "{",
                      f"  std::unique_ptr<{cls}> owner(static_cast<{cls}*>(self->userData));  // deletes it", "}", ""]
         else:
             lines = [f"{name}::{cls}(const std::string& name) : c_(std::make_unique<{ht}>()), name_(name)", "{"] + \
