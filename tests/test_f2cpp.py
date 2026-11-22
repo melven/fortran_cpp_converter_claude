@@ -893,11 +893,12 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
     assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
     assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
-    assert "  bool verbose() const;\n  void verbose(bool value);\n  Eigen::Map<mat> coupling();\n" in hpp
+    assert "  //! component verbose\n  bool verbose() const;\n  //! component verbose (setter)\n  void verbose(bool value);\n" \
+           "  //! component coupling\n  Eigen::Map<mat> coupling();\n" in hpp
     assert "void project_MySolver_verbose_set(project_MySolver* mySolver, bool value);" in h
     assert "    obj%verbose = value\n  end subroutine project_MySolver_verbose_set" in binding
     assert "void MySolver::verbose(bool value)\n{\n  project_MySolver_verbose_set(handle_, value);\n}" in cpp
-    assert "  Eigen::Map<mat> coupling();\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
+    assert "  Eigen::Map<mat> coupling();\n  //! component coupling (const version)\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
     assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
            "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
@@ -1385,7 +1386,7 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     bh, bb = (tmp_path / "b_wrapper.hpp").read_text(), (tmp_path / "b_wrapper_c_binding.F90").read_text()
     assert "class B : public A" in bh and "explicit B(project_B& c) : handle_(&c) {}" in bh
     assert "  void write_state() const;" in bh and "  friend std::unique_ptr<B> B_private::wrapFromC(project_B& c);\n  project_B* handle_ = nullptr;" in bh
-    assert "  int& someInteger();\n  const int& someInteger() const;" in bh and "scale" not in bh.replace("rescale", "")
+    assert "  int& someInteger();\n  //! component someInteger (const version)\n  const int& someInteger() const;" in bh and "scale" not in bh.replace("rescale", "")
     assert "res = c_loc(obj%someinteger)" in bb
     assert "  // TODO(f2cpp): no getter for component listOfOther (type(A_type), rank 1, allocatable;" in bh
     assert "  // TODO(f2cpp): binding version not wrapped: nopass" in bh
@@ -1595,9 +1596,9 @@ def test_wrapped_owned_objects_in_arrays(tmp_path):
     hpp, cpp = (tmp_path / "state_mod.hpp").read_text(), (tmp_path / "state_mod.cpp").read_text()
     b, h = (tmp_path / "state_mod_c_binding.F90").read_text(), (tmp_path / "state_mod.h").read_text()
     assert "  ~InternalStateWrapper();  //!< frees the Fortran object\n" \
-           "  InternalStateWrapper(InternalStateWrapper&& o) noexcept;\n" in hpp
-    assert "  void save(std::vector<InternalStateWrapper>& checkpoints) const;\n" \
-           "  void restore(const std::vector<InternalStateWrapper>& checkpoints);" in hpp
+           "  InternalStateWrapper(InternalStateWrapper&& o) noexcept;  //!< takes over the Fortran object of o\n" in hpp
+    assert "  //! Fortran model_save (undocumented)\n  void save(std::vector<InternalStateWrapper>& checkpoints) const;\n" \
+           "  //! Fortran model_restore (undocumented)\n  void restore(const std::vector<InternalStateWrapper>& checkpoints);" in hpp
     assert "void project_Model_save(const project_Model* model, project_InternalStateWrapper** checkpoints, int* ierr);" in h
     assert "void project_InternalStateWrapper_free(project_InternalStateWrapper* internalStateWrapper);" in h
     assert "        allocate(checkpoints_e, source=checkpoints_f(checkpoints_i))\n" \
@@ -1932,8 +1933,13 @@ def test_reverse_wrapped_types(tmp_path):
     assert ":: CWrapperThing_type" not in tb and "Holder" not in tb + tw and "p_impl" not in tb + tw
     assert "  use thing_mod_c_binding, only: project_AbstractThing_evaluate" in tw
     # private modules, public: types, bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
-    assert "  implicit none\n  private\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_evaluate\n" in tb
-    assert "  implicit none\n  private\n  public :: CWrapperThing_type\n  public :: project_AbstractThing_wrap\n" in tw
+    assert "  implicit none\n  private\n\n  !" + "=" * 80 + "\n  ! public declarations\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_evaluate\n" in tb
+    assert "  implicit none\n  private\n\n  !" + "=" * 80 + "\n  ! public declarations\n  public :: CWrapperThing_type\n" \
+           "  public :: project_AbstractThing_wrap\n\n  !" + "=" * 80 + "\n  ! type declarations\n  !> AbstractThing_type" in tw
+    # precision macros before the module; interfaces, then types (each under a section comment)
+    assert "#define C_REAL C_DOUBLE\n#endif\n\nmodule thing_mod_c_binding\n" in tb
+    assert tb.index("  ! interface declarations\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
+        tb.index("  ! type declarations\n!@c_declaration\n!struct project_AbstractThing\n") < tb.index("\ncontains\n")
     assert "public :: cwrapperthing_evaluate" not in tw
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
            "int(size(y_c), C_INT), ierr_c)" in tw
@@ -2090,11 +2096,12 @@ end module rs_mod
     assert "! TODO(f2cpp): argument state: class(*) (C++ data is not passed to Fortran; translate the caller)" in b
     assert 'error stop "cwrappers_save_state:' in b
     # the other direction (Fortran implementation behind the struct): TODO in the binding, the C++ wrapper throws
-    fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod.hpp", "rs_mod.cpp"))
-    assert "    ! TODO(f2cpp): save_state not wrapped (argument state: class(*)): C++ WrapperS::save_state throws\n" in fb
+    fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod_c_wrapper.hpp",
+                                                         "rs_mod_c_wrapper.cpp"))
+    assert "    ! TODO(f2cpp): save_state not wrapped (argument state: class(*)): C++ CWrapperS::save_state throws\n" in fb
     assert "  void save_state(std::any& state) const override;" in hpp
-    assert "void WrapperS::save_state(std::any& state) const\n{\n  // TODO(f2cpp): argument state: class(*)\n" \
-           '  throw std::logic_error("WrapperS::save_state: not wrapped (argument state: class(*))");' in cpp
+    assert "void CWrapperS::save_state(std::any& state) const\n{\n  // TODO(f2cpp): argument state: class(*)\n" \
+           '  throw std::logic_error("CWrapperS::save_state: not wrapped (argument state: class(*))");' in cpp
 
 
 def test_wrap_translate_guards(tmp_path):
@@ -2137,15 +2144,22 @@ end module g_mod
 
 def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     """the other direction of a reverse type: a Fortran implementation behind the C struct
-    (create_<Thing>_C_from_Fortran, wrap_<method>), used in C++ through Wrapper<Thing>"""
+    (create_<Thing>_C_from_Fortran, wrap_<method>), used in C++ through <Abstract>_private::CWrapper<Thing>
+    (own files <stem>_c_wrapper.hpp / .cpp)"""
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
     (tmp_path / "x.toml").write_text('wrap_reverse = ["AbstractThing_type"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([], c, d, wrap=[os.path.join(r, "thing_mod.F90")])
-    hpp, cpp = (tmp_path / "thing_mod.hpp").read_text(), (tmp_path / "thing_mod.cpp").read_text()
+    hpp, cpp = (tmp_path / "thing_mod_c_wrapper.hpp").read_text(), (tmp_path / "thing_mod_c_wrapper.cpp").read_text()
+    assert "Wrapper" not in (tmp_path / "thing_mod.hpp").read_text().replace("_wrapper", "")
+    assert '#include "thing_mod.hpp"\n\nnamespace project\n{\n\nnamespace AbstractThing_private\n{\n' in hpp
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
-    assert "class WrapperThing final : public AbstractThing\n{\npublic:\n  WrapperThing() = default;" in hpp
-    assert "  explicit WrapperThing(project_AbstractThing& c) : other_(&c) {}" in hpp
+    assert "class CWrapperThing final : public AbstractThing\n{\npublic:\n  CWrapperThing() = default;" in hpp
+    assert "  explicit CWrapperThing(project_AbstractThing& c) : other_(&c) {}  //!< calls the function pointers of c" in hpp
+    assert "  //! override base class implementation -> call corresponding C function pointer\n" \
+           "  void evaluate(const vec& x, vec& y) override;" in hpp
+    assert '#include "thing_mod_c_wrapper.hpp"' in cpp and '#include "thing_mod.h"' in cpp
+    assert "namespace AbstractThing_private\n{\n\nvoid CWrapperThing::evaluate(" in cpp
     assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
     # no binding label (no global symbol): only the target of a function pointer
     assert "  subroutine wrap_evaluate(self, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
@@ -2178,7 +2192,7 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
   call run(c_loc(cthing))
 end program drv
 """)
-    (tmp_path / "run.cpp").write_text(r"""#include "thing_mod.hpp"
+    (tmp_path / "run.cpp").write_text(r"""#include "thing_mod_c_wrapper.hpp"
 #include "thing_mod.h"
 #include <cstdio>
 #include <stdexcept>
@@ -2191,7 +2205,7 @@ static project::scalar use(project::AbstractThing& t)       // any implementatio
 }
 extern "C" void run(project_AbstractThing* c)
 {
-  project::WrapperThing w(*c);                   // the Fortran implementation in C++
+  project::AbstractThing_private::CWrapperThing w(*c);                   // the Fortran implementation in C++
   std::printf("%g\n", use(w));                  // 3 + 2, 10 * 2, Fortran default offset 0
   project::vec x(2), y(3);
   try
@@ -2204,7 +2218,7 @@ extern "C" void run(project_AbstractThing* c)
   }
   try
   {
-    project::WrapperThing empty;
+    project::AbstractThing_private::CWrapperThing empty;
     empty.weight();
   }
   catch (const std::logic_error&)
@@ -2219,8 +2233,8 @@ extern "C" void run(project_AbstractThing* c)
               "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
-    for f, o in (("thing_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
+    for f, o in (("thing_mod.cpp", "glue.o"), ("thing_mod_c_wrapper.cpp", "cw.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
-    run(["gfortran", "thing_mod.o", "thing_mod_c_binding.o", "const_thing_mod.o", "drv.o", "glue.o", "run.o",
+    run(["gfortran", "thing_mod.o", "thing_mod_c_binding.o", "const_thing_mod.o", "drv.o", "glue.o", "cw.o", "run.o",
          "-lstdc++", "-o", "m"], d)
     assert run(["./m"], d).split() == ["25", "caught", "empty"]

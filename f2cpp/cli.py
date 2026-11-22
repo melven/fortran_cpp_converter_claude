@@ -82,7 +82,13 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
     for path, m in todo:
         if m in wrapped:
             emitter = WrapEmitter(prog, m, report, path)
-            hpp, cpp, binding, cwrapper = emitter.generate()
+            hpp, cpp, binding, cwrapper, files = emitter.generate()
+            for suffix, text in files.items():          # C++ CWrapper<Thing>
+                out = os.path.join(outdir, prog.file_stem(m.name) + suffix)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with open(out, "w") as f:
+                    f.write(text)
+                written.append(out)
             out = os.path.join(outdir, prog.file_stem(m.name) + "_c_binding.F90")
             with open(out, "w") as f:
                 f.write(binding)

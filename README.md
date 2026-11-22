@@ -246,8 +246,10 @@ LinearThingFactory_type = "linear"
   `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
   pointers to the private `bind(C, name="")` routines `wrap_<method>` (no global symbol; plain `bind(C)`
-  would give clashing global symbols `wrap_<method>` across modules); C++ `WrapperThing(project_AbstractThing&)` derives from
-  `AbstractThing` and calls them (the struct outlives it; the default constructor gives an empty object)
+  would give clashing global symbols `wrap_<method>` across modules); C++
+  `AbstractThing_private::CWrapperThing(project_AbstractThing&)` (own files `<stem>_c_wrapper.hpp/.cpp`) derives
+  from `AbstractThing` and calls them (the struct outlives it; the default constructor gives an empty object);
+  methods that cannot be passed (e.g. class(*)): TODO in the binding, the C++ override throws
 - all bindings are forwarded (Fortran bindings are overridable): deferred ones are pure virtual in C++,
   those with a default implementation `virtual` with the translated default as definition
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
@@ -268,7 +270,10 @@ LinearThingFactory_type = "linear"
   factory instance in a static library is only constructed if its object file is linked
 
 The binding module is `private`; one `public ::` statement per name for the types, the `bind(C)`
-procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran).
+procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran). Layout of the
+binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; sections `public declarations`,
+`interface declarations`, `type declarations` (comment line `!====...`). C++ declarations without Fortran
+documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).
 
 Mixing: `wrap_translate = ["mysolver_type%norm", "residual_norm"]` (glob patterns) implements listed
 methods / procedures of a wrapped module in C++: same declaration (the header does not change), the

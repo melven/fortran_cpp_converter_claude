@@ -867,6 +867,14 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         key = f"{t.name}%{bd.name}" if t is not None else p.name
         return any(fnmatch.fnmatch(key, pat) for pat in self.cfg["wrap_translate"])
 
+    def doc(self, tr, p, ind, name=None):
+        """the documentation of p; without a doxygen comment: one naming the Fortran procedure"""
+        n = len(tr.out)
+        super().doc(tr, p, ind)
+        if not any(line.lstrip().startswith(self.cfg["doxygen"]) for line in tr.out[n:]):
+            tr.emit(ind, f"{self.cfg['doxygen']} Fortran {name or p.cname} (undocumented)")
+            tr.out.insert(n, tr.out.pop())
+
     def translated_method(self, t, bd, p, hdecl, cpp):
         """the same declaration as the wrapped method, the translation as implementation (no binding)"""
         tr = self.tr(p)
@@ -956,7 +964,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
             decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
                      (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
-        doc, dox = self.component_docs(t).get(v.name, []), self.cfg["doxygen"]
+        doc, dox = self.component_docs(t).get(v.name, []) or [f"component {v.cname}"], self.cfg["doxygen"]
         for k, (decl, body) in enumerate(decls):
             lines = list(doc)
             if lines and k == 1:
@@ -1023,6 +1031,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
         self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
+        self.cwc = {"hpp": self.tr(), "cpp": self.tr()}     # C++ CWrapper<Thing> (Fortran implementations)
         stem_h = os.path.basename(stem) + ".h"
         values = self.value_types()
         vstructs = []
@@ -1084,15 +1093,15 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if not self.is_root(t):             # no added members: the parent's constructors
                 parent = prog.type_name(t.parent, mod)
                 hpp.emit(1, f"using {parent}::{parent.split('::')[-1]};")
-            hpp.emit(1, f"{name}(const {name}&) = delete;")
-            hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
+            hpp.emit(1, f"{name}(const {name}&) = delete;  //!< no copies (one C++ object per Fortran object)")
+            hpp.emit(1, f"{name}& operator=(const {name}&) = delete;  //!< no copies")
             if self.owned(t):                  # owns the Fortran object: the moved-from object releases nothing
                 hpp.emit(1, f"~{name}();  //!< frees the Fortran object")
-                hpp.emit(1, f"{name}({name}&& o) noexcept;")
-                hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;")
+                hpp.emit(1, f"{name}({name}&& o) noexcept;  //!< takes over the Fortran object of o")
+                hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;  //!< frees its own, takes over the one of o")
             else:
-                hpp.emit(1, f"{name}({name}&&) = default;")
-                hpp.emit(1, f"{name}& operator=({name}&&) = default;")
+                hpp.emit(1, f"{name}({name}&&) = default;  //!< takes over the handle")
+                hpp.emit(1, f"{name}& operator=({name}&&) = default;  //!< takes over the handle")
             hpp.emit(0, "")
             inherited = self.overrides_wrapped(t)
             for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
@@ -1285,7 +1294,21 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 ["", f"end module {name}", ""]
             self.finish_module(cw)
             cw = "\n".join(cw)
-        return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b), cw)
+        files = {}                                  # C++ CWrapper<Thing>: <stem>_c_wrapper.hpp / .cpp
+        if self.cwc["hpp"].out:
+            base, hx, cx = os.path.basename(stem), cfg["header_ext"], cfg["source_ext"]
+            macro = re.sub(r"\W", "_", f"{base}_c_wrapper{hx}").upper()
+            guard = ([f"#ifndef {macro}", f"#define {macro}"], [f"#endif // {macro}", ""]) \
+                if cfg["include_guard"] == "ifndef" else (["#pragma once"], [])
+            banner = BANNER.format(src=os.path.basename(self.src)) + " (C++ classes calling C structs)"
+            ch = [banner] + guard[0] + ["", f'#include "{base}{hx}"', "", self.open_ns(), ""] + \
+                strip_blank(self.cwc["hpp"].out) + ["", f"}}  // namespace {self.ns}", ""] + guard[1]
+            cc = [banner, f'#include "{base}_c_wrapper{hx}"', "", "#include <stdexcept>", "",
+                  f'#include "{base}.h"', "", self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
+                ["", f"}}  // namespace {self.ns}", ""]
+            files = {f"_c_wrapper{hx}": "\n".join(self.braces(squeeze(ch))),
+                     f"_c_wrapper{cx}": "\n".join(self.braces(squeeze(cc)))}
+        return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b), cw, files)
 
     def finish_module(self, b):
         """C declarations in the first column, only-lists, private with one public statement per name"""
@@ -1308,8 +1331,65 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 types.append(m.group(2))
         k = b.index("  implicit none")
         own = [x for x in public_list(b) if x.split("::")[1].strip() not in self.wrap_routines]   # wrap_*: pointers only
-        b[k + 1:k + 1] = ["  private"] + [f"  public :: {t}" for t in types] + own + \
+        public = [f"  public :: {t}" for t in types] + own + \
             [f"  public :: {n}" for n in self.public_extra if n in "\n".join(b) and f"  public :: {n}" not in b]
+        b[k + 1:k + 1] = ["  private"] + ([""] + section("public declarations") + public if public else [])
+        p = b.index(f"#ifdef {self.cfg['c_single_precision']}")    # the precision macros: before the module
+        macros = b[p:p + 5]
+        del b[p:p + 5 + (b[p + 5:p + 6] == [""])]
+        m = next(j for j, line in enumerate(b) if re.match(r"module \w+$", line))
+        b[m:m] = macros + [""]
+        start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
+        b[:] = spec_sections(b, start)
+
+
+SEPARATOR = "  !" + "=" * 80
+
+
+def section(title):
+    return [SEPARATOR, f"  ! {title}"]
+
+
+def spec_sections(b, start):
+    """the specification part after the public statements: the leading C declarations, then the abstract
+    interfaces and the types, each under a section comment (C declarations and comments stay with their item)"""
+    end = b.index("contains")
+    seg, head = b[start:end], []
+    while seg and not seg[0].strip():
+        seg.pop(0)
+    if seg and seg[0] == "!@c_declaration":     # the C prologue (includes, macros, forward declarations)
+        j = seg.index("!@end_c_declaration")
+        head, seg = seg[:j + 1], seg[j + 1:]
+    chunks, pending, depth, kind = {"interface": [], "type": []}, [], 0, None
+    for line in seg:
+        t = line.split("!")[0].strip().lower()
+        if depth == 0 and not t and not line.strip():
+            if pending and pending[-1].strip():
+                pending.append(line)
+            continue
+        pending.append(line)
+        if re.match(r"(abstract\s+)?interface\b", t):
+            depth, kind = depth + 1, kind or "interface"
+        elif re.match(r"type\b(?!\s*\()", t):
+            depth, kind = depth + 1, kind or "type"
+        elif re.match(r"end\s+(interface|type)\b", t):
+            depth -= 1
+            if depth == 0:
+                while pending and not pending[0].strip():
+                    pending.pop(0)
+                chunks[kind].append(pending)
+                pending, kind = [], None
+    out = b[:start]
+    if head:
+        out += [""] + head
+    for kind, title in (("interface", "interface declarations"), ("type", "type declarations")):
+        if chunks[kind]:
+            out += [""] + section(title)
+            for i, c in enumerate(chunks[kind]):
+                out += ([""] if i else []) + c
+    while pending and not pending[-1].strip():
+        pending.pop()
+    return out + ([""] + pending if any(x.strip() for x in pending) else []) + [""] + b[end:]
 
 
 

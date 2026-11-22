@@ -287,14 +287,15 @@ class ReverseMixin:
 class FortranState
 {{
 public:
-  FortranState({ah}* h, void (*r)({ah}*)) : handle(h), release(r) {{}}
+  FortranState({ah}* h, void (*r)({ah}*)) : handle(h), release(r) {{}}  //!< holds h, released by r
+  //! releases the Fortran data
   ~FortranState()
   {{
     if (release != nullptr && handle != nullptr)
       release(handle);
   }}
-  FortranState(const FortranState&) = delete;
-  FortranState& operator=(const FortranState&) = delete;
+  FortranState(const FortranState&) = delete;  //!< no copies (shared through std::shared_ptr)
+  FortranState& operator=(const FortranState&) = delete;  //!< no copies
   {ah}* handle = nullptr;                 //!< the Fortran holder
   void (*release)({ah}*) = nullptr;       //!< Fortran: deallocates it
 }};
@@ -360,7 +361,7 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(1, f"{cls}();  //!< creates its Fortran object")
         hpp.emit(1, f"virtual ~{cls}();  //!< frees it: unset the listener before")
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to Fortran")
-        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;")
+        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
         self.pure_virtuals(hpp, methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
@@ -416,7 +417,7 @@ inline {ah}* to_fortran(const std::any& v)
         for bd, iface, m in methods:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             hpp.emit(0, "")
-            self.doc(hpp, iface, 1)
+            self.doc(hpp, iface, 1, bd.spelling)
             hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const}" + (" = 0;" if bd.deferred else ";"))
 
     def default_methods(self, cpp, methods):
@@ -472,12 +473,12 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(0, "{")
         hpp.emit(0, "public:")
         if factory is None:
-            hpp.emit(1, f"{cls}();")
+            hpp.emit(1, f"{cls}();  //!< creates its C struct")
         else:
             hpp.emit(1, f"explicit {cls}(const std::string& name);  //!< registers the factory (Fortran)")
-        hpp.emit(1, f"virtual ~{cls}();" + ("" if factory is None else "  //!< unregisters it"))
+        hpp.emit(1, f"virtual ~{cls}();" + ("  //!< frees its C struct" if factory is None else "  //!< unregisters it"))
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to C / Fortran")
-        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;")
+        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
         all_methods = methods + cpp_only
         self.pure_virtuals(hpp, all_methods)
         hpp.emit(0, "")
@@ -560,18 +561,18 @@ inline {ah}* to_fortran(const std::any& v)
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]
         if factory is None:                     # the other direction: Fortran implementations used in C++
-            self.fortran_behind(lt, [(bd, iface, m["todo"]) for bd, iface, m in methods], hpp, cpp, fb)
+            self.fortran_behind(lt, [(bd, iface, m["todo"]) for bd, iface, m in methods], fb)
         self.report.add("translated", "wrapped-reverse")
 
-    def fortran_behind(self, lt, methods, hpp, cpp, fb):
+    def fortran_behind(self, lt, methods, fb):
         """a Fortran implementation behind the C struct: wrap_<method> (the function pointers),
-        create_<Thing>_C_from_Fortran (fills a struct; stored by the caller) and the C++ Wrapper<Thing>
+        create_<Thing>_C_from_Fortran (fills a struct; stored by the caller) and the C++ CWrapper<Thing>
         calling the function pointers of a struct (which outlives it)"""
         prog = self.prog
         name = prog.type_name(lt.name)
         cls, ht, cc, ft = name.split("::")[-1], self.c_type_name(lt), self.c_class(lt), lt.spelling or lt.name
         thing = re.sub(r"^Abstract", "", cc)
-        st, fw, wcls = f"{cc}_c", f"{cc}Wrapper_type", f"Wrapper{re.sub(r'^Abstract', '', cls)}"
+        st, fw, wcls = f"{cc}_c", f"{cc}Wrapper_type", f"CWrapper{re.sub(r'^Abstract', '', cls)}"
         create = f"create_{thing}_C_from_Fortran"
         used, entries, todos = set(), [], []
         for bd, iface, todo in methods:         # todo: no function pointer in the struct
@@ -596,21 +597,27 @@ inline {ah}* to_fortran(const std::any& v)
              for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
         self.public_extra.append(create)
-        # C++ Wrapper<Thing>
-        hpp.emit(0, f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}); the struct outlives it")
-        hpp.emit(0, f"class {wcls} final : public {cls}")
-        hpp.emit(0, "{")
-        hpp.emit(0, "public:")
-        hpp.emit(1, f"{wcls}() = default;  //!< empty object (tests): the methods throw")
-        hpp.emit(1, f"explicit {wcls}({ht}& c) : other_(&c) {{}}")
-        for bd, iface in [(e[0], e[1]) for e in entries] + [(t[0], t[1]) for t in todos]:
+        # C++ <Abstract>_private::CWrapper<Thing> (own files <stem>_c_wrapper.hpp / .cpp)
+        hpp, cpp = self.cwc["hpp"], self.cwc["cpp"]
+        ns = self.private_ns(name)
+        over = "//! override base class implementation -> call corresponding C function pointer"
+        self.emit_lines(hpp, [f"namespace {ns}", "{", "",
+                              f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}); the struct outlives it",
+                              f"class {wcls} final : public {cls}", "{", "public:",
+                              f"  {wcls}() = default;  //!< empty object (tests): the methods throw",
+                              f"  explicit {wcls}({ht}& c) : other_(&c) {{}}  //!< calls the function pointers of c"])
+        for bd, iface in [(e[0], e[1]) for e in entries]:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
-            hpp.emit(1, f"{ret} {bd.spelling}({params}){const} override;")
-        hpp.emit(0, "")
-        hpp.emit(0, "private:")
-        hpp.emit(1, f"{ht}* other_ = nullptr;  //!< the struct of the implementation")
-        hpp.emit(0, "};")
-        hpp.emit(0, "")
+            self.emit_lines(hpp, ["", f"  {over}", f"  {ret} {bd.spelling}({params}){const} override;"])
+        for bd, iface, todo in todos:
+            ret, _, params, const = self.signature(self.tr(iface), iface, True)
+            self.emit_lines(hpp, ["", f"  //! override base class implementation -> throws ({TODO}: not wrapped)",
+                                  f"  {ret} {bd.spelling}({params}){const} override;"])
+        self.emit_lines(hpp, ["", "private:", f"  {ht}* other_ = nullptr;  //!< the struct of the implementation", "};",
+                              "", f"}}  // namespace {ns}", ""])
+        cpp.emit(0, f"namespace {ns}")
+        cpp.emit(0, "{")
+        cpp.emit(0, "")
         for bd, iface, routine, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
@@ -628,6 +635,7 @@ inline {ah}* to_fortran(const std::any& v)
             self.report.add("todo", f"wrap-reverse-fortran:{bd.name}")
             self.emit_lines(cpp, [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{", f"  // {TODO}: {todo}",
                                   f'  throw std::logic_error("{wcls}::{bd.spelling}: not wrapped ({todo})");', "}", ""])
+        self.emit_lines(cpp, [f"}}  // namespace {ns}", ""])
         self.report.add("translated", "wrapped-reverse-fortran")
 
     def fortran_method_c(self, lt, bd, iface, routine, st, fw):
