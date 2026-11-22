@@ -2194,7 +2194,7 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
     # no binding label (no global symbol): only the target of a function pointer
     assert "  subroutine wrap_evaluate(self, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
-    assert "    call c_f_pointer(self_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x=x, y=y, ierr=ierr_f)" in b
+    assert "    call c_f_pointer(self_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x, y, ierr_f)" in b
     assert "  subroutine create_Thing_C_from_Fortran(fthing, cthing, ierr)\n" \
            "    type(AbstractThingWrapper_type), target, intent(in) :: fthing\n" \
            "    type(AbstractThing_c), intent(out) :: cthing\n" in b
@@ -2298,6 +2298,7 @@ def test_reverse_type_constants(tmp_path):
     d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "convergence_mod.F90")
     (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
                                      'wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]\n'
+                                     'wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]\n'
                                      '[wrap_constants]\nThing_type = ["stateSize", "inputSize"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     base = os.path.join(CORPUS, "reverse", "model_base_mod.F90")      # stateSize: inherited (not wrapped)
@@ -2320,8 +2321,14 @@ def test_reverse_type_constants(tmp_path):
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
     assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
     assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
-    assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and '#include "project_macros.h"' not in b
-    assert "    call wrapper%ptr%check_convergence(state=state(1:wrapper%ptr%stateSize), " in b
+    assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and \
+        '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in b         # both macros used
+    # wrap_<method>: pointer views (sizes: constants of the struct), positional arguments, PROJECT_CHK_IERR
+    assert "  !" + "=" * 80 + "\n  !> check_convergence of a Fortran implementation" in b
+    assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real(C_REAL), pointer :: state_f(:)\n" in b
+    assert "    state_f => state(1:self_c%stateSize)\n" in b
+    assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
+           "needanotheriteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
     assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
            'size of state");' in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):

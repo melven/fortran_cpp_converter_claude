@@ -1407,12 +1407,15 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         macros = b[p:p + 5]
         del b[p:p + 5 + (b[p + 5:p + 6] == [""])]
         m = next(j for j, line in enumerate(b) if re.match(r"module \w+$", line))
-        chk = self.cfg["wrap_chk_argument"]
-        if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b):     # its definition
-            macros = [f'#include "{chk[1]}"'] + macros
+        includes = []
+        for chk in (self.cfg["wrap_chk_argument"], self.cfg["wrap_chk_ierr"]):      # definitions of used macros
+            if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b) and \
+                    f'#include "{chk[1]}"' not in includes:
+                includes.append(f'#include "{chk[1]}"')
+        macros = includes + macros
         b[m:m] = macros + [""]
         start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
-        b[:] = spec_sections(b, start)
+        b[:] = procedure_separators(spec_sections(b, start))
 
 
 SEPARATOR = "  !" + "=" * 80
@@ -1420,8 +1423,8 @@ SEPARATOR = "  !" + "=" * 80
 
 def fortran_continue(line, width=132):
     """Fortran code lines longer than width (free form limit): continued (&) at a blank outside strings"""
-    if len(line) <= width or line.lstrip().startswith(("!", "#")):
-        return [line]
+    if len(line) <= width or line.lstrip().startswith(("!", "#")) or re.match(r"\s*[A-Z][A-Z0-9_]*\(", line):
+        return [line]                           # comments, directives, macro invocations (one line for cpp)
     ind = " " * (len(line) - len(line.lstrip()) + 4)
     res, rest = [], line
     while len(rest) > width:
@@ -1469,6 +1472,23 @@ def split_params(line, width):
         return [line] if len(text) <= 132 else [text[:open_ + 1], "!" + " " * (ind + 4) + params[0] + ");"]
     pad = "!" + " " * open_
     return [text[:open_ + 1] + params[0] + ","] + [pad + p + "," for p in params[1:-1]] + [pad + params[-1] + ");"]
+
+
+def procedure_separators(b):
+    """a separator line before each module procedure (above its comments / C declarations / directives)"""
+    out, after = [], False
+    for line in b:
+        if line == "contains":
+            after = True
+        if after and re.match(r"  (?:\w+ )*(?:subroutine|function) \w+\s*\(", line) and \
+                not line.startswith("  end "):
+            k = len(out)
+            while k > 0 and out[k - 1].strip() and out[k - 1].lstrip().startswith(("!", "#")) and \
+                    out[k - 1] != SEPARATOR:
+                k -= 1
+            out.insert(k, SEPARATOR)
+        out.append(line)
+    return out
 
 
 def section(title):

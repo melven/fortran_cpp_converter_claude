@@ -130,6 +130,9 @@ DEFAULTS = {
     # e.g. ["PROJECT_CHK_ARGUMENT", "project_macros.h"] -> PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr);
     # None: if (...) then; ierr = -1; return; end if
     "wrap_chk_argument": None,
+    # error flag check of calls in generated Fortran (wrap_<method>): [macro, Fortran include file],
+    # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
+    "wrap_chk_ierr": None,
     "wrap_string_in": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}

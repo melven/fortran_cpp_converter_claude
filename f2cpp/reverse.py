@@ -752,7 +752,7 @@ inline {ah}* to_fortran(const std::any& v)
         this = iface.pass_arg
         wcls = "CWrapper" + re.sub(r"^Abstract", "", self.prog.type_name(lt.name).split("::")[-1])
         dummies, sizes, decls, locals_, pre, post, call, cpp_pre, cpp_args, cpp_post = \
-            ["self"], [], ["type(C_PTR), value :: self"], [], [], [], [], [], [], []
+            ["self"], [], ["type(C_PTR), value :: self"], [], [], [], {}, [], [], []    # call: actual per dummy
         for a in iface.args:
             v = iface.vars[a]
             if a == this or (has_err and a == err) or a == iface.result:
@@ -762,7 +762,7 @@ inline {ah}* to_fortran(const std::any& v)
                 dummies.append(a)
                 decls.append(f"{self.f_type(v)}, value :: {a}" if intent == "in" else
                              f"{self.f_type(v)}, intent({intent}) :: {a}")
-                call.append(f"{a}={a}")
+                call[a] = a
                 cpp_args.append(cn if intent == "in" else f"&{cn}")
             elif v.base == "logical" and not v.rank:
                 dummies.append(a)
@@ -773,15 +773,17 @@ inline {ah}* to_fortran(const std::any& v)
                     pre.append(f"{a}_f = {a}")
                 if intent != "in":
                     post.append(f"{a} = logical({a}_f, C_BOOL)")
-                call.append(f"{a}={a}_f")
+                call[a] = f"{a}_f"
                 cpp_args.append(cn if intent == "in" else f"&{cn}")
             elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
                 known = self.known_size(lt, iface, a)
                 if known:                       # size known on both sides: checked / resized in C++
                     n = known[1].replace("{OBJ}", "")
                     dummies.append(a)
-                    decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
-                    call.append(f"{a}={a}(1:{known[0].replace('obj%', 'wrapper%ptr%')})")
+                    decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
+                    locals_.append(f"{self.f_type(v)}, pointer :: {a}_f(:)")
+                    pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'self_c%')})")   # constants in the struct
+                    call[a] = f"{a}_f"
                     cpp_pre.append(f"{cn}.resize({n});" if intent == "out" else
                                    f"if ({cn}.size() != {n}) throw std::invalid_argument(\"{wcls}::{bd.spelling}: size of {cn}\");")
                     cpp_args.append(f"{cn}.data()")
@@ -789,7 +791,7 @@ inline {ah}* to_fortran(const std::any& v)
                     dummies += [a, f"{a}_n"]
                     sizes.append(f"integer(C_INT), value :: {a}_n")
                     decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}({a}_n)")
-                    call.append(f"{a}={a}")
+                    call[a] = a
                     cpp_args += [f"{cn}.data()", f"static_cast<int>({cn}.size())"]
             else:                               # objects / class(*) / created objects: C++ implementations only
                 return {"todo": f"argument {cn}: {self.component_kind(v)}"}
@@ -803,17 +805,24 @@ inline {ah}* to_fortran(const std::any& v)
             cpp_pre.append(f"{self.tr(iface).cpp_type(res_v)} {r}{{}};")
             cpp_args.append(f"&{r}")
             cpp_post.append(f"return {r};")
+        chk = self.cfg["wrap_chk_ierr"]
         if has_err:
             dummies.append(err)
             decls.append(f"integer(C_INT), intent(out) :: {err}")
-            locals_.append(f"integer :: {err}_f")
-            call.append(f"{err}={err}_f")
-            post.insert(0, f"{err} = {err}_f")
+            if chk:                             # PROJECT_CHK_IERR(call ..., ierr): the error flag itself
+                call[err] = err
+            else:
+                locals_.append(f"integer :: {err}_f")
+                call[err] = f"{err}_f"
+                post.insert(0, f"{err} = {err}_f")
             cpp_pre.append("int ierr = 0;")
             cpp_args.append("&ierr")
-        target = f"wrapper%ptr%{bd.name}({', '.join(call)})"
+        # positional actual arguments (all present, in the order of the dummies)
+        target = f"wrapper%ptr%{bd.name}({', '.join(call[a] for a in iface.args if a in call)})"
         body = [f"{iface.result} = {target}" if res_v is not None and res_v.base != "logical" else
                 f"{iface.result} = logical({target}, C_BOOL)" if res_v is not None else f"call {target}"]
+        if has_err and chk:
+            body = [f"{chk[0]}({body[0]}, {err})"]
         fortran = ["", f"  !> {bd.spelling} of a Fortran implementation (function pointer {st}%{bd.name})",
                    f"  subroutine {routine}({', '.join(dummies)}) bind(C, name=\"\")"] + \
             [f"    {d}" for d in sizes + decls] + \
