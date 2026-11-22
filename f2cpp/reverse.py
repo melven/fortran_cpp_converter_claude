@@ -121,13 +121,24 @@ class ReverseMixin:
                     cpp_args.append(f"*{a}")
             elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
                 const = "const " if intent == "in" else ""
-                c_params += [f"{const}{self.c_type(v)}* {a}", f"int {a}_n"]
-                f_dummies += [a, f"{a}_n"]
-                f_decls += [f"type(C_PTR), value :: {a}", f"integer(C_INT), value :: {a}_n"]
+                known = self.known_size(lt, iface, a) if objects == "handle" else None
+                if known:                       # size known on both sides: checked here, no size argument
+                    n = known[0].replace("obj%", f"{this}%")
+                    c_params.append(f"{const}{self.c_type(v)}* {a}")
+                    f_dummies.append(a)
+                    f_decls.append(f"type(C_PTR), value :: {a}")
+                    checks += [f"if (size({a}) /= {n}) then"] + \
+                        ([f"  {err} = -1", "  return"] if has_err else
+                         [f'  error stop "{proc}: size of {v.cname} /= {n}"']) + ["end if"]
+                    cpp_init.append(f"const int {a}_n = {known[1].replace('{OBJ}', cpp_obj + '->')};")
+                else:
+                    c_params += [f"{const}{self.c_type(v)}* {a}", f"int {a}_n"]
+                    f_dummies += [a, f"{a}_n"]
+                    f_decls += [f"type(C_PTR), value :: {a}", f"integer(C_INT), value :: {a}_n"]
                 locals_ += [f"{self.f_type(v)}, allocatable, target :: {a}_c(:)", f"type(C_PTR) :: {a}_p"]
                 pre += [f"allocate({a}_c(size({a})))"] + ([] if intent == "out" else [f"{a}_c(:) = {a}"]) + \
                     [f"{a}_p = C_NULL_PTR", f"if (size({a}_c) > 0) {a}_p = c_loc({a}_c(1))"]
-                actuals += [f"{a}_p", f"int(size({a}_c), C_INT)"]
+                actuals += [f"{a}_p"] + ([] if known else [f"int(size({a}_c), C_INT)"])
                 et = tr.eigen_type(v, 1)
                 if intent == "in":
                     cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")
@@ -227,6 +238,27 @@ class ReverseMixin:
                 if n not in names:
                     names.append(n)
         return names
+
+    def known_size(self, lt, iface, a):
+        """size of the rank-1 array dummy a of a reverse-type method that both sides know: an expression of
+        integer literals and constants (wrap_constants) of the object, from wrap_sizes, a size check or the
+        documentation ("dimension (this\\%n)") -> (Fortran code with "obj%", C++ code with "{OBJ}") or None"""
+        consts = {v.name: v for v, _ in self.reverse_constants(lt)[0]}
+        if not consts:
+            return None
+        try:
+            text = self.fortran_size(iface, self.array_sizes(iface, lt, doc=True), a, None)
+        except Exception:                       # no parse tree to analyse (e.g. external interface)
+            return None
+        if text is None:
+            return None
+        names = [n.lower() for n in re.findall(r"obj%(\w+)", text)]
+        rest = re.sub(r"obj%\w+", "1", text)
+        if not names or any(n not in consts for n in names) or "**" in rest or \
+                not re.fullmatch(r"[\d\s+\-*/()]*", rest):
+            return None
+        cpp = re.sub(r"obj%(\w+)", lambda m: "{OBJ}" + consts[m.group(1).lower()].cname + "()", text)
+        return text, cpp
 
     def fortran_decl(self, v):
         """type of a scalar result declared by the function prefix"""
@@ -714,6 +746,7 @@ inline {ah}* to_fortran(const std::any& v)
         err = tr.err
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
         this = iface.pass_arg
+        wcls = "CWrapper" + re.sub(r"^Abstract", "", self.prog.type_name(lt.name).split("::")[-1])
         dummies, sizes, decls, locals_, pre, post, call, cpp_pre, cpp_args, cpp_post = \
             ["self"], [], ["type(C_PTR), value :: self"], [], [], [], [], [], [], []
         for a in iface.args:
@@ -739,11 +772,21 @@ inline {ah}* to_fortran(const std::any& v)
                 call.append(f"{a}={a}_f")
                 cpp_args.append(cn if intent == "in" else f"&{cn}")
             elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
-                dummies += [a, f"{a}_n"]
-                sizes.append(f"integer(C_INT), value :: {a}_n")
-                decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}({a}_n)")
-                call.append(f"{a}={a}")
-                cpp_args += [f"{cn}.data()", f"static_cast<int>({cn}.size())"]
+                known = self.known_size(lt, iface, a)
+                if known:                       # size known on both sides: checked / resized in C++
+                    n = known[1].replace("{OBJ}", "")
+                    dummies.append(a)
+                    decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
+                    call.append(f"{a}={a}(1:{known[0].replace('obj%', 'wrapper%ptr%')})")
+                    cpp_pre.append(f"{cn}.resize({n});" if intent == "out" else
+                                   f"if ({cn}.size() != {n}) throw std::invalid_argument(\"{wcls}::{bd.spelling}: size of {cn}\");")
+                    cpp_args.append(f"{cn}.data()")
+                else:
+                    dummies += [a, f"{a}_n"]
+                    sizes.append(f"integer(C_INT), value :: {a}_n")
+                    decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}({a}_n)")
+                    call.append(f"{a}={a}")
+                    cpp_args += [f"{cn}.data()", f"static_cast<int>({cn}.size())"]
             else:                               # objects / class(*) / created objects: C++ implementations only
                 return {"todo": f"argument {cn}: {self.component_kind(v)}"}
         res_v = iface.vars.get(iface.result) if iface.kind == "function" else None

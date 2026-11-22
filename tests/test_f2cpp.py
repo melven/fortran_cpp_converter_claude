@@ -2313,16 +2313,44 @@ def test_reverse_type_constants(tmp_path):
            "    type(C_FUNPTR) :: check_convergence = C_NULL_FUNPTR\n" in b
     assert "    integer(C_INT) :: stateSize = 0\n" in b and "    cthing%stateSize = fthing%ptr%stateSize" in b
     assert "      call c_f_pointer(c, x%c)\n      x%stateSize = x%c%stateSize\n      x%inputSize = x%c%inputSize" in cw
-    assert "CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize), other_(&c)" in \
-        read((d,), "convergence_mod_c_wrapper.cpp")
+    cwc = read((d,), "convergence_mod_c_wrapper.cpp")
+    assert "CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize), other_(&c)" in cwc
+    # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
+    assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
+    assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
+    assert "    if (size(state) /= this%stateSize) then\n      ierr = -1\n      return\n    end if" in cw
+    assert "    call wrapper%ptr%check_convergence(state=state(1:wrapper%ptr%stateSize), " in b
+    assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
+           'size of state");' in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
-  use, intrinsic :: iso_c_binding, only: C_PTR
+  use, intrinsic :: iso_c_binding, only: C_PTR, C_INT, c_loc
   use convergence_mod, only: Thing_type
   use project_c_wrapper_convergence_mod, only: project_Thing_wrap
+  use convergence_mod_c_binding, only: Thing_c, ThingWrapper_type, create_Thing_C_from_Fortran
   implicit none
+  type, extends(Thing_type) :: FThing_type      ! Fortran implementation (default check_convergence)
+  end type FThing_type
+  interface
+    function run_cpp(c) result(code) bind(C, name="run_cpp")
+      import :: C_PTR, C_INT
+      type(C_PTR), value :: c
+      integer(C_INT) :: code
+    end function run_cpp
+  end interface
 contains
+  subroutine fortran_side() bind(C, name="fortran_side")
+    type(FThing_type), target :: ft
+    type(ThingWrapper_type), target :: fw
+    type(Thing_c), target :: ct
+    integer :: ierr
+    ft%stateSize = 3
+    fw%ptr => ft
+    call create_Thing_C_from_Fortran(fw, ct, ierr)
+    print '(i4)', run_cpp(c_loc(ct))
+  end subroutine fortran_side
+
   subroutine use_thing(c) bind(C, name="use_thing")
     type(C_PTR), value :: c
     class(Thing_type), allocatable :: x
@@ -2337,9 +2365,28 @@ contains
   end subroutine use_thing
 end module drv_mod
 """)
-    (tmp_path / "run.cpp").write_text(r"""#include "convergence_mod.hpp"
+    (tmp_path / "run.cpp").write_text(r"""#include "convergence_mod_c_wrapper.hpp"
 #include <memory>
+#include <stdexcept>
 extern "C" void use_thing(project_Thing* c);
+extern "C" void fortran_side();
+extern "C" int run_cpp(project_Thing* c)       // the Fortran implementation in C++: 100 * stateSize + checks
+{
+  project::Thing_private::CWrapperThing w(*c);
+  bool again = true;
+  int code = 100 * w.stateSize();
+  w.check_convergence(project::vec::Zero(3), project::vec::Zero(1), 0.0, false, again);
+  code += again ? 0 : 10;
+  try
+  {
+    w.check_convergence(project::vec::Zero(2), project::vec::Zero(1), 0.0, false, again);
+  }
+  catch (const std::invalid_argument&)
+  {
+    code += 1;
+  }
+  return code;
+}
 class MyThing : public project::Thing
 {
 public:
@@ -2350,6 +2397,7 @@ int main()
   auto t = std::make_unique<MyThing>();
   use_thing(project::Thing_private::toC(*t));
   t.release(); // NOLINT(bugprone-unused-return-value)
+  fortran_side();
   return 0;
 }
 """)
@@ -2362,4 +2410,4 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)       # convergence_mod.o: the Fortran module
     run(["g++", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:3] == ["  2  1", "  0 F", " -1"]
+    assert run(["./m"], d).split("\n")[:4] == ["  2  1", "  0 F", " -1", " 311"]
