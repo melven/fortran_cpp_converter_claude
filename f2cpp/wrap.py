@@ -1407,6 +1407,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         macros = b[p:p + 5]
         del b[p:p + 5 + (b[p + 5:p + 6] == [""])]
         m = next(j for j, line in enumerate(b) if re.match(r"module \w+$", line))
+        chk = self.cfg["wrap_chk_argument"]
+        if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b):     # its definition
+            macros = [f'#include "{chk[1]}"'] + macros
         b[m:m] = macros + [""]
         start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
         b[:] = spec_sections(b, start)

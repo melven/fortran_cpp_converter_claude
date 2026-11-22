@@ -2296,8 +2296,9 @@ def test_reverse_type_constants(tmp_path):
     """wrap_constants of a reverse type: set by the C++ constructor, in the C struct, const getters in C++ (used by
     the translated default implementation), copied into the Fortran object (project_<Type>_wrap)"""
     d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "convergence_mod.F90")
-    (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n[wrap_constants]\n'
-                                     'Thing_type = ["stateSize", "inputSize"]\n')
+    (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
+                                     'wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]\n'
+                                     '[wrap_constants]\nThing_type = ["stateSize", "inputSize"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     base = os.path.join(CORPUS, "reverse", "model_base_mod.F90")      # stateSize: inherited (not wrapped)
     translate([], c, d, wrap=[src], interface_only=[base])
@@ -2318,7 +2319,8 @@ def test_reverse_type_constants(tmp_path):
     # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
     assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
-    assert "    if (size(state) /= this%stateSize) then\n      ierr = -1\n      return\n    end if" in cw
+    assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
+    assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and '#include "project_macros.h"' not in b
     assert "    call wrapper%ptr%check_convergence(state=state(1:wrapper%ptr%stateSize), " in b
     assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
            'size of state");' in cwc
@@ -2410,4 +2412,4 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)       # convergence_mod.o: the Fortran module
     run(["g++", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:4] == ["  2  1", "  0 F", " -1", " 311"]
+    assert run(["./m"], d).split("\n")[:4] == ["  2  1", "  0 F", " -2", " 311"]     # -2: PROJECT_CHK_ARGUMENT

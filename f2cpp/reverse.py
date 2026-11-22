@@ -127,9 +127,13 @@ class ReverseMixin:
                     c_params.append(f"{const}{self.c_type(v)}* {a}")
                     f_dummies.append(a)
                     f_decls.append(f"type(C_PTR), value :: {a}")
-                    checks += [f"if (size({a}) /= {n}) then"] + \
-                        ([f"  {err} = -1", "  return"] if has_err else
-                         [f'  error stop "{proc}: size of {v.cname} /= {n}"']) + ["end if"]
+                    chk = cfg["wrap_chk_argument"]
+                    if has_err and chk:
+                        checks.append(f"{chk[0]}(size({a}) == {n}, {err})")
+                    else:
+                        checks += [f"if (size({a}) /= {n}) then"] + \
+                            ([f"  {err} = -1", "  return"] if has_err else
+                             [f'  error stop "{proc}: size of {v.cname} /= {n}"']) + ["end if"]
                     cpp_init.append(f"const int {a}_n = {known[1].replace('{OBJ}', cpp_obj + '->')};")
                 else:
                     c_params += [f"{const}{self.c_type(v)}* {a}", f"int {a}_n"]

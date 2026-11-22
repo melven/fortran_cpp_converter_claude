@@ -126,6 +126,10 @@ DEFAULTS = {
     "c_real": None,                           # C type macro of real: <NS>_REAL
     "c_single_precision": None,               # <NS>_SINGLE_PRECISION
     "c_decl_width": 100,                      # longer C declarations (binding comments): one parameter per line
+    # argument check in generated Fortran (sizes of reverse-type arrays): [macro, Fortran include file],
+    # e.g. ["PROJECT_CHK_ARGUMENT", "project_macros.h"] -> PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr);
+    # None: if (...) then; ierr = -1; return; end if
+    "wrap_chk_argument": None,
     "wrap_string_in": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}
