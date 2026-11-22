@@ -1061,10 +1061,10 @@ class ModuleEmitter:
             out += [ind + head, ind + "{"]
         return out
 
-    def file_header(self, top, ext):
-        """file header comment of the Fortran source with the file name replaced"""
+    def file_header(self, top, ext, suffix=""):
+        """file header comment of the Fortran source with the file name replaced (<stem><suffix><ext>)"""
         import re
-        new = os.path.basename(self.prog.file_stem(self.mod.name)) + ext
+        new = os.path.basename(self.prog.file_stem(self.mod.name)) + suffix + ext
         src = re.escape(os.path.basename(self.src))
         res = []
         for line in top.out:

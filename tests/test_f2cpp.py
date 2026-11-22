@@ -2154,6 +2154,11 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert "Wrapper" not in (tmp_path / "thing_mod.hpp").read_text().replace("_wrapper", "")
     assert '#include "thing_mod.hpp"\n\nnamespace project\n{\n\nnamespace AbstractThing_private\n{\n' in hpp
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
+    # file headers: original header, @file renamed, @brief prefixed
+    assert hpp.startswith("//! @file thing_mod_c_wrapper.hpp\n//! @brief C++ wrapper of C structs: things evaluated")
+    assert cpp.startswith("//! @file thing_mod_c_wrapper.cpp\n//! @brief C++ wrapper of C structs: things evaluated")
+    assert (tmp_path / "project_c_wrapper_thing_mod.F90").read_text().startswith(
+        "!> @file project_c_wrapper_thing_mod.F90\n!> @brief Fortran types implemented in C++: things evaluated")
     assert "class CWrapperThing final : public AbstractThing\n{\npublic:\n  CWrapperThing() = default;" in hpp
     assert "  explicit CWrapperThing(project_AbstractThing& c) : other_(&c) {}  //!< calls the function pointers of c" in hpp
     assert "  //! override base class implementation -> call corresponding C function pointer\n" \

@@ -1,4 +1,7 @@
-!> things evaluated by the Fortran dependents, implemented in C++ (wrap_reverse)
+!> @file thing_mod.F90
+!> @brief things evaluated by the Fortran dependents, implemented in C++ (wrap_reverse)
+!
+! Some licence text.
 module thing_mod
   implicit none
   private
