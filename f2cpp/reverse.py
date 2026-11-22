@@ -126,7 +126,7 @@ class ReverseMixin:
                     n = known[0].replace("obj%", f"{this}%")
                     c_params.append(f"{const}{self.c_type(v)}* {a}")
                     f_dummies.append(a)
-                    f_decls.append(f"type(C_PTR), value :: {a}")
+                    f_decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
                     chk = cfg["wrap_chk_argument"]
                     if has_err and chk:
                         checks.append(f"{chk[0]}(size({a}) == {n}, {err})")
@@ -138,11 +138,11 @@ class ReverseMixin:
                 else:
                     c_params += [f"{const}{self.c_type(v)}* {a}", f"int {a}_n"]
                     f_dummies += [a, f"{a}_n"]
-                    f_decls += [f"type(C_PTR), value :: {a}", f"integer(C_INT), value :: {a}_n"]
-                locals_ += [f"{self.f_type(v)}, allocatable, target :: {a}_c(:)", f"type(C_PTR) :: {a}_p"]
-                pre += [f"allocate({a}_c(size({a})))"] + ([] if intent == "out" else [f"{a}_c(:) = {a}"]) + \
-                    [f"{a}_p = C_NULL_PTR", f"if (size({a}_c) > 0) {a}_p = c_loc({a}_c(1))"]
-                actuals += [f"{a}_p"] + ([] if known else [f"int(size({a}_c), C_INT)"])
+                    f_decls += [f"{self.f_type(v)}, intent({intent}) :: {a}(*)", f"integer(C_INT), value :: {a}_n"]
+                # a contiguous copy of the C kind (by reference: the address of its first element)
+                locals_.append(f"{self.f_type(v)}, allocatable :: {a}_c(:)")
+                pre += [f"allocate({a}_c(size({a})))"] + ([] if intent == "out" else [f"{a}_c(:) = {a}"])
+                actuals += [f"{a}_c"] + ([] if known else [f"int(size({a}_c), C_INT)"])
                 et = tr.eigen_type(v, 1)
                 if intent == "in":
                     cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")

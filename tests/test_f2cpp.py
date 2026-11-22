@@ -1681,7 +1681,7 @@ def test_wrapped_listener(tmp_path):
            "&AbstractListener::state_changed_wrapper))" in cpp
     assert "    type(C_FUNPTR) :: state_changed_fn = C_NULL_FUNPTR" in b
     assert "    call c_f_procpointer(this%state_changed_fn, f)\n" \
-           "    call f(this%userData, this%user, old_c, history_p, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
+           "    call f(this%userData, this%user, old_c, history_c, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
     assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
     assert "extern" not in cpp and "    *ierr = -1;" in cpp
     # error logging (log_error): instead of std::fprintf
@@ -1931,7 +1931,9 @@ def test_reverse_wrapped_types(tmp_path):
            "    !> AbstractThing::evaluate_wrapper\n    subroutine project_AbstractThing_evaluate(" in tb
     assert "    end subroutine project_AbstractThing_evaluate\n\n!@c_declaration\n!typedef void (*project_AbstractThing_weight)" in tb
     assert "    subroutine project_AbstractThing_evaluate(self, x, x_n, y, y_n, ierr) bind(C)\n" \
-           "      import C_PTR, C_INT\n      implicit none\n      type(C_PTR), value :: self\n" in tb and "      import C_PTR, C_REAL\n" in tb and "      import\n" not in tb
+           "      import C_PTR, C_REAL, C_INT\n      implicit none\n      type(C_PTR), value :: self\n" \
+           "      real(C_REAL), intent(in) :: x(*)\n      integer(C_INT), value :: x_n\n" \
+           "      real(C_REAL), intent(out) :: y(*)\n" in tb and "      import C_PTR, C_REAL\n" in tb and "      import\n" not in tb
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
     # bindings with a default implementation: virtual, the translated default, forwarded as well
@@ -1966,7 +1968,7 @@ def test_reverse_wrapped_types(tmp_path):
     assert tb.index("  ! interface declarations\n  abstract interface\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
         tb.index("  ! type declarations\n!@c_declaration\n!struct project_AbstractThing\n") < tb.index("\ncontains\n")
     assert "public :: cwrapperthing_evaluate" not in tw
-    assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
+    assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_c, int(size(x_c), C_INT), y_c, " \
            "int(size(y_c), C_INT), ierr_c)" in tw
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fw
     assert "  use project_c_wrapper_thing_mod, only: project_AbstractThing_wrap" in fw
