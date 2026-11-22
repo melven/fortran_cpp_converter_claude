@@ -64,7 +64,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         return f"{self.c_class_name(self.root(t)[1])}Wrapper_type"
 
     def c_type_name(self, t):
-        """C typedef of the handle (one per class hierarchy): project_MySolver"""
+        """C typedef of the handle (one per class hierarchy): project_MySolver; reverse types: their own struct"""
+        if t.name in self.reverse_types():
+            return f"{self.cfg['c_prefix']}_{self.c_class(t)}"
         return f"{self.cfg['c_prefix']}_{self.c_class_name(self.root(t)[1])}"
 
     def struct_handle(self, t):
@@ -462,6 +464,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         (types of other modules: their translation is the C++ class)"""
         res = {}
         for t in self.mod.types.values():
+            if t.name in self.reverse_types():  # their constants: reverse_constants
+                continue
             for v, kind, td in self.constants(t)[0]:
                 if kind == "struct":
                     res[td.name] = td
@@ -1624,9 +1628,15 @@ def comp_public(t, v):
 
 def register_accessors(prog, wrapped):
     """components of wrapped classes are getters in C++: obj%n -> obj.n()"""
+    cfg = prog.cfg
+    reverse = set(cfg["wrap_reverse"]) | set(cfg["wrap_reverse_factories"])
     for m in wrapped:
         for t in m.types.values():
-            acc = prog.cfg["accessors"].setdefault(t.name, {})
+            acc = cfg["accessors"].setdefault(t.name, {})
+            if t.name in reverse:               # implemented in C++: only the constants (also inherited ones)
+                for n in cfg["wrap_constants"].get(t.name, []):
+                    acc.setdefault(n, None)
+                continue
             for v in t.comps.values():
                 if comp_public(t, v):
                     acc.setdefault(v.name, None)

@@ -454,7 +454,7 @@ inline {ah}* to_fortran(const std::any& v)
             return cache[lt.name]
         res, todo = [], []
         for n in self.cfg["wrap_constants"].get(lt.name, []):
-            v = lt.comps.get(n)
+            v = self.prog.find_component(lt, n)     # also inherited components
             kind, _, why = self.plain_kind(v) if v is not None else (None, None, "no such component")
             if why is None and kind not in ("scalar", "logical"):
                 why = f"{self.component_kind(v)} (reverse types: scalars only)"
@@ -496,11 +496,11 @@ inline {ah}* to_fortran(const std::any& v)
         live = [m for m in methods if not m[2]["todo"]]
         # --- C struct (in the c_declaration block; struct ... for its own type)
         typedefs.append(f"!typedef struct {ht} {ht};")       # forward declaration (the struct: after the typedefs)
-        members = [f"  {ht}_{bd.name} {bd.name} = nullptr;" for bd, _, m in live]
+        consts, const_todo = self.reverse_constants(lt)          # C struct: constants, functions, userData
+        members = [f"  {self.c_type(v)} {v.cname} = " + ("false;" if k == "logical" else "0;") for v, k in consts]
+        members += [f"  {ht}_{bd.name} {bd.name} = nullptr;" for bd, _, m in live]
         if factory is None:
             members.append(f"  {ht}_destroy destroy = nullptr;")
-        consts, const_todo = self.reverse_constants(lt)
-        members += [f"  {self.c_type(v)} {v.cname} = " + ("false;" if k == "logical" else "0;") for v, k in consts]
         members += ["  void* userData = nullptr;"]
         tr = self.tr()
         cparams = ", ".join(f"{'bool' if k == 'logical' else tr.cpp_type(v)} {v.cname}" for v, k in consts)
@@ -526,10 +526,10 @@ inline {ah}* to_fortran(const std::any& v)
         all_methods = methods + cpp_only
         for line in const_todo:
             hpp.emit(1, f"// {TODO}: {line}")
-        docs = self.component_docs(lt)
         for v, k in consts:                     # constants: const getters (C struct)
             hpp.emit(0, "")
-            for line in docs.get(v.name, []) or [f"constant {v.cname}"]:
+            owner = next(tt for tt in [lt, *self.prog.ancestors(lt)] if v.name in tt.comps)   # inherited: its doc
+            for line in self.component_docs(owner).get(v.name, []) or [f"constant {v.cname}"]:
                 hpp.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
             hpp.emit(1, f"{'bool' if k == 'logical' else tr.cpp_type(v)} {v.cname}() const;")
         self.pure_virtuals(hpp, all_methods)
@@ -547,9 +547,9 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& x);")
         hpp.emit(0, "};")
         hpp.emit(0, "")
-        init = [f"  c_->{bd.name} = &{m['tramp']};" for bd, _, m in live] + \
-            (["  c_->destroy = &destroy_wrapper;"] if factory is None else []) + \
-            [f"  c_->{v.cname} = {v.cname};" for v, _ in consts] + ["  c_->userData = this;"]
+        init = [f"  c_->{v.cname} = {v.cname};" for v, _ in consts] + \
+            [f"  c_->{bd.name} = &{m['tramp']};" for bd, _, m in live] + \
+            (["  c_->destroy = &destroy_wrapper;"] if factory is None else []) + ["  c_->userData = this;"]
         reg, unreg = self.c_name(lt, "register"), self.c_name(lt, "unregister")
         if factory is None:
             lines = [f"{name}::{cls}({cparams}) : c_(std::make_unique<{ht}>())", "{"] + init + ["}", "",
@@ -579,9 +579,9 @@ inline {ah}* to_fortran(const std::any& v)
         self.bridges += ["!@c_declaration", f"!struct {ht}", "!{"] + [f"!{x}" for x in members] + ["!};",
                          "!@end_c_declaration", f"  !> C struct {ht}: functions of the C++ object",
                          f"  type, bind(C), public :: {st}"] + \
+            [f"    {self.f_type(v)} :: {v.cname} = " + (".false." if k == "logical" else "0") for v, k in consts] + \
             [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
-            [f"    {self.f_type(v)} :: {v.cname} = " + (".false." if k == "logical" else "0") for v, k in consts] + \
             ["    type(C_PTR) :: userData = C_NULL_PTR  !< the implementation (C++ or Fortran object)", f"  end type {st}", ""]
         to_f = [f"{v.cname} = logical(@%c%{v.cname})" if k == "logical" else f"{v.cname} = @%c%{v.cname}"
                 for v, k in consts]             # constants: C struct -> Fortran object (@: the object)
@@ -653,9 +653,9 @@ inline {ah}* to_fortran(const std::any& v)
         fb += ["", f"  !> the C struct of a Fortran implementation (the caller stores both; fthing must outlive cthing)",
                f"  subroutine {create}(fthing, cthing, ierr)", f"    type({fw}), target, intent(in) :: fthing",
                f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
-            [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
             [f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else
                                          f"fthing%ptr%{v.cname}") for v, k in consts] + \
+            [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
             [f"    ! {TODO}: {bd.spelling} not wrapped ({todo}): C++ {wcls}::{bd.spelling} throws"
              for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]

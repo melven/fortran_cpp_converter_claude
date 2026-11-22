@@ -1,12 +1,12 @@
 !> abstract model with constant sizes (wrap_reverse + wrap_constants)
 #include "project_macros.h"
 module convergence_mod
+  use model_base_mod, only: ModelBase_type
   implicit none
   private
   public :: Thing_type
 
-  type, abstract :: Thing_type
-    integer :: stateSize = 2   !< size of the state
+  type, abstract, extends(ModelBase_type) :: Thing_type
     integer :: inputSize = 1   !< size of the input
   contains
     procedure :: check_convergence

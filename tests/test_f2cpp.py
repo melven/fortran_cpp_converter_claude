@@ -2299,14 +2299,18 @@ def test_reverse_type_constants(tmp_path):
     (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n[wrap_constants]\n'
                                      'Thing_type = ["stateSize", "inputSize"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
-    translate([], c, d, wrap=[src])
+    base = os.path.join(CORPUS, "reverse", "model_base_mod.F90")      # stateSize: inherited (not wrapped)
+    translate([], c, d, wrap=[src], interface_only=[base])
     hpp, cpp, h = read((d,), "convergence_mod.hpp"), read((d,), "convergence_mod.cpp"), read((d,), "convergence_mod.h")
     b, cw = read((d,), "convergence_mod_c_binding.F90"), read((d,), "project_c_wrapper_convergence_mod.F90")
     assert "  explicit Thing(int stateSize, int inputSize);  //!< creates its C struct (constants: stateSize, inputSize)" in hpp
     assert "  //! size of the state\n  int stateSize() const;" in hpp
     assert "int Thing::stateSize() const\n{\n  return c_->stateSize;\n}" in cpp and "  c_->stateSize = stateSize;" in cpp
     assert "if (!(state.size() == stateSize()))" in cpp                   # translated default implementation
-    assert "  int stateSize = 0;\n  int inputSize = 0;\n  void* userData = nullptr;\n};" in h
+    assert "struct project_Thing\n{\n  int stateSize = 0;\n  int inputSize = 0;\n" \
+           "  project_Thing_check_convergence check_convergence = nullptr;\n" in h      # constants first
+    assert "  type, bind(C) :: Thing_c\n    integer(C_INT) :: stateSize = 0\n    integer(C_INT) :: inputSize = 0\n" \
+           "    type(C_FUNPTR) :: check_convergence = C_NULL_FUNPTR\n" in b
     assert "    integer(C_INT) :: stateSize = 0\n" in b and "    cthing%stateSize = fthing%ptr%stateSize" in b
     assert "      call c_f_pointer(c, x%c)\n      x%stateSize = x%c%stateSize\n      x%inputSize = x%c%inputSize" in cw
     assert "CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize), other_(&c)" in \
@@ -2351,11 +2355,11 @@ int main()
 """)
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
           "-Wno-unused-dummy-argument", "-I" + CORPUS]
-    for f in (src, "convergence_mod_c_binding.F90", "project_c_wrapper_convergence_mod.F90", "drv.F90"):
+    for f in (base, src, "convergence_mod_c_binding.F90", "project_c_wrapper_convergence_mod.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("convergence_mod.cpp", "convergence_mod_c_wrapper.cpp", "run.cpp"):
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)       # convergence_mod.o: the Fortran module
-    run(["g++", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
+    run(["g++", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
     assert run(["./m"], d).split("\n")[:3] == ["  2  1", "  0 F", " -1"]
