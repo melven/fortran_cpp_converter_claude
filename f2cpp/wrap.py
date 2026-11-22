@@ -1353,8 +1353,9 @@ def section(title):
 
 
 def spec_sections(b, start):
-    """the specification part after the public statements: the leading C declarations, then the abstract
-    interfaces and the types, each under a section comment (C declarations and comments stay with their item)"""
+    """the specification part after the public statements: the abstract interfaces and the types, each under a
+    section comment (C declarations and comments stay with their item); the leading C declarations (includes,
+    macros, forward declarations) go between implicit none and private"""
     end = b.index("contains")
     seg, head = b[start:end], []
     while seg and not seg[0].strip():
@@ -1382,8 +1383,9 @@ def spec_sections(b, start):
                 chunks[kind].append(pending)
                 pending, kind = [], None
     out = b[:start]
-    if head:
-        out += [""] + head
+    if head:                                    # like a use statement: between implicit none and private
+        k = out.index("  implicit none")
+        out[k + 1:k + 1] = [""] + head + [""]
     for kind, title in (("interface", "interface declarations"), ("type", "type declarations")):
         if chunks[kind]:
             out += [""] + section(title)

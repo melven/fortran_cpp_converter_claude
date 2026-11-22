@@ -1933,7 +1933,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert ":: CWrapperThing_type" not in tb and "Holder" not in tb + tw and "p_impl" not in tb + tw
     assert "  use thing_mod_c_binding, only: project_AbstractThing_evaluate" in tw
     # private modules, public: types, bind(C) / Fortran-callable procedures, abstract interfaces (one per line)
-    assert "  implicit none\n  private\n\n  !" + "=" * 80 + "\n  ! public declarations\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_evaluate\n" in tb
+    assert "  implicit none\n\n!@c_declaration\n!\n!#include <stdbool.h>\n" in tb      # like a use statement
+    assert "!@end_c_declaration\n\n  private\n\n  !" + "=" * 80 + "\n  ! public declarations\n  public :: AbstractThing_c\n" in tb and "  public :: project_AbstractThing_evaluate\n" in tb
     assert "  implicit none\n  private\n\n  !" + "=" * 80 + "\n  ! public declarations\n  public :: CWrapperThing_type\n" \
            "  public :: project_AbstractThing_wrap\n\n  !" + "=" * 80 + "\n  ! type declarations\n  !> AbstractThing_type" in tw
     # precision macros before the module; interfaces, then types (each under a section comment)

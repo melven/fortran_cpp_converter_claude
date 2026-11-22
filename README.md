@@ -271,7 +271,8 @@ LinearThingFactory_type = "linear"
 
 The binding module is `private`; one `public ::` statement per name for the types, the `bind(C)`
 procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran). Layout of the
-binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; sections `public declarations`,
+binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; the C prologue (`stdbool.h`,
+macros, forward declarations) between `implicit none` and `private`; sections `public declarations`,
 `interface declarations`, `type declarations` (comment line `!====...`). C++ declarations without Fortran
 documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).
 
