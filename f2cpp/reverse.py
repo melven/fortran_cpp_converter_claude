@@ -200,6 +200,7 @@ class ReverseMixin:
             ([f"  *{err} = 0;"] if has_err else []) + [f"  {x}" for x in cpp_init] + \
             ["  try", "  {"] + [f"    {x}" for x in cpp_pre + [call] + cpp_post] + ["  }",
              "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
+             f'    {cfg["log_error"]}("{cls}", e.what());' if cfg["log_error"] else
              f'    std::fprintf(stderr, "{cls}::{bd.spelling}: %s\\n", e.what());'] + on_error + \
             ["  }", "  catch (...)", "  {"] + on_error + ["  }", "}", ""]
         return res

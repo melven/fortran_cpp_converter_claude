@@ -999,6 +999,13 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
     def brief(self, lines, prefix):
         return [re.sub(r"(@brief:?\s*)", lambda m: m.group(1) + prefix, line, count=1) for line in lines]
 
+    def log_includes(self):
+        """header of the error logging in catch blocks (log_error) or <cstdio>"""
+        if not self.needs_cstdio:
+            return []
+        inc = self.cfg["log_error_include"] if self.cfg["log_error"] else "<cstdio>"
+        return [f"#include {inc}", ""] if inc else []
+
     def cpp_file_header(self, ext, prefix=None, suffix=""):
         from .emit import plain_comment
         top = self.tr()
@@ -1243,7 +1250,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         c = self.cpp_file_header(cfg["source_ext"], "C++ wrapper: ") + \
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
-             f'#include "{os.path.basename(stem)}.h"', ""] + (["#include <cstdio>", ""] if self.needs_cstdio else []) + \
+             f'#include "{os.path.basename(stem)}.h"', ""] + self.log_includes() + \
             [self.open_ns(), ""]
         c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
 

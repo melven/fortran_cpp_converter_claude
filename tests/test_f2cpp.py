@@ -1657,7 +1657,8 @@ def test_wrapped_listener(tmp_path):
     """abstract listener type implemented in C++: Fortran bridge type calling private static trampolines of the
     C++ class through function pointers (no C++ symbol referenced by the Fortran library)"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
-    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\n')
+    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\nlog_error = "project_log_error"\n'
+                                     'log_error_include = \'"project_log.hpp"\'\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     src = os.path.join(w, "listen_mod.F90")
     translate([], c, d, wrap=[src])
@@ -1683,6 +1684,9 @@ def test_wrapped_listener(tmp_path):
            "    call f(this%userData, this%user, old_c, history_p, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
     assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
     assert "extern" not in cpp and "    *ierr = -1;" in cpp
+    # error logging (log_error): instead of std::fprintf
+    assert '    project_log_error("AbstractListener", e.what());' in cpp and "fprintf" not in cpp
+    assert '#include "project_log.hpp"' in cpp and "<cstdio>" not in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv

@@ -60,6 +60,10 @@ DEFAULTS = {
     "source_ext": ".cpp",
     # included by every generated header (must provide scalar, vec, mat)
     "extra_includes": [],
+    # error logging in the C++ wrappers called through function pointers (catch blocks):
+    # <log_error>("<Class>", e.what()); empty: std::fprintf(stderr, ...); log_error_include: its header
+    "log_error": "",                          # e.g. "project_log_error"
+    "log_error_include": "",                  # e.g. "\"project_log.hpp\""
     # Fortran #include "x" -> C++ #include "y"; "" drops the include
     "include_map": {},
     # Fortran derived type (lower case) -> existing C++ class, e.g. "foo_type" = "wrappers::Foo"
