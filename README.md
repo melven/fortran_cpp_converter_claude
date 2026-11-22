@@ -243,6 +243,9 @@ LinearThingFactory_type = "linear"
 - abstract C struct `project_AbstractThing`: one function pointer per binding (the struct is the first
   argument), `destroy`, `userData` (the implementation: C++ or Fortran object); for C++ objects set by the
   C++ constructor
+- `wrap_constants` (`Thing_type = ["stateSize"]`, real / integer / logical scalars): C struct members set by the
+  C++ constructor (`explicit Thing(int stateSize)`), const getters `stateSize()` (used by translated defaults),
+  copied into the Fortran object by `project_Thing_wrap`; Fortran implementations: by `create_Thing_C_from_Fortran`
 - the other direction: a Fortran implementation behind the struct for C / C++:
   `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function

@@ -446,6 +446,26 @@ inline {ah}* to_fortran(const std::any& v)
                 self.report.add("translated", "reverse-default-method")
 
     # ------------------------------------------------------------------ reverse types / factories
+    def reverse_constants(self, lt):
+        """wrap_constants of a reverse type: ([(var, kind)] of real / integer / logical scalars, [TODO texts]);
+        set by the C++ constructor, in the C struct, copied into the Fortran object"""
+        cache = self.__dict__.setdefault("reverse_constants_cache", {})
+        if lt.name in cache:
+            return cache[lt.name]
+        res, todo = [], []
+        for n in self.cfg["wrap_constants"].get(lt.name, []):
+            v = lt.comps.get(n)
+            kind, _, why = self.plain_kind(v) if v is not None else (None, None, "no such component")
+            if why is None and kind not in ("scalar", "logical"):
+                why = f"{self.component_kind(v)} (reverse types: scalars only)"
+            if why:
+                self.report.add("todo", f"wrap-constant:{n}")
+                todo.append(f"constant {n} not wrapped: {why}")
+                continue
+            res.append((v, kind))
+        cache[lt.name] = res, todo
+        return res, todo
+
     def reverse_types(self):
         return set(self.cfg["wrap_reverse"]) | set(self.cfg["wrap_reverse_factories"])
 
@@ -479,7 +499,12 @@ inline {ah}* to_fortran(const std::any& v)
         members = [f"  {ht}_{bd.name} {bd.name} = nullptr;" for bd, _, m in live]
         if factory is None:
             members.append(f"  {ht}_destroy destroy = nullptr;")
+        consts, const_todo = self.reverse_constants(lt)
+        members += [f"  {self.c_type(v)} {v.cname} = " + ("false;" if k == "logical" else "0;") for v, k in consts]
         members += ["  void* userData = nullptr;"]
+        tr = self.tr()
+        cparams = ", ".join(f"{'bool' if k == 'logical' else tr.cpp_type(v)} {v.cname}" for v, k in consts)
+        cnames = ", ".join(v.cname for v, _ in consts)
         # --- C++ class
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
@@ -490,13 +515,23 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(0, "{")
         hpp.emit(0, "public:")
         if factory is None:
-            hpp.emit(1, f"{cls}();  //!< creates its C struct")
+            hpp.emit(1, (f"explicit {cls}({cparams});  //!< creates its C struct (constants: {cnames})" if consts
+                         else f"{cls}();  //!< creates its C struct"))
         else:
-            hpp.emit(1, f"explicit {cls}(const std::string& name);  //!< registers the factory (Fortran)")
+            hpp.emit(1, f"explicit {cls}(const std::string& name{', ' + cparams if consts else ''});"
+                        "  //!< registers the factory (Fortran)")
         hpp.emit(1, f"virtual ~{cls}();" + ("  //!< frees its C struct" if factory is None else "  //!< unregisters it"))
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to C / Fortran")
         hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
         all_methods = methods + cpp_only
+        for line in const_todo:
+            hpp.emit(1, f"// {TODO}: {line}")
+        docs = self.component_docs(lt)
+        for v, k in consts:                     # constants: const getters (C struct)
+            hpp.emit(0, "")
+            for line in docs.get(v.name, []) or [f"constant {v.cname}"]:
+                hpp.emit(1, f"{self.cfg['doxygen']} {line}".rstrip())
+            hpp.emit(1, f"{'bool' if k == 'logical' else tr.cpp_type(v)} {v.cname}() const;")
         self.pure_virtuals(hpp, all_methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
@@ -513,18 +548,23 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(0, "};")
         hpp.emit(0, "")
         init = [f"  c_->{bd.name} = &{m['tramp']};" for bd, _, m in live] + \
-            (["  c_->destroy = &destroy_wrapper;"] if factory is None else []) + ["  c_->userData = this;"]
+            (["  c_->destroy = &destroy_wrapper;"] if factory is None else []) + \
+            [f"  c_->{v.cname} = {v.cname};" for v, _ in consts] + ["  c_->userData = this;"]
         reg, unreg = self.c_name(lt, "register"), self.c_name(lt, "unregister")
         if factory is None:
-            lines = [f"{name}::{cls}() : c_(std::make_unique<{ht}>())", "{"] + init + ["}", "",
+            lines = [f"{name}::{cls}({cparams}) : c_(std::make_unique<{ht}>())", "{"] + init + ["}", "",
                      f"{name}::~{cls}() = default;", "",
                      f"void {cls}::destroy_wrapper({ht}* self) noexcept", "{",
                      f"  std::unique_ptr<{cls}> owner(static_cast<{cls}*>(self->userData));  // deletes it", "}", ""]
         else:
-            lines = [f"{name}::{cls}(const std::string& name) : c_(std::make_unique<{ht}>()), name_(name)", "{"] + \
+            lines = [f"{name}::{cls}(const std::string& name{', ' + cparams if consts else ''}) : "
+                     f"c_(std::make_unique<{ht}>()), name_(name)", "{"] + \
                 init + [f"  {reg}(c_.get(), name_.c_str());", "}", "",
                         f"{name}::~{cls}()", "{", f"  {unreg}(name_.c_str());", "}", ""]
         lines += [f"{ht}* {cls}_private::toC(const {cls}& x)", "{", "  return x.c_.get();", "}", ""]
+        for v, k in consts:
+            lines += [f"{'bool' if k == 'logical' else tr.cpp_type(v)} {cls}::{v.cname}() const", "{",
+                      f"  return c_->{v.cname};", "}", ""]
         self.emit_lines(cpp, lines + [x for _, _, m in live for x in m["cpp"]])
         self.default_methods(cpp, all_methods)
         self.needs_cstdio = True
@@ -541,7 +581,10 @@ inline {ah}* to_fortran(const std::any& v)
                          f"  type, bind(C), public :: {st}"] + \
             [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
+            [f"    {self.f_type(v)} :: {v.cname} = " + (".false." if k == "logical" else "0") for v, k in consts] + \
             ["    type(C_PTR) :: userData = C_NULL_PTR  !< the implementation (C++ or Fortran object)", f"  end type {st}", ""]
+        to_f = [f"{v.cname} = logical(@%c%{v.cname})" if k == "logical" else f"{v.cname} = @%c%{v.cname}"
+                for v, k in consts]             # constants: C struct -> Fortran object (@: the object)
         # --- c_wrapper module: the Fortran type implemented by the C++ object
         cw["spec"] += [f"  !> {ft} implemented in C++" + (" (owns the C++ object)" if factory is None else ""),
                        f"  type, extends({ft}), public :: {bridge}", f"    type({st}), pointer :: c => null()",
@@ -561,7 +604,7 @@ inline {ah}* to_fortran(const std::any& v)
                             f"  subroutine {wrap}(c, x)", "    type(C_PTR), intent(in) :: c",
                             f"    class({ft}), allocatable, target, intent(out) :: x", "",
                             f"    allocate({bridge} :: x)", "    select type (x)", f"    type is ({bridge})",
-                            "      call c_f_pointer(c, x%c)", "    end select",
+                            "      call c_f_pointer(c, x%c)"] + [f"      x%{a.replace('@', 'x')}" for a in to_f] + ["    end select",
                             f"  end subroutine {wrap}"]
         else:                                   # registration of the C++ factory under a name
             name_in = cfg["wrap_string_in"]
@@ -571,7 +614,7 @@ inline {ah}* to_fortran(const std::any& v)
                             "  !> registers the C++ factory under name (Fortran factory registration)",
                             f"  subroutine {reg}(factory, name) bind(C, name=\"{reg}\")"] + self.dllexport(reg) + \
                 ["    type(C_PTR), value :: factory, name", f"    type({bridge}) :: f", "",
-                 "    call c_f_pointer(factory, f%c)",
+                 "    call c_f_pointer(factory, f%c)"] + [f"    f%{a.replace('@', 'f')}" for a in to_f] + [
                  f"    call {factory['register']}({name_in[1]}(name), f)      ! stores a copy",
                  f"  end subroutine {reg}", "",
                  f"  subroutine {unreg}(name) bind(C, name=\"{unreg}\")"] + self.dllexport(unreg) + \
@@ -592,6 +635,8 @@ inline {ah}* to_fortran(const std::any& v)
         st, fw, wcls = f"{cc}_c", f"{cc}Wrapper_type", f"CWrapper{re.sub(r'^Abstract', '', cls)}"
         create = f"create_{thing}_C_from_Fortran"
         used, entries, todos = set(), [], []
+        consts = self.reverse_constants(lt)[0]
+        base = f" : {cls}({', '.join('{}' for _ in consts)})" if consts else ""
         for bd, iface, todo in methods:         # todo: no function pointer in the struct
             routine = f"wrap_{bd.name}"
             if routine in self.wrap_routines:   # several reverse types in the module
@@ -609,6 +654,8 @@ inline {ah}* to_fortran(const std::any& v)
                f"  subroutine {create}(fthing, cthing, ierr)", f"    type({fw}), target, intent(in) :: fthing",
                f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
             [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
+            [f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else
+                                         f"fthing%ptr%{v.cname}") for v, k in consts] + \
             [f"    ! {TODO}: {bd.spelling} not wrapped ({todo}): C++ {wcls}::{bd.spelling} throws"
              for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
@@ -622,8 +669,9 @@ inline {ah}* to_fortran(const std::any& v)
         self.emit_lines(hpp, [f"namespace {ns}", "{", "",
                               f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}); the struct outlives it",
                               f"class {wcls} final : public {cls}", "{", "public:",
+                              f"  {wcls}(){base} {{}}  //!< empty object (tests): the methods throw" if consts else
                               f"  {wcls}() = default;  //!< empty object (tests): the methods throw",
-                              f"  explicit {wcls}({ht}& c) : other_(&c) {{}}  //!< calls the function pointers of c"])
+                              f"  explicit {wcls}({ht}& c);  //!< calls the function pointers of c"])
         for bd, iface in [(e[0], e[1]) for e in entries]:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             self.emit_lines(hpp, ["", f"  {over}", f"  {ret} {bd.spelling}({params}){const} override;"])
@@ -636,6 +684,9 @@ inline {ah}* to_fortran(const std::any& v)
         cpp.emit(0, f"namespace {ns}")
         cpp.emit(0, "{")
         cpp.emit(0, "")
+        self.emit_lines(cpp, [f"{wcls}::{wcls}({ht}& c) : " +
+                              (f"{cls}({', '.join('c.' + v.cname for v, _ in consts)}), " if consts else "") +
+                              "other_(&c)", "{", "}", ""])
         for bd, iface, routine, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
