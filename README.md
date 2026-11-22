@@ -218,7 +218,7 @@ Listeners: `wrap_listeners = ["AbstractListener_type"]` (abstract type with defe
 arguments: the owner object, real / integer / logical scalars, real / integer rank-1 arrays; error flag). C++:
 class `AbstractListener` with pure virtual methods (no error argument) and private static trampolines
 `state_changed_wrapper(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr or through
-`log_error = "project_log_error"` (`project_log_error("<Class>", e.what())`, header: `log_error_include`); without error flag:
+`log_error = "project_log_error"` (`project_log_error("<Class>", ("encountered exception in <method>: " + std::string(e.what())).c_str())`, `catch (...)`: `"encountered exception in <method>"`; header: `log_error_include`); without error flag:
 terminate); non-copyable (its Fortran object knows its address). The binding defines
 `AbstractListener_cpp` extending the Fortran type: `userData` (the C++ listener), `user` / `owner` (the C++ /
 Fortran object it was set on) and one `type(C_FUNPTR)` per method, passed by the C++ constructor to

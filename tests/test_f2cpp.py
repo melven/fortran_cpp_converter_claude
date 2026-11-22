@@ -1685,7 +1685,10 @@ def test_wrapped_listener(tmp_path):
     assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
     assert "extern" not in cpp and "    *ierr = -1;" in cpp
     # error logging (log_error): instead of std::fprintf
-    assert '    project_log_error("AbstractListener", e.what());' in cpp and "fprintf" not in cpp
+    assert '    project_log_error("AbstractListener", ("encountered exception in state_changed: " + ' \
+           'std::string(e.what())).c_str());' in cpp and "fprintf" not in cpp
+    assert '  catch (...)\n  {\n    project_log_error("AbstractListener", "encountered exception in state_changed");\n' \
+           '    *ierr = -1;' in cpp and "#include <string>" in cpp
     assert '#include "project_log.hpp"' in cpp and "<cstdio>" not in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
@@ -1942,6 +1945,8 @@ def test_reverse_wrapped_types(tmp_path):
            "  static void destroy_wrapper(" in th
     assert "  std::unique_ptr<project_AbstractThing> c_;" in th and "#include \"thing_mod.h\"" not in th
     assert "  std::unique_ptr<AbstractThing> owner(static_cast<AbstractThing*>(self->userData));  // deletes it" in tc
+    assert '    std::fprintf(stderr, "AbstractThing: encountered exception in evaluate: %s\\n", e.what());' in tc
+    assert '    std::fprintf(stderr, "AbstractThing: encountered exception in evaluate\\n");' in tc
     assert "  explicit AbstractThingFactory(const std::string& name);" in fh
     assert "  virtual void create_thing(const Config& config, std::unique_ptr<AbstractThing>& thing) const = 0;" in fh
     assert "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;\n" \

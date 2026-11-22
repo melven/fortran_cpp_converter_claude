@@ -1057,8 +1057,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         """header of the error logging in catch blocks (log_error) or <cstdio>"""
         if not self.needs_cstdio:
             return []
-        inc = self.cfg["log_error_include"] if self.cfg["log_error"] else "<cstdio>"
-        return [f"#include {inc}", ""] if inc else []
+        if not self.cfg["log_error"]:
+            return ["#include <cstdio>", ""]
+        inc = self.cfg["log_error_include"]
+        return ["#include <string>", ""] + ([f"#include {inc}", ""] if inc else [])
 
     def cpp_file_header(self, ext, prefix=None, suffix=""):
         from .emit import plain_comment
