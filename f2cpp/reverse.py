@@ -597,7 +597,6 @@ inline {ah}* to_fortran(const std::any& v)
                 todos.append((bd, iface, part.get("todo", todo)))
                 continue
             self.wrap_routines.add(routine)
-            fb += part["fortran"]
             entries.append((bd, iface, routine, part))
         # create_<Thing>_C_from_Fortran
         self.bridges += [f"  !> a Fortran implementation of {ft} for C (target of userData)", f"  type, public :: {fw}",
@@ -610,6 +609,8 @@ inline {ah}* to_fortran(const std::any& v)
              for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
         self.public_extra.append(create)
+        for _, _, _, part in entries:          # after create_<Thing>_C_from_Fortran
+            fb += part["fortran"]
         # C++ <Abstract>_private::CWrapper<Thing> (own files <stem>_c_wrapper.hpp / .cpp)
         hpp, cpp = self.cwc["hpp"], self.cwc["cpp"]
         ns = self.private_ns(name)
