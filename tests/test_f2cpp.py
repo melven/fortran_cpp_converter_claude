@@ -40,6 +40,11 @@ def out(tmp_path_factory):
     return d, report
 
 
+def flat(text):
+    """C declarations with one parameter per line -> one line"""
+    return re.sub(r",\n[ !]*", ", ", text)
+
+
 def read(out, name):
     with open(os.path.join(out[0], name)) as f:
         return f.read()
@@ -253,8 +258,8 @@ def test_pfunit(out):
     assert not os.path.exists(os.path.join(out[0], "test_poly_mod.hpp"))
     # a test module used by another test module gets a header for its types, constants and helpers
     h = read(out, "test_helpers_mod.hpp")
-    assert "class poly_fixture final\n{" in h and "scalar geometric_sum(scalar x, int n);" in h
-    assert "inline const scalar test_tol = 1.e-13;" in h and "using namespace project;" in h
+    assert "class poly_fixture final\n{" in h and "scalar geometric_sum(scalar x, int n);" in flat(h)
+    assert "inline const scalar test_tol = 1.e-13;" in h and "using namespace project;" in flat(h)
     hc = read(out, "test_helpers_mod.cpp")
     assert '#include "test_helpers_mod.hpp"' in hc and "void poly_fixture::prepare(int degree)" in hc
     assert "static" not in hc
@@ -842,12 +847,12 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     hpp, cpp, h = (read((d,), "mysolver_mod.hpp"), read((d,), "mysolver_mod.cpp"), read((d,), "mysolver_mod.h"))
     binding = read((d,), "mysolver_mod_c_binding.F90")
     assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
-           "int* ierr);" in h
-    assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in h
+           "int* ierr);" in flat(h)
+    assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in flat(h)
     assert "typedef struct project_MySolver\n{\n  void* p_impl = nullptr;\n  int n = 0;\n  PROJECT_REAL* diag = nullptr;\n" \
-           "  int diag_size = 0;\n  PROJECT_REAL weights[3] = {};\n  project_SolverParams params;\n} project_MySolver;" in h
+           "  int diag_size = 0;\n  PROJECT_REAL weights[3] = {};\n  project_SolverParams params;\n} project_MySolver;" in flat(h)
     assert "typedef struct project_SolverParams\n{\n  int maxit = 0;\n  PROJECT_REAL tol = 0;\n  bool restart = false;\n" \
-           "  PROJECT_REAL w[2] = {};\n} project_SolverParams;" in h
+           "  PROJECT_REAL w[2] = {};\n} project_SolverParams;" in flat(h)
     assert "!typedef struct project_MySolver\n!{\n!  void* p_impl = nullptr;\n" in binding
     assert "  type, bind(C) :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
            "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
@@ -895,7 +900,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
     assert "  //! component verbose\n  bool verbose() const;\n  //! component verbose (setter)\n  void verbose(bool value);\n" \
            "  //! component coupling\n  Eigen::Map<mat> coupling();\n" in hpp
-    assert "void project_MySolver_verbose_set(project_MySolver* mySolver, bool value);" in h
+    assert "void project_MySolver_verbose_set(project_MySolver* mySolver, bool value);" in flat(h)
     assert "    obj%verbose = value\n  end subroutine project_MySolver_verbose_set" in binding
     assert "void MySolver::verbose(bool value)\n{\n  project_MySolver_verbose_set(handle_, value);\n}" in cpp
     assert "  Eigen::Map<mat> coupling();\n  //! component coupling (const version)\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
@@ -910,14 +915,14 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
         assert "scalar residual_norm(const vec& r, const vec& b, int n)\n{\n  scalar res = (r - b).cwiseAbs().maxCoeff();" in cpp
         assert "scalar MySolver::norm(const vec& x) const\n{\n" in cpp and "diag()" in cpp
     else:
-        assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in h
+        assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in flat(h)
         assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
     # size unknown in Fortran (x(:) without check): passed from C++
-    assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in h
+    assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in flat(h)
     assert "  project_scale_vector(x.data(), static_cast<int>(x.size()), factor, &ierr);" in cpp
     assert "    integer(C_INT), value :: x_n1\n" in binding
     # optional string: NULL pointer
-    assert "int project_tagged_length(const char* msg, const char* tag);" in h
+    assert "int project_tagged_length(const char* msg, const char* tag);" in flat(h)
     assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
     assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
     assert "    if (c_associated(tag)) allocate(tag_f, source=str_array_ptr_to_str(tag))\n" \
@@ -951,7 +956,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert res[10] == "project_MySolver_apply: size of x"
     # logical arrays: bool copies; optional: NULL = absent (unallocated)
     assert "PROJECT_REAL project_MySolver_masked_sum(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
-           "const bool* modelmask, int modelmask_n1);" in h
+           "const bool* modelmask, int modelmask_n1);" in flat(h)
     assert "    logical(C_BOOL), pointer :: modelmask_c(:)\n    logical, allocatable :: modelmask_f(:)\n" in binding
     assert "    if (c_associated(modelmask)) then\n      call c_f_pointer(modelmask, modelmask_c, [modelmask_n1])\n" \
            "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
@@ -961,7 +966,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
            "    if (allocated(pos_f)) pos_c = logical(pos_f, C_BOOL)" in binding
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
-           "PROJECT_REAL* r, const PROJECT_REAL* w);" in h
+           "PROJECT_REAL* r, const PROJECT_REAL* w);" in flat(h)
     assert "    type(C_PTR), value :: r\n    real(C_REAL), pointer :: r_f(:)\n" in binding and "=> null()\n    real(C" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
     assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
@@ -983,8 +988,8 @@ def test_c_names_follow_the_namespace(tmp_path):
     w = os.path.join(CORPUS, "wrapped")
     translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
-    assert "typedef struct flow_MySolver\n{" in h and "#define FLOW_REAL double" in h
-    assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in h
+    assert "typedef struct flow_MySolver\n{" in h and "#define FLOW_REAL double" in flat(h)
+    assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in flat(h)
     assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
 
 
@@ -1469,7 +1474,7 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
     assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
     assert "typedef struct project_Offsets\n{\n  int row = 0;\n  int col = 0;\n  PROJECT_REAL w[2] = {};\n" \
            "  PROJECT_REAL* scale = nullptr;\n  int scale_size = 0;\n  int* idx = nullptr;\n  int idx_size = 0;\n" \
-           "  bool mask[2] = {};\n  bool* active = nullptr;\n  int active_size = 0;\n} project_Offsets;" in h
+           "  bool mask[2] = {};\n  bool* active = nullptr;\n  int active_size = 0;\n} project_Offsets;" in flat(h)
     # logical arrays: copied into logical(C_BOOL) (the buffer is released in destroy)
     assert "    this_c%offsets%mask = logical(obj%offsets%mask, C_BOOL)\n" in b
     assert "      allocate(buf1(size(obj%offsets%active)))\n      buf1 = logical(obj%offsets%active, C_BOOL)\n" in b
@@ -1507,7 +1512,7 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
     assert "for (int i = 0; i < static_cast<int>(b.arr_offset1().size()); ++i)" in user
     assert "sum_offsets = sum_offsets + b.arr_offset1()[i];" in user
     b, h = (tmp_path / "blocks_mod_c_binding.F90").read_text(), (tmp_path / "blocks_mod.h").read_text()
-    assert "  int* arr_offset1 = nullptr;\n  int arr_offset1_size = 0;\n" in h
+    assert "  int* arr_offset1 = nullptr;\n  int arr_offset1_size = 0;\n" in flat(h)
     assert "    if (allocated(obj%arr)) then\n      allocate(buf1(size(obj%arr)))\n      buf1 = obj%arr(:)%offset1\n" \
            "      if (size(buf1) > 0) this_c%arr_offset1 = c_loc(buf1(1))\n      this_c%arr_offset1_size = size(obj%arr)" in b
     assert "obj%arr_offset" not in b and "  //! first row\n  Eigen::Map<const Eigen::VectorXi> arr_offset1() const;" in hpp
@@ -1599,8 +1604,8 @@ def test_wrapped_owned_objects_in_arrays(tmp_path):
            "  InternalStateWrapper(InternalStateWrapper&& o) noexcept;  //!< takes over the Fortran object of o\n" in hpp
     assert "  //! Fortran model_save (undocumented)\n  void save(std::vector<InternalStateWrapper>& checkpoints) const;\n" \
            "  //! Fortran model_restore (undocumented)\n  void restore(const std::vector<InternalStateWrapper>& checkpoints);" in hpp
-    assert "void project_Model_save(const project_Model* model, project_InternalStateWrapper** checkpoints, int* ierr);" in h
-    assert "void project_InternalStateWrapper_free(project_InternalStateWrapper* internalStateWrapper);" in h
+    assert "void project_Model_save(const project_Model* model, project_InternalStateWrapper** checkpoints, int* ierr);" in flat(h)
+    assert "void project_InternalStateWrapper_free(project_InternalStateWrapper* internalStateWrapper);" in flat(h)
     assert "        allocate(checkpoints_e, source=checkpoints_f(checkpoints_i))\n" \
            "        checkpoints(checkpoints_i) = project_InternalStateWrapper_setup(checkpoints_e)" in b
     assert "      checkpoints_f(checkpoints_i) = checkpoints_e" in b
@@ -1665,10 +1670,11 @@ def test_wrapped_listener(tmp_path):
     assert "  //! internal wrapper for state_changed\n  static void state_changed_wrapper(" in hpp
     assert "  void set_listener(std::optional<std::reference_wrapper<AbstractListener>> listener = std::nullopt);" in hpp
     assert "typedef void (*project_AbstractListener_state_changed)(void*, void*, PROJECT_REAL, const PROJECT_REAL*, " \
-           "int, int*);" in h
+           "int, int*);" in flat(h)
     assert "project_AbstractListener* project_AbstractListener_create(void* userData, " \
-           "project_AbstractListener_state_changed state_changed_fn);" in h
-    assert "!@end_c_declaration\n  abstract interface\n    !> AbstractListener::state_changed_wrapper\n" \
+           "project_AbstractListener_state_changed state_changed_fn);" in flat(h)
+    assert "  abstract interface\n!@c_declaration\n!typedef void (*project_AbstractListener_state_changed)(" in b
+    assert "!@end_c_declaration\n    !> AbstractListener::state_changed_wrapper\n" \
            "    subroutine project_AbstractListener_state_changed(userData, thing, old, history, history_n, ierr) bind(C)" in b
     assert "AbstractListener::AbstractListener() : fortran_(project_AbstractListener_create(this, " \
            "&AbstractListener::state_changed_wrapper))" in cpp
@@ -1789,11 +1795,13 @@ end module lng_mod
     translate([], cfg(), str(tmp_path), wrap=[str(tmp_path / "lng_mod.F90")])
     b = (tmp_path / "lng_mod_c_binding.F90").read_text()
     cname = "project_VeryLongClassNameForTesting_compute_something_with_a_rather_long_name"
-    assert len(cname) > 63 and f'bind(C, name="{cname}")' in b and f"\n!  PROJECT_REAL {cname}(" in b and "\n!@c_declaration\n" in b and "  !@c_declaration" not in b
+    assert len(cname) > 63 and f'bind(C, name="{cname}")' in b and f"\n!  PROJECT_REAL {cname}(\n!      const project_VeryLongClassNameForTesting* " in b and "\n!@c_declaration\n" in b and "  !@c_declaration" not in b
     names = re.findall(r"^\s*(?:end )?(?:subroutine|function)\s+(\w+)", b, flags=re.M)
     assert names and max(len(n) for n in names) <= 63
-    if shutil.which("gfortran"):
-        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-I" + CORPUS,
+    # free form line limit (comments included): long code lines continued, C declarations one parameter per line
+    assert max(len(line) for line in b.split("\n")) <= 132
+    if shutil.which("gfortran"):                # default line length (132)
+        run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-I" + CORPUS,
              str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))
 
 
@@ -1900,16 +1908,21 @@ def test_reverse_wrapped_types(tmp_path):
     fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
     h, lh, lc = ((tmp_path / f).read_text() for f in ("thing_mod.h", "linear_thing_mod.hpp", "linear_thing_mod.cpp"))
     # C struct per C++ object: function pointers (typedefs named like the abstract interfaces), destroy, userData
-    assert "typedef struct project_AbstractThing project_AbstractThing;" in h
-    assert "typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*, const PROJECT_REAL*, int, " \
-           "PROJECT_REAL*, int, int*);" in h
+    assert "typedef struct project_AbstractThing project_AbstractThing;" in flat(h)
+    assert "typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*,\n" + \
+           "".join(" " * 47 + p + "\n" for p in ("const PROJECT_REAL*,", "int,", "PROJECT_REAL*,", "int,", "int*);")) in h
+    assert "typedef void (*project_AbstractThing_weight)(project_AbstractThing*, PROJECT_REAL*);" in h   # short
     assert "struct project_AbstractThing\n{\n  project_AbstractThing_evaluate evaluate = nullptr;\n" \
-           "  project_AbstractThing_weight weight = nullptr;\n  project_AbstractThing_reset reset = nullptr;\n" in h
+           "  project_AbstractThing_weight weight = nullptr;\n  project_AbstractThing_reset reset = nullptr;\n" in flat(h)
     assert "  project_AbstractThing_destroy destroy = nullptr;\n  void* userData = nullptr;\n};" in h and "p_impl" not in h
     assert h.index("typedef void (*project_AbstractThing_destroy)") < h.index("struct project_AbstractThing\n{")
-    assert "!typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*, const PROJECT_REAL*, int, " \
-           "PROJECT_REAL*, int, int*);\n!@end_c_declaration\n  abstract interface\n" \
+    # one abstract interface block, the typedef before each interface body
+    assert tb.count("  abstract interface\n") == 1
+    assert "  ! interface declarations\n  abstract interface\n!@c_declaration\n" \
+           "!typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*,\n" in tb
+    assert "!" + " " * 47 + "int*);\n!@end_c_declaration\n" \
            "    !> AbstractThing::evaluate_wrapper\n    subroutine project_AbstractThing_evaluate(" in tb
+    assert "    end subroutine project_AbstractThing_evaluate\n\n!@c_declaration\n!typedef void (*project_AbstractThing_weight)" in tb
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
     assert "  virtual void evaluate(const vec& x, vec& y) = 0;" in th and "  virtual scalar weight() const = 0;" in th
     # bindings with a default implementation: virtual, the translated default, forwarded as well
@@ -1939,7 +1952,7 @@ def test_reverse_wrapped_types(tmp_path):
            "  public :: project_AbstractThing_wrap\n\n  !" + "=" * 80 + "\n  ! type declarations\n  !> AbstractThing_type" in tw
     # precision macros before the module; interfaces, then types (each under a section comment)
     assert "#define C_REAL C_DOUBLE\n#endif\n\nmodule thing_mod_c_binding\n" in tb
-    assert tb.index("  ! interface declarations\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
+    assert tb.index("  ! interface declarations\n  abstract interface\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
         tb.index("  ! type declarations\n!@c_declaration\n!struct project_AbstractThing\n") < tb.index("\ncontains\n")
     assert "public :: cwrapperthing_evaluate" not in tw
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_p, int(size(x_c), C_INT), y_p, " \
@@ -2010,8 +2023,8 @@ def test_wrapped_unlimited_polymorphic_state(tmp_path):
     assert "  void get_state(std::any& state) const;" in hpp and "  void set_state(const std::any& state);" in hpp
     h = (tmp_path / "fstate_mod.h").read_text()
     assert "class FortranState" in hpp and "#include <any>" in hpp and "struct project_FortranAny;" in hpp
-    assert "void project_Counter_get_state(const project_Counter* counter, project_FortranAny** state, int* ierr);" in h
-    assert "void project_Counter_set_state(project_Counter* counter, project_FortranAny* state, int* ierr);" in h
+    assert "void project_Counter_get_state(const project_Counter* counter, project_FortranAny** state, int* ierr);" in flat(h)
+    assert "void project_Counter_set_state(project_Counter* counter, project_FortranAny* state, int* ierr);" in flat(h)
     assert "  state = f2cpp_any::from_fortran(state_h, &project_fstate_mod_any_release);" in cpp
     assert "project_Counter_set_state(handle_, f2cpp_any::to_fortran(state), &ierr);" in cpp
     assert "    call f2cpp_any_from_holder(state, state_f)\n" in b and "    call f2cpp_any_back(state, state_f)" in b

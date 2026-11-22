@@ -1315,14 +1315,14 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
     def finish_module(self, b):
         """C declarations in the first column, only-lists, private with one public statement per name"""
         mod = self.mod
-        inside = False
-        for k, line in enumerate(b):
+        inside, out = False, []
+        for line in b:
             if line.strip() == "!@c_declaration":
                 inside = True
-            if inside:
-                b[k] = line.lstrip()
+            out += split_params(line.lstrip(), self.cfg["c_decl_width"]) if inside else [line]
             if line.strip() == "!@end_c_declaration":
                 inside = False
+        b[:] = [x for line in out for x in fortran_continue(line)]
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         types = []                                  # public: one statement per name (types included)
@@ -1346,6 +1346,59 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
 
 
 SEPARATOR = "  !" + "=" * 80
+
+
+def fortran_continue(line, width=132):
+    """Fortran code lines longer than width (free form limit): continued (&) at a blank outside strings"""
+    if len(line) <= width or line.lstrip().startswith(("!", "#")):
+        return [line]
+    ind = " " * (len(line) - len(line.lstrip()) + 4)
+    res, rest = [], line
+    while len(rest) > width:
+        quote, cut, good = None, None, None     # good: after a comma or before result( / bind(
+        for k, ch in enumerate(rest[:width - 2]):
+            if ch in "\"'" and quote in (None, ch):
+                quote = None if quote else ch
+            elif ch == " " and quote is None and k > len(ind):
+                cut = k
+                if rest[k - 1] == "," and not rest[:k].rstrip(",").endswith("bind(C") or \
+                        rest.startswith(("result(", "bind("), k + 1):
+                    good = k
+        cut = good or cut
+        if cut is None:
+            break
+        res.append(rest[:cut] + " &")
+        rest = ind + rest[cut + 1:].lstrip()
+    return res + [rest]
+
+
+def split_params(line, width):
+    """a C declaration (comment line) longer than width: one parameter per line, aligned after the parenthesis"""
+    if len(line) <= width or not line.rstrip().endswith(");"):
+        return [line]
+    text = line.rstrip()
+    depth, open_ = 0, None
+    for k in range(len(text) - 2, -1, -1):          # the parenthesis of the (last) parameter list
+        depth += {")": 1, "(": -1}.get(text[k], 0)
+        if depth == 0 and text[k] == "(":
+            open_ = k
+            break
+    if open_ is None:
+        return [line]
+    params, depth, cur = [], 0, ""
+    for ch in text[open_ + 1:-2]:
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if ch == "," and depth == 0:
+            params.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    params.append(cur.strip())
+    if len(params) < 2:                         # one parameter: on its own line only beyond the Fortran limit
+        ind = len(text[1:]) - len(text[1:].lstrip())
+        return [line] if len(text) <= 132 else [text[:open_ + 1], "!" + " " * (ind + 4) + params[0] + ");"]
+    pad = "!" + " " * open_
+    return [text[:open_ + 1] + params[0] + ","] + [pad + p + "," for p in params[1:-1]] + [pad + params[-1] + ");"]
 
 
 def section(title):
@@ -1386,6 +1439,13 @@ def spec_sections(b, start):
     if head:                                    # like a use statement: between implicit none and private
         k = out.index("  implicit none")
         out[k + 1:k + 1] = [""] + head + [""]
+    abstract = [c for c in chunks["interface"] if "  abstract interface" in c and c[-1] == "  end interface"]
+    if abstract:                                # one abstract interface block with all interface bodies
+        merged = ["  abstract interface"]
+        for i, c in enumerate(abstract):
+            merged += ([""] if i else []) + [x for j, x in enumerate(c)
+                                             if x != "  abstract interface" and j != len(c) - 1]
+        chunks["interface"] = [merged + ["  end interface"]] + [c for c in chunks["interface"] if c not in abstract]
     for kind, title in (("interface", "interface declarations"), ("type", "type declarations")):
         if chunks[kind]:
             out += [""] + section(title)
