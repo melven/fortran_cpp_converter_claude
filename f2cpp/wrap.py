@@ -178,7 +178,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             cpp.emit(0, "")
             cpp.emit(0, f"{name}& {name}::operator=({cls}&& o) noexcept")
             cpp.emit(0, "{")
-            cpp.emit(1, "if (this != &o)")
+            cpp.emit(1, "if( this != &o )")
             cpp.emit(1, "{")
             cpp.emit(2, f"{free}({hm});")
             cpp.emit(2, f"{hm} = o.{hm};")
@@ -784,7 +784,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 except Untranslatable:
                     codes = None
                 if intent == "out" and codes is not None and "Ref<" not in tr.param_type(v):
-                    glue.append(("pre", (f"if ({present}) " if present else "") + f"{obj}.resize({', '.join(codes)});"))
+                    glue += ([("pre", f"if( {present} )")] if present else []) + \
+                        [("pre", ("  " if present else "") + f"{obj}.resize({', '.join(codes)});")]
                 elif intent == "out" and "Ref<" not in tr.param_type(v):    # known in Fortran only
                     self.report.add("todo", "wrap-out-size")
                     glue.append(("pre", f"// {TODO}: size of {v.cname} ({', '.join(dims)} in Fortran) not "
@@ -799,7 +800,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes, strict=True))
                     if present:
                         cond = f"{present} && ({cond})"
-                    glue.append(("pre", f'if ({cond}) throw std::invalid_argument("{cname}: size of {v.cname}");'))
+                    glue += [("pre", f"if( {cond} )"),       # {WHERE}: the C++ method (known below)
+                             ("pre", f'  throw std::invalid_argument("{{WHERE}}: wrong dimension of parameter {v.cname}!");')]
         if has_err:
             f_args.append("ierr")
             decls.append("integer(C_INT), intent(out) :: ierr")
@@ -845,7 +847,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         cpp.emit(0, "{")
         for g in glue:
             if isinstance(g, tuple) and g[0] == "pre":
-                cpp.emit(1, g[1])
+                cpp.emit(1, g[1].replace("{WHERE}", f"{qual}{name}"))
         cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] +
                           (["&ierr"] if has_err else []))
         if has_err:
@@ -862,7 +864,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         if r is not None and posts and not has_err:
             cpp.emit(1, "return res;")
         if has_err:
-            cpp.emit(1, f'if (ierr != 0) throw std::runtime_error("ierr!=0 returned from {cname}");')
+            cpp.emit(1, "if( ierr != 0 )")
+            cpp.emit(2, f'throw std::runtime_error("Error: calling C function {cname} in {qual}{name}!");')
             if r is not None:
                 cpp.emit(1, "return res;")
         cpp.emit(0, "}")

@@ -921,9 +921,10 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "void MySolver::verbose(bool value)\n{\n  project_MySolver_verbose_set(handle_, value);\n}" in cpp
     assert "  Eigen::Map<mat> coupling();\n  //! component coupling (const version)\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
-    assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
-           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
-           '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
+    assert '  if( x.size() != n() )\n    throw std::invalid_argument("MySolver::apply: wrong dimension of parameter x!");\n' \
+           '  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n' \
+           '  if( ierr != 0 )\n    throw std::runtime_error("Error: calling C function project_MySolver_apply in ' \
+           'MySolver::apply!");' in cpp
     # module procedures
     assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
     if translated:                      # C++ implementations, no binding
@@ -969,7 +970,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     for a, b in zip(vals, ref, strict=True):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
     assert res[9] == "1" and ref_flag == "1"                         # logical setter
-    assert res[10] == "project_MySolver_apply: size of x"
+    assert res[10] == "MySolver::apply: wrong dimension of parameter x!"
     # logical arrays: bool copies; optional: NULL = absent (unallocated)
     assert "PROJECT_REAL project_MySolver_masked_sum(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "const bool* modelmask, int modelmask_n1);" in flat(h)
@@ -986,7 +987,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "    type(C_PTR), value :: r\n    real, pointer, contiguous :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
     assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
-    assert "  if (r) r->get().resize(n());\n" in cpp
+    assert "  if( r )\n    r->get().resize(n());\n" in cpp
     assert "project_MySolver_weighted(handle_, x.data(), r ? r->get().data() : nullptr, " \
            "w.size() > 0 ? w.data() : nullptr);" in cpp
 
@@ -1115,7 +1116,7 @@ def test_wrapped_class_hierarchy(tmp_path):
     vol2 = 4.0 / 3.0 * math.pi * 2.5 ** 3
     for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2], strict=True):
         assert a == pytest.approx(b, rel=1e-12)
-    assert lines[2] == "ierr!=0 returned from project_sphere_grow"
+    assert lines[2] == "Error: calling C function project_sphere_grow in sphere::grow!"
 
 
 def test_wrapped_class_with_hand_wrapped_base(tmp_path):
