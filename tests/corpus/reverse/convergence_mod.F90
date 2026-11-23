@@ -8,6 +8,7 @@ module convergence_mod
 
   type, abstract, extends(ModelBase_type) :: Thing_type
     integer :: inputSize = 1   !< size of the input
+    character(len=:), allocatable :: label   !< name of the model
   contains
     procedure :: check_convergence
   end type Thing_type

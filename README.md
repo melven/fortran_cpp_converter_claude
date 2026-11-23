@@ -243,10 +243,12 @@ LinearThingFactory_type = "linear"
 - abstract C struct `project_AbstractThing`: one function pointer per binding (the struct is the first
   argument), `destroy`, `userData` (the implementation: C++ or Fortran object); for C++ objects set by the
   C++ constructor
-- `wrap_constants` (`Thing_type = ["stateSize"]`, real / integer / logical scalars, also inherited components;
+- `wrap_constants` (`Thing_type = ["stateSize"]`, real / integer / logical / character scalars, also inherited components;
   first in the C struct): C struct members set by the
   C++ constructor (`explicit Thing(int stateSize)`), const getters `stateSize()` (used by translated defaults),
-  copied into the Fortran object by `project_Thing_wrap`; Fortran implementations: by `create_Thing_C_from_Fortran`
+  copied into the Fortran object by `project_Thing_wrap`; Fortran implementations: by `create_Thing_C_from_Fortran`;
+  character constants: `std::string` member in C++ (`c_str()` in the struct), C string copies allocated by
+  `create_Thing_C_from_Fortran` and freed by `destroy_Thing_C_from_Fortran(cthing, ierr)` (resets the struct)
 - array sizes that both sides know (integer literals and constants, from `wrap_sizes`, a size check or the
   documentation `dimension (this\%stateSize)`): no `_n` argument; Fortran checks `size(x)` (`ierr = -1`, or
   `wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`

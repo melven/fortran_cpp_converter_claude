@@ -2311,24 +2311,34 @@ def test_reverse_type_constants(tmp_path):
     (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
                                      'wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]\n'
                                      'wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]\n'
-                                     '[wrap_constants]\nThing_type = ["stateSize", "inputSize"]\n')
+                                     '[wrap_constants]\nThing_type = ["stateSize", "inputSize", "label"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     base = os.path.join(CORPUS, "reverse", "model_base_mod.F90")      # stateSize: inherited (not wrapped)
     translate([], c, d, wrap=[src], interface_only=[base])
     hpp, cpp, h = read((d,), "convergence_mod.hpp"), read((d,), "convergence_mod.cpp"), read((d,), "convergence_mod.h")
     b, cw = read((d,), "convergence_mod_c_binding.F90"), read((d,), "project_c_wrapper_convergence_mod.F90")
-    assert "  explicit Thing(int stateSize, int inputSize);  //!< creates its C struct (constants: stateSize, inputSize)" in hpp
+    assert "  explicit Thing(int stateSize, int inputSize, const std::string& label);  " \
+           "//!< creates its C struct (constants: stateSize, inputSize, label)" in hpp
+    # character constants: std::string in the C++ object, const char* in the struct; Fortran: C string copies
+    assert "  //! name of the model\n  const std::string& label() const;" in hpp and "  std::string label_;" in hpp
+    assert "  c_->label = label_.c_str();" in cpp and "  const char* label = nullptr;" in h
+    assert "      allocate(x%label, source=trim(str_array_ptr_to_str(x%c%label)))" in cw     # no realloc-lhs
+    assert "    if (allocated(fthing%ptr%label)) cthing%label = f2cpp_c_string_new(fthing%ptr%label)" in b
+    assert "  subroutine destroy_Thing_C_from_Fortran(cthing, ierr)\n" in b and \
+        "    call f2cpp_c_string_free(cthing%label)\n    cthing = Thing_c()\n" in b
+    assert "  public :: destroy_Thing_C_from_Fortran\n" in b
     assert "  //! size of the state\n  int stateSize() const;" in hpp
     assert "int Thing::stateSize() const\n{\n  return c_->stateSize;\n}" in cpp and "  c_->stateSize = stateSize;" in cpp
     assert "if (!(state.size() == stateSize()))" in cpp                   # translated default implementation
-    assert "struct project_Thing\n{\n  int stateSize = 0;\n  int inputSize = 0;\n" \
+    assert "struct project_Thing\n{\n  int stateSize = 0;\n  int inputSize = 0;\n  const char* label = nullptr;\n" \
            "  project_Thing_check_convergence check_convergence = nullptr;\n" in h      # constants first
     assert "  type, bind(C) :: Thing_c\n    integer(C_INT) :: stateSize = 0\n    integer(C_INT) :: inputSize = 0\n" \
-           "    type(C_FUNPTR) :: check_convergence = C_NULL_FUNPTR\n" in b
+           "    type(C_PTR) :: label = C_NULL_PTR  !< C string\n    type(C_FUNPTR) :: check_convergence = C_NULL_FUNPTR\n" in b
     assert "    integer(C_INT) :: stateSize = 0\n" in b and "    cthing%stateSize = fthing%ptr%stateSize" in b
     assert "      call c_f_pointer(c, x%c)\n      x%stateSize = x%c%stateSize\n      x%inputSize = x%c%inputSize" in cw
     cwc = read((d,), "convergence_mod_c_wrapper.cpp")
-    assert "CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize), other_(&c)" in cwc
+    assert 'CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize, ' \
+           'std::string(c.label != nullptr ? c.label : "")), other_(&c)' in cwc
     # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
     assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
@@ -2354,7 +2364,8 @@ def test_reverse_type_constants(tmp_path):
   use, intrinsic :: iso_c_binding, only: C_PTR, C_INT, c_loc
   use convergence_mod, only: Thing_type
   use project_c_wrapper_convergence_mod, only: project_Thing_wrap
-  use convergence_mod_c_binding, only: Thing_c, ThingWrapper_type, create_Thing_C_from_Fortran
+  use convergence_mod_c_binding, only: Thing_c, ThingWrapper_type, create_Thing_C_from_Fortran, &
+    destroy_Thing_C_from_Fortran
   implicit none
   type, extends(Thing_type) :: FThing_type      ! Fortran implementation (default check_convergence)
   end type FThing_type
@@ -2372,9 +2383,11 @@ contains
     type(Thing_c), target :: ct
     integer :: ierr
     ft%stateSize = 3
+    allocate(ft%label, source="fortran")             ! (-fno-realloc-lhs)
     fw%ptr => ft
     call create_Thing_C_from_Fortran(fw, ct, ierr)
-    print '(i4)', run_cpp(c_loc(ct))
+    print '(i5)', run_cpp(c_loc(ct))
+    call destroy_Thing_C_from_Fortran(ct, ierr)      ! frees the C string of the label
   end subroutine fortran_side
 
   subroutine use_thing(c) bind(C, name="use_thing")
@@ -2383,7 +2396,7 @@ contains
     logical :: again
     integer :: ierr
     call project_Thing_wrap(c, x)            ! owns the C++ object
-    print '(2i3)', x%stateSize, x%inputSize
+    print '(2i3, 1x, a)', x%stateSize, x%inputSize, x%label
     call x%check_convergence([1.0, 2.0], [3.0], 0.0, .false., again, ierr)
     print '(i3, l2)', ierr, again
     call x%check_convergence([1.0], [3.0], 0.0, .false., again, ierr)
@@ -2394,13 +2407,14 @@ end module drv_mod
     (tmp_path / "run.cpp").write_text(r"""#include "convergence_mod_c_wrapper.hpp"
 #include <memory>
 #include <stdexcept>
+#include <string>
 extern "C" void use_thing(project_Thing* c);
 extern "C" void fortran_side();
 extern "C" int run_cpp(project_Thing* c)       // the Fortran implementation in C++: 100 * stateSize + checks
 {
   project::Thing_private::CWrapperThing w(*c);
   bool again = true;
-  int code = 100 * w.stateSize();
+  int code = 100 * w.stateSize() + (w.label() == "fortran" ? 1000 : 0);
   w.check_convergence(project::vec::Zero(3), project::vec::Zero(1), 0.0, false, again);
   code += again ? 0 : 10;
   try
@@ -2416,7 +2430,7 @@ extern "C" int run_cpp(project_Thing* c)       // the Fortran implementation in 
 class MyThing : public project::Thing
 {
 public:
-  MyThing() : Thing(2, 1) {}
+  MyThing() : Thing(2, 1, "cpp") {}
 };
 int main()
 {
@@ -2429,14 +2443,15 @@ int main()
 """)
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
           "-Wno-unused-dummy-argument", "-I" + CORPUS]
-    for f in (base, src, "convergence_mod_c_binding.F90", "project_c_wrapper_convergence_mod.F90", "drv.F90"):
+    for f in (os.path.join(SUPPORT, "project_str.F90"), base, src, "convergence_mod_c_binding.F90",
+              "project_c_wrapper_convergence_mod.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("convergence_mod.cpp", "convergence_mod_c_wrapper.cpp", "run.cpp"):
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)       # convergence_mod.o: the Fortran module
-    run(["g++", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
+    run(["g++", "project_str.o", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:4] == ["  2  1", "  0 F", " -2", " 311"]     # -2: PROJECT_CHK_ARGUMENT
+    assert run(["./m"], d).split("\n")[:4] == ["  2  1 cpp", "  0 F", " -2", " 1311"]     # -2: PROJECT_CHK_ARGUMENT
 
 
 def test_reverse_class_star_cpp_data(tmp_path):
