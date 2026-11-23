@@ -9,6 +9,9 @@ from .prepass import CPP_MARK, PF_MARK, BLANK_MARK, ASSERT_PREFIX
 TODO = "TODO(f2cpp)"
 
 
+NON_WORD = r"\W"      # (no backslash inside f-string expressions: Python 3.11)
+
+
 class Untranslatable(Exception):
     """statement cannot be translated; it is emitted as commented Fortran"""
 
@@ -1167,7 +1170,6 @@ class Translator:
         if obj is None:
             raise Untranslatable("passed-object")
         qual = f"{tn}::" if t is not None and self.prog.polymorphic(t) else ""   # non-virtual call
-        sep = "->" if obj.raw is not None else "."
         if p.is_ctor or p.is_dtor:
             plain = self.member(obj, p.cname) + "()"
             return self.lifetime_call(p, obj, self.bound_args(p, rest),
@@ -1211,7 +1213,6 @@ class Translator:
         else:
             self.report.add("info", "unknown-binding:" + n)
             argc = self.plain_args(items_of(args))
-        sep = "->" if obj.raw is not None else "."
         spelled = cname(str(bname))             # spelling of the definition if known
         if owner is not None:
             spelled = b.spelling if b is not None else owner.generic_spelling.get(n, spelled)
@@ -2191,14 +2192,14 @@ class Translator:
                     continue
                 if any_sel:                     # class(*) as std::any: type() / any_cast
                     t = self.guard_type(tn)
-                    new = f"{alias}_{re.sub(r'\W', '_', t.split('::')[-1])}"
+                    new = f"{alias}_{re.sub(NON_WORD, '_', t.split('::')[-1])}"
                     self.emit(ind, f"{kw} ({obj}.type() == typeid({t})) {{")
                     self.emit(ind + 1, f"auto& {new} = std::any_cast<const {t}&>({obj});")   # read access
                     alias_line = (len(self.out) - 1, new)
                     self.overrides[alias] = Var(alias, new, *self.guard_var(tn), is_const=bool(const))
                     continue
                 t = self.prog.type_name(lname(tn), self.mod)
-                new = f"{alias}_{re.sub(r'\W', '_', t.split('::')[-1])}"
+                new = f"{alias}_{re.sub(NON_WORD, '_', t.split('::')[-1])}"
                 if kind == "TYPE IS":
                     self.emit(ind, f"{kw} (typeid({obj}) == typeid({t})) {{")
                 else:

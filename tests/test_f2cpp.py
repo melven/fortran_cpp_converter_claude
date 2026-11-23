@@ -55,6 +55,14 @@ def cxx(out, name):
         out[0])
 
 
+@pytest.mark.skipif(not os.environ.get("F2CPP_REQUIRE_TOOLCHAIN"), reason="only where the tool chain is required (CI)")
+def test_toolchain_present():
+    """CI: the compile / run tests must not be skipped (several of them return early without the tools)"""
+    missing = [t for t in ("g++", "gfortran", "valgrind") if not shutil.which(t)]
+    missing += [p for p in (EIGEN, "/usr/include/gtest/gtest.h") if not os.path.exists(p)]
+    assert not missing, f"missing: {missing}"
+
+
 def test_prepass_macros():
     c = config.load()
     src = "PROJECT_CHK_IERR(call foo(a, &\n   & b, ierr), ierr)\nPROJECT_ALLOCATE(x(n, m), ierr)\n" \
@@ -1507,7 +1515,7 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     src = os.path.join(CORPUS, "unwrap", "blocks_mod.F90")
     translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, d, wrap=[src])
-    hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
+    hpp = (tmp_path / "blocks_mod.hpp").read_text()
     user = (tmp_path / "blocks_user_mod.cpp").read_text()       # translated code using the wrapped class
     assert "for (int i = 0; i < static_cast<int>(b.arr_offset1().size()); ++i)" in user
     assert "sum_offsets = sum_offsets + b.arr_offset1()[i];" in user

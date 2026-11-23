@@ -806,7 +806,7 @@ inline {ah}* to_fortran(const std::any& v)
         thing = re.sub(r"^Abstract", "", cc)
         st, fw, wcls = f"{cc}_c", f"{cc}Wrapper_type", f"CWrapper{re.sub(r'^Abstract', '', cls)}"
         create = f"create_{thing}_C_from_Fortran"
-        used, entries, todos = set(), [], []
+        entries, todos = [], []
         consts = self.reverse_constants(lt)[0]
         base = f" : {cls}({', '.join('{}' for _ in consts)})" if consts else ""
         for bd, iface, todo in methods:         # todo: no function pointer in the struct
@@ -824,7 +824,7 @@ inline {ah}* to_fortran(const std::any& v)
         # create_<Thing>_C_from_Fortran
         self.bridges += [f"  !> a Fortran implementation of {ft} for C (target of userData)", f"  type, public :: {fw}",
                          f"    class({ft}), pointer :: ptr => null()", f"  end type {fw}", ""]
-        fb += ["", f"  !> the C struct of a Fortran implementation (the caller stores both; fthing must outlive cthing)",
+        fb += ["", "  !> the C struct of a Fortran implementation (the caller stores both; fthing must outlive cthing)",
                f"  subroutine {create}(fthing, cthing, ierr)", f"    type({fw}), target, intent(in) :: fthing",
                f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
             [f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else

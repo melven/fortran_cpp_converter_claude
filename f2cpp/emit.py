@@ -2,7 +2,7 @@
 import os
 import re
 
-from .model import cls, lname, items_of, Var
+from .model import cls, lname, items_of
 from .prepass import PF_MARK, CPP_MARK, BLANK_MARK
 from .translate import Translator, Untranslatable, TODO, par, is_zero, last_line
 
@@ -602,7 +602,7 @@ class ModuleEmitter:
                 tr.out[k] = f"// {TODO}: unbalanced preprocessor line: {s}"
                 self.report.add("todo", "unbalanced-preprocessor")
         for _ in range(depth):
-            tr.out.append(f"#endif  // TODO(f2cpp): added, the Fortran #endif could not be placed")
+            tr.out.append("#endif  // TODO(f2cpp): added, the Fortran #endif could not be placed")
             self.report.add("todo", "unbalanced-preprocessor")
 
     def emit_proc(self, tr_out, p, ind, head=None, close="}"):
@@ -830,7 +830,7 @@ class ModuleEmitter:
         aliases = self.tr()     # std::function aliases: before the classes, which use them as arguments
         # a test module used by other (test) modules provides shared helpers: it gets a header
         shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
-        pending, prev = [], None
+        pending = []
         spec = [p for p in mod.node.content if cls(p) == "Specification_Part"]
         for s in (spec[0].content if spec else []):
             k = cls(s)
