@@ -267,7 +267,10 @@ class ReverseMixin:
             return res
         out += [f"    procedure({aiface}), pointer :: f"] + [f"    {d}" for d in locals_] + [""]
         out += [f"    {x}" for x in ([f"{err} = 0"] if has_err else []) + checks + pre]
-        out += [f"    call c_f_procpointer({funptr}, f)", f"    call f({', '.join(actuals)})"]
+        call = f"call f({', '.join(actuals)})"
+        if has_err and cfg["wrap_chk_ierr"]:    # PROJECT_CHK_IERR(call f(..., ierr), ierr)
+            call = f"{cfg['wrap_chk_ierr'][0]}({call}, {err})"
+        out += [f"    call c_f_procpointer({funptr}, f)", f"    {call}"]
         out += [f"    {x}" for x in post]
         if res_v is not None and res_v.base == "logical":
             out.append(f"    {iface.result} = logical({iface.result}_c)")
