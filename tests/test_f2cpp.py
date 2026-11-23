@@ -2427,12 +2427,13 @@ int main()
 
 def test_reverse_class_star_cpp_data(tmp_path):
     """class(*) arguments of reverse types: C++ data (std::any) held by Fortran in a CWrapperAny_type (owns it,
-    move_alloc only); passed back to C++ unchanged; Fortran data is rejected (ierr)"""
+    move_alloc only), passed back to C++ unchanged, Fortran data rejected (ierr); the other direction (Fortran
+    implementation used in C++): Fortran data in a std::any (FortranData), C++ data rejected"""
     d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "state_model_mod.F90")
     translate([], cfg(wrap_reverse=["statemodel_type"]), d, wrap=[src])
     cpp, h, cw = read((d,), "state_model_mod.cpp"), read((d,), "state_model_mod.h"), \
         read((d,), "project_c_wrapper_state_model_mod.F90")
-    assert "struct project_state_model_mod_CppAny\n{\n  project_state_model_mod_CppAny_destroy destroy = nullptr;\n" \
+    assert "struct project_state_model_mod_Any\n{\n  project_state_model_mod_Any_destroy destroy = nullptr;\n" \
            "  void* userData = nullptr;\n};" in h
     assert "    *state = any_to_c(std::move(state_v));" in cpp and "set_internal_state(any_from_c(state));" in cpp
     assert "  c->userData = new std::any(std::move(a));  // owned by c (destroy_any)" in cpp
@@ -2441,14 +2442,73 @@ def test_reverse_class_star_cpp_data(tmp_path):
     assert "    type is (CWrapperAny_type)\n      if (associated(state%c)) state_p = c_loc(state%c)\n" \
            "    class default\n      ierr = -1\n      return\n    end select" in cw
     assert "public :: CWrapperAny_type" not in cw and "    final :: cwrapperany_final" in cw
+    b, cwc = read((d,), "state_model_mod_c_binding.F90"), read((d,), "state_model_mod_c_wrapper.cpp")
+    assert "    call wrapper%ptr%get_internal_state(state_f, ierr_f)\n    ierr = ierr_f\n" \
+           "    state = f2cpp_any_new(state_f)" in b
+    assert "    call move_alloc(state_h%p, state_f)\n    call wrapper%ptr%set_internal_state(state_f, ierr_f)\n" \
+           "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
+    assert "  state = any_from_fortran(state_c);\n  if (ierr != 0)" in cwc
+    assert "  other_->set_internal_state(other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
-  use, intrinsic :: iso_c_binding, only: C_PTR
+  use, intrinsic :: iso_c_binding, only: C_PTR, C_INT, c_loc
   use state_model_mod, only: StateModel_type
   use project_c_wrapper_state_model_mod, only: project_StateModel_wrap
+  use state_model_mod_c_binding, only: StateModel_c, StateModelWrapper_type, create_StateModel_C_from_Fortran
   implicit none
+  type, extends(StateModel_type) :: FCounter_type     ! Fortran implementation
+    integer :: n = 0
+  contains
+    procedure :: get_internal_state => fc_get
+    procedure :: set_internal_state => fc_set
+    procedure :: step => fstep
+    procedure :: value => fvalue
+  end type FCounter_type
+  interface
+    function run_cpp(c) result(code) bind(C, name="run_cpp")
+      import :: C_PTR, C_INT
+      type(C_PTR), value :: c
+      integer(C_INT) :: code
+    end function run_cpp
+  end interface
 contains
+  subroutine fc_get(this, state, ierr)
+    class(FCounter_type), intent(in) :: this
+    class(*), allocatable, intent(out) :: state
+    integer, intent(out) :: ierr
+    allocate(state, source=this%n)
+    ierr = 0
+  end subroutine fc_get
+  subroutine fc_set(this, state, ierr)
+    class(FCounter_type), intent(inout) :: this
+    class(*), intent(in) :: state
+    integer, intent(out) :: ierr
+    ierr = -3
+    select type (state)
+    type is (integer)
+      this%n = state
+      ierr = 0
+    end select
+  end subroutine fc_set
+  subroutine fstep(this)
+    class(FCounter_type), intent(inout) :: this
+    this%n = this%n + 1
+  end subroutine fstep
+  function fvalue(this) result(v)
+    class(FCounter_type), intent(in) :: this
+    integer :: v
+    v = this%n
+  end function fvalue
+  subroutine fortran_side() bind(C, name="fortran_side")
+    type(FCounter_type), target :: fc
+    type(StateModelWrapper_type), target :: fw
+    type(StateModel_c), target :: ct
+    integer :: ierr
+    fw%ptr => fc
+    call create_StateModel_C_from_Fortran(fw, ct, ierr)
+    print '(i4)', run_cpp(c_loc(ct))
+  end subroutine fortran_side
   subroutine use_model(c) bind(C, name="use_model")
     type(C_PTR), value :: c
     class(StateModel_type), allocatable :: m
@@ -2472,10 +2532,34 @@ contains
   end subroutine use_model
 end module drv_mod
 """)
-    (tmp_path / "run.cpp").write_text(r"""#include "state_model_mod.hpp"
+    (tmp_path / "run.cpp").write_text(r"""#include "state_model_mod_c_wrapper.hpp"
 #include <any>
 #include <memory>
+#include <stdexcept>
 extern "C" void use_model(project_StateModel* c);
+extern "C" void fortran_side();
+extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in C++
+{
+  project::StateModel_private::CWrapperStateModel w(*c);
+  std::any s;
+  w.step();
+  w.get_internal_state(s);                       // Fortran data (value 1)
+  std::any shared = s;                           // copies share it
+  w.step();
+  w.step();
+  int code = 100 * w.value();
+  w.set_internal_state(shared);
+  code += 10 * w.value();
+  try
+  {
+    w.set_internal_state(std::any(5));           // C++ data: rejected
+  }
+  catch (const std::invalid_argument&)
+  {
+    code += 1;
+  }
+  return code;
+}
 class Counter : public project::StateModel
 {
 public:
@@ -2492,6 +2576,7 @@ int main()
   auto m = std::make_unique<Counter>();
   use_model(project::StateModel_private::toC(*m));
   m.release(); // NOLINT(bugprone-unused-return-value)
+  fortran_side();
   return 0;
 }
 """)
@@ -2500,8 +2585,8 @@ int main()
     for f in (src, "state_model_mod_c_binding.F90", "project_c_wrapper_state_model_mod.F90", "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
-    for f in ("state_model_mod.cpp", "run.cpp"):
+    for f in ("state_model_mod.cpp", "state_model_mod_c_wrapper.cpp", "run.cpp"):
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
     run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
-         "state_model_mod_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:4] == ["  0  3", "  0  1", "  0  1", " -1"]
+         "state_model_mod_cxx.o", "state_model_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
+    assert run(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]

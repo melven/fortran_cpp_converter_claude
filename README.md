@@ -344,11 +344,13 @@ C++ and passed back, moved and never copied. C: the opaque holder `project_Fortr
 C++: `std::any` with a `std::shared_ptr<FortranState>` (copies share it, the last one releases the holder in
 Fortran: `project_<module>_any_release`). C++ data in a `std::any` cannot be passed to Fortran
 (`std::invalid_argument`).
-`class(*)` arguments of reverse-wrapped methods (C++ implementations; `allocatable, intent(out)` /
-`intent(in)`): C++ data held by Fortran, per module: C struct `project_<module>_CppAny` (`destroy`, `userData`:
-the `std::any`), in Fortran a private `CWrapperAny_type` in the `class(*)` (owns it, final -> `destroy`;
-`move_alloc` only, never copy); passed back to C++ unchanged (only the creating module can unpack it; Fortran
-data: `ierr = -1`). Fortran implementations behind the struct (`CWrapper<Thing>`): still TODO.
+`class(*)` arguments of reverse-wrapped methods (`allocatable, intent(out)` / `intent(in)`): data owned by
+the other side, per module in the C struct `project_<module>_Any` (binding: `Any_c`; `destroy`, `userData`); only
+its creator unpacks it. C++ implementations: `userData` is a `std::any`; in Fortran a private `CWrapperAny_type`
+in the `class(*)` (owns it, final -> `destroy`; `move_alloc` only, never copy); passed back unchanged, Fortran
+data: `ierr = -1`. Fortran implementations used in C++ (`CWrapper<Thing>`): `userData` is an `AnyHolder_type`
+(`f2cpp_any_new`, moved, deleted by `destroy` in Fortran); in C++ a `std::any` with a shared `FortranData`;
+passed back by moving the data out of its holder for the call; C++ data: `std::invalid_argument`.
 
 ## Objects that are neither copyable nor movable
 

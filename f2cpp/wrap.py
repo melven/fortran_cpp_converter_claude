@@ -1291,7 +1291,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         if self.any_used:                           # opaque handle of Fortran data (class(*))
             h += [f"struct {self.any_handle()};  //!< Fortran data (class(*)), see {os.path.basename(stem)}.h"]
         if self.cppany:                             # C++ data held by Fortran
-            h += [f"struct {self.cppany['ht']};  //!< C++ data (std::any) held by Fortran, see {os.path.basename(stem)}.h"]
+            h += [f"struct {self.cppany['ht']};  //!< class(*) / std::any data, see {os.path.basename(stem)}.h"]
         h += ["", self.open_ns(), ""] + ([self.any_cpp(), ""] if self.any_used else [])
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
@@ -1376,7 +1376,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             ch = self.cpp_file_header(hx, brief, "_c_wrapper") + [banner] + guard[0] + ["", f'#include "{base}{hx}"', "", self.open_ns(), ""] + \
                 strip_blank(self.cwc["hpp"].out) + ["", f"}}  // namespace {self.ns}", ""] + guard[1]
             cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "", "#include <stdexcept>", "",
-                  f'#include "{base}.h"', "", self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
+                  f'#include "{base}.h"', ""] + \
+                (["#include <any>", "#include <memory>", "#include <typeinfo>", ""] if self.cwc.get("any") else []) + \
+                [self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
                 ["", f"}}  // namespace {self.ns}", ""]
             files = {f"_c_wrapper{hx}": "\n".join(self.braces(squeeze(ch))),
                      f"_c_wrapper{cx}": "\n".join(self.braces(squeeze(cc)))}
