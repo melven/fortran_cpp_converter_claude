@@ -2613,3 +2613,24 @@ end module project_thing
     translate([], cfg(wrap_reverse=["saver_type"]), str(tmp_path), wrap=[str(tmp_path / "project_thing.F90")])
     h = (tmp_path / "project_thing.h").read_text()
     assert "struct project_thing_Any\n" in h and "project_project" not in h
+
+
+def test_internal_errors_differ_from_unsupported_constructs(tmp_path, capsys, monkeypatch):
+    """a Python error while translating a statement: report kind "error", a log line with the Fortran and the
+    f2cpp location, the statement as Fortran comment; strict (the test configuration): the run stops"""
+    from f2cpp.translate import Translator
+    (tmp_path / "e_mod.F90").write_text("module e_mod\ncontains\n  subroutine f(x)\n    real, intent(out) :: x\n"
+                                        "    x = 1.0\n  end subroutine f\nend module e_mod\n")
+
+    def broken(self, node, ind):
+        raise KeyError("boom")
+    monkeypatch.setattr(Translator, "s_Assignment_Stmt", broken)
+    report, _ = translate([str(tmp_path / "e_mod.F90")], cfg(strict=False), str(tmp_path))
+    c = report.files[str(tmp_path / "e_mod.F90")]
+    assert c["error"]["internal:KeyError:Assignment_Stmt"] == 1 and not c["untranslated"]
+    log = capsys.readouterr().err
+    assert "f2cpp: internal error in e_mod::f, line 5: KeyError: 'boom' (f2cpp/" in log
+    assert "INTERNAL ERRORS" in report.summary()
+    assert "// TODO(f2cpp): not translated (f2cpp internal error: KeyError)" in (tmp_path / "e_mod.cpp").read_text()
+    with pytest.raises(KeyError):
+        translate([str(tmp_path / "e_mod.F90")], cfg(), str(tmp_path))

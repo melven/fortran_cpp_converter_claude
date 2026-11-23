@@ -1,3 +1,5 @@
+# tests: internal errors (f2cpp bugs) fail the test instead of becoming TODO comments
+strict = true
 namespace = "project"
 drop_args = ["userData"]              # class(*) user data of callbacks
 eigen_placeholders = "Eigen"          # the test environment has Eigen 3.4

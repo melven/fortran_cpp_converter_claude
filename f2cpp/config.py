@@ -199,6 +199,7 @@ DEFAULTS = {
     # False: EXPECT_LE((expected - actual).cwiseAbs().maxCoeff(), tolerance)
     "gtest_eigen_near": True,
     "test_includes": [],           # additional includes of translated test files
+    "strict": False,               # internal errors (f2cpp bugs) stop the run instead of a TODO comment
     "keep_original": False,        # emit the Fortran statement as comment above each statement
 }
 

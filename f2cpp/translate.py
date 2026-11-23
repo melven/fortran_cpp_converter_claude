@@ -1,5 +1,6 @@
 """Expression and statement translation (Fortran parse tree -> C++ text)."""
 import re
+import sys
 from dataclasses import dataclass
 
 from .model import cls, lname, items_of, cname, Var
@@ -1256,6 +1257,16 @@ class Translator:
     def emit(self, ind, text):
         self.out.append("  " * ind + text if text else "")
 
+    def internal_error(self, e, node):
+        """log an internal error (stderr): where in the Fortran source and in f2cpp"""
+        import traceback
+        frame = traceback.extract_tb(e.__traceback__)[-1]
+        proc = self.proc.cname if self.proc is not None else "(module)"
+        line = last_line(node)
+        print(f"f2cpp: internal error in {self.mod.spelling}::{proc}" + (f", line {line}" if line else "") +
+              f": {type(e).__name__}: {e} (f2cpp/{frame.filename.split('f2cpp/')[-1]}:{frame.lineno} {frame.name});"
+              " statement kept as Fortran comment (--strict: stop)", file=sys.stderr)
+
     def fortran_comment(self, node, ind, why):
         self.emit(ind, f"// {TODO}: {why}")
         for line in str(node).split("\n"):
@@ -1417,10 +1428,13 @@ class Translator:
             del self.out[start:]
             self.report.add("untranslated", e.category)
             self.fortran_comment(node, ind, f"not translated ({e.category})")
-        except Exception as e:      # robust against unexpected parse tree shapes
+        except Exception as e:      # a bug of f2cpp (not an unsupported construct): logged, reported as error
+            if self.cfg["strict"]:
+                raise
             del self.out[start:]
-            self.report.add("untranslated", f"internal:{type(e).__name__}:{k}")
-            self.fortran_comment(node, ind, f"not translated (internal error: {type(e).__name__})")
+            self.report.add("error", f"internal:{type(e).__name__}:{k}")
+            self.internal_error(e, node)
+            self.fortran_comment(node, ind, f"not translated (f2cpp internal error: {type(e).__name__})")
 
     # simple statements
     def s_Assignment_Stmt(self, node, ind):

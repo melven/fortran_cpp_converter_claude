@@ -10,7 +10,7 @@ class Report:
 
     def start(self, name):
         self.cur = self.files.setdefault(name, {k: Counter() for k in
-                                                ("translated", "untranslated", "todo", "info", "missing")})
+                                                ("translated", "untranslated", "todo", "info", "missing", "error")})
 
     def add(self, kind, category):
         if self.cur is not None:
@@ -20,11 +20,13 @@ class Report:
         lines = []
         for name, c in self.files.items():
             nt, nu = sum(c["translated"].values()), sum(c["untranslated"].values())
+            ne = sum(c["error"].values())
             lines.append(f"{name}: {nt} statements translated, {nu} left as Fortran comment, "
-                         f"{sum(c['todo'].values())} flagged for review")
+                         f"{sum(c['todo'].values())} flagged for review" +
+                         (f", {ne} INTERNAL ERRORS (f2cpp bugs, see the log)" if ne else ""))
             for cat in c["missing"]:
                 lines.append(f"    missing module {cat}")
-            for kind in ("untranslated", "todo", "info"):
+            for kind in ("error", "untranslated", "todo", "info"):
                 for cat, n in c[kind].most_common():
                     lines.append(f"    {kind:12s} {n:4d}  {cat}")
         return "\n".join(lines)

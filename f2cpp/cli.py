@@ -133,10 +133,12 @@ def main(argv=None):
     ap.add_argument("--keep-original", action="store_true", default=None,
                     help="emit each Fortran statement as comment above its translation")
     ap.add_argument("--report", metavar="JSON", help="write construct coverage report (no source text)")
+    ap.add_argument("--strict", action="store_true", default=None,
+                    help="stop at internal errors (f2cpp bugs) instead of keeping the statement as comment")
     args = ap.parse_args(argv)
     if not args.files and not args.wrap:
         ap.error("no files to translate or wrap")
-    cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original)
+    cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original, strict=args.strict)
     cfg["exclude"] += [e.lower().replace(" ", "") for e in args.exclude]
     # parsing and translation recurse over the expression trees: very long expressions (hundreds of
     # operands) need more than the default recursion limit and stack
@@ -155,3 +157,5 @@ def main(argv=None):
     print(report.summary(), file=sys.stderr)
     if args.report:
         report.write_json(args.report)
+    if any(sum(c["error"].values()) for c in report.files.values()):
+        raise SystemExit(2)                     # internal errors: the output is complete, but f2cpp has bugs
