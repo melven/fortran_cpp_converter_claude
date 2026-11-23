@@ -909,7 +909,8 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
     assert "struct project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
     assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
-    assert "    call obj%apply(x(1:obj%n), y(1:(obj%n)), ierr)" in binding
+    assert "    real(C_REAL), intent(in), target :: x(*)\n" in binding and "    real, pointer, contiguous :: x_f(:)\n" in binding
+    assert "    x_f => x(1:obj%n)\n    y_f => y(1:(obj%n))\n    call obj%apply(x_f, y_f, ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
     assert "    call obj%set_label(str_array_ptr_to_str(label), ierr)" in binding
     assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
@@ -933,7 +934,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
         assert "scalar MySolver::norm(const vec& x) const\n{\n" in cpp and "diag()" in cpp
     else:
         assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in flat(h)
-        assert "    res = residual_norm(r(1:n), b(1:n), n)" in binding
+        assert "    r_f => r(1:n)\n    b_f => b(1:n)\n    res = residual_norm(r_f, b_f, n)" in binding
     # size unknown in Fortran (x(:) without check): passed from C++
     assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in flat(h)
     assert "  project_scale_vector(x.data(), static_cast<int>(x.size()), factor, &ierr);" in cpp
@@ -979,14 +980,15 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
            "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
     assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
            "static_cast<int>(modelMask.size()) : 0);" in cpp
-    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x(1:obj%n), pos_f)\n" \
+    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x_f, pos_f)\n" \
            "    if (allocated(pos_f)) pos_c = logical(pos_f, C_BOOL)" in binding
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in flat(h)
-    assert "    type(C_PTR), value :: r\n    real, pointer, contiguous :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
+    assert "    type(C_PTR), value :: r\n" in binding and "    real, pointer, contiguous :: r_f(:)\n" in binding \
+        and "=> null()\n    real" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
-    assert "res = obj%weighted(x(1:obj%n), r_f, w_f)" in binding
+    assert "res = obj%weighted(x_f, r_f, w_f)" in binding
     assert "  if( r )\n    r->get().resize(n());\n" in cpp
     assert "project_MySolver_weighted(handle_, x.data(), r ? r->get().data() : nullptr, " \
            "w.size() > 0 ? w.data() : nullptr);" in cpp
@@ -1604,7 +1606,7 @@ end module q_mod
 """)
     translate([], cfg(wrap_sizes={"q_type%fill": {"y": "this%m"}}), str(tmp_path), wrap=[str(tmp_path / "q_mod.F90")])
     cpp, b = (tmp_path / "q_mod.cpp").read_text(), (tmp_path / "q_mod_c_binding.F90").read_text()
-    assert "call obj%fill(y(1:obj%m))" in b
+    assert "y_f => y(1:obj%m)\n    call obj%fill(y_f)" in b
     assert "  // TODO(f2cpp): size of y (obj%m in Fortran) not translatable: resize y before the call" in cpp
 
 
@@ -2308,7 +2310,7 @@ def test_wrap_sizes_from_documentation(tmp_path):
     cpp, b = read((d,), "shape_mod.cpp"), read((d,), "shape_mod_c_binding.F90")
     assert "void shape::areas(vec& a) const\n{\n  a.resize(nSurface());\n" in cpp
     assert "void shape::normals(mat& nrm) const\n{\n  nrm.resize(3, nSurface());\n" in cpp
-    assert "    call obj%areas(a(1:obj%nSurface), ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
+    assert "    a_f => a(1:obj%nSurface)\n    call obj%areas(a_f, ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
     info = report.files[os.path.join(CORPUS, "wrapped", "shape_mod.F90")]["info"]
     assert info["wrap-size-from-doc:shape_type%areas:a"] == 1 and info["wrap-size-from-doc:shape_type%normals:nrm"] == 1
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):

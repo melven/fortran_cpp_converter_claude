@@ -766,9 +766,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                                  f"{a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
                     pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
-                elif v.rank == 1:
-                    decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
-                    call.append(f"{a}={a}(1:{dims[0]})")
+                elif v.rank == 1:                 # a pointer view of the Fortran kind (= C kind) and size
+                    decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f(:)")
+                    pre.append(f"{a}_f => {a}(1:{dims[0]})")
+                    call.append(f"{a}={a}_f")
                 else:
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
                     decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_2d(:, :)")   # Fortran kind
@@ -1579,9 +1581,14 @@ def declaration_separators(b):
         r = re.search(r"result\s*\(\s*(\w+)", head, re.I)
         if r:
             dummies.add(r.group(1).lower())
-        while k < len(b) and b[k].lstrip().startswith("#"):    # #ifdef DLLEXPORT ...
+        while k < len(b) and b[k].lstrip().startswith("#"):    # #ifdef DLLEXPORT ... #endif
+            depth = 1 if b[k].lstrip().startswith("#if") else 0
             out.append(b[k])
             k += 1
+            while depth and k < len(b):
+                depth += 1 if b[k].lstrip().startswith("#if") else -1 if b[k].lstrip().startswith("#endif") else 0
+                out.append(b[k])
+                k += 1
         groups = {"dummy": [], "local": []}
         while k < len(b) and DECL.match(b[k]):
             names = re.split(r",(?![^(]*\))", DECL.match(b[k]).group(1))
