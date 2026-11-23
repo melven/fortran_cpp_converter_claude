@@ -18,33 +18,33 @@ contains
     end do
   end function str_array_ptr_to_str
 
-  !> new C string (copy of s), freed by c_str_free
-  function str_to_c_str(s) result(p)
-    character(len=*), intent(in) :: s
-    type(C_PTR) :: p
-    character(kind=C_CHAR), pointer :: buf(:)
+  !> new C string buffer (copy of fStr), deleted by deleteString
+  function copyString(fStr, ierr) result(cStr)
+    character(len=*), intent(in) :: fStr
+    integer, intent(out) :: ierr
+    character(kind=C_CHAR), pointer, contiguous :: cStr(:)
     integer :: i
-    allocate(buf(len(s) + 1))
-    do i = 1, len(s)
-      buf(i) = s(i:i)
+    allocate(cStr(len(fStr) + 1), stat=ierr)
+    if (ierr /= 0) return
+    do i = 1, len(fStr)
+      cStr(i) = fStr(i:i)
     end do
-    buf(len(s) + 1) = C_NULL_CHAR
-    p = c_loc(buf)
-  end function str_to_c_str
+    cStr(len(fStr) + 1) = C_NULL_CHAR
+  end function copyString
 
-  !> frees a C string of str_to_c_str
-  subroutine c_str_free(p)
-    type(C_PTR), intent(inout) :: p
+  !> deletes a C string buffer of copyString
+  subroutine deleteString(cStr_ptr)
+    type(C_PTR), intent(inout) :: cStr_ptr
     character(kind=C_CHAR), pointer :: buf(:)
     integer :: n
-    if (.not. c_associated(p)) return
-    call c_f_pointer(p, buf, [huge(n)])
+    if (.not. c_associated(cStr_ptr)) return
+    call c_f_pointer(cStr_ptr, buf, [huge(n)])
     n = 1
     do while (buf(n) /= C_NULL_CHAR)
       n = n + 1
     end do
-    call c_f_pointer(p, buf, [n])
+    call c_f_pointer(cStr_ptr, buf, [n])
     deallocate(buf)
-    p = C_NULL_PTR
-  end subroutine c_str_free
+    cStr_ptr = C_NULL_PTR
+  end subroutine deleteString
 end module project_str

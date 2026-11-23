@@ -373,16 +373,22 @@ class ReverseMixin:
         return self.cppany
 
     def string_to_c(self, v):
-        """create_<Thing>_C_from_Fortran: a C string copy of the character constant (freed by destroy_...)"""
-        n, new = v.cname, self.c_string_names()[0]
+        """create_<Thing>_C_from_Fortran: a C string copy of the character constant (freed by destroy_...);
+        copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:)"""
+        n, copy = v.cname, self.c_string_names()[0]
+        src = f"fthing%ptr%{n}" if v.has("allocatable") else f"trim(fthing%ptr%{n})"
+        chk = self.cfg["wrap_chk_ierr"]
+        body = [f"{chk[0]}({n}_c => {copy}({src}, ierr), ierr)"] if chk else \
+            [f"{n}_c => {copy}({src}, ierr)", "if (ierr /= 0) return"]
+        body.append(f"cthing%{n} = c_loc({n}_c)")
         if v.has("allocatable"):
-            return f"    if (allocated(fthing%ptr%{n})) cthing%{n} = {new}(fthing%ptr%{n})"
-        return f"    cthing%{n} = {new}(trim(fthing%ptr%{n}))"
+            body = [f"if (allocated(fthing%ptr%{n})) then"] + [f"  {x}" for x in body] + ["end if"]
+        return [f"    {x}" for x in body]
 
     def c_string_names(self):
-        """(new, free) of C strings: the project's helpers (wrap_string_out) or generated ones"""
+        """(copy, delete) of C strings: the project's helpers (wrap_string_out) or generated ones"""
         out = self.cfg["wrap_string_out"]
-        return (out[1], out[2]) if out else ("f2cpp_c_string_new", "f2cpp_c_string_free")
+        return (out[1], out[2]) if out else ("f2cpp_copy_string", "f2cpp_delete_string")
 
     def c_string_helpers(self, fb):
         """Fortran (binding, once): C strings allocated / freed in Fortran (generated unless wrap_string_out)"""
@@ -393,17 +399,19 @@ class ReverseMixin:
         if out:
             self.extra_uses.add(f"  use {out[0]}, only: {out[1]}, {out[2]}")
             return
-        fb += ["", "  !> a new C string (NUL-terminated copy of s), freed by f2cpp_c_string_free",
-               "  function f2cpp_c_string_new(s) result(p)", "    character(len=*), intent(in) :: s",
-               "    type(C_PTR) :: p", "    character(kind=C_CHAR), pointer :: buf(:)", "    integer :: i", "",
-               "    allocate(buf(len(s) + 1))", "    do i = 1, len(s)", "      buf(i) = s(i:i)", "    end do",
-               "    buf(len(s) + 1) = C_NULL_CHAR", "    p = c_loc(buf)", "  end function f2cpp_c_string_new", "",
-               "  !> frees a C string of f2cpp_c_string_new (NULL: nothing)", "  subroutine f2cpp_c_string_free(p)",
-               "    type(C_PTR), intent(inout) :: p", "    character(kind=C_CHAR), pointer :: buf(:)",
-               "    integer :: n", "", "    if (.not. c_associated(p)) return",
-               "    call c_f_pointer(p, buf, [huge(n)])", "    n = 1", "    do while (buf(n) /= C_NULL_CHAR)",
-               "      n = n + 1", "    end do", "    call c_f_pointer(p, buf, [n])      ! the allocated array",
-               "    deallocate(buf)", "    p = C_NULL_PTR", "  end subroutine f2cpp_c_string_free"]
+        fb += ["", "  !> a new C string (NUL-terminated copy of fStr), deleted by f2cpp_delete_string",
+               "  function f2cpp_copy_string(fStr, ierr) result(cStr)", "    character(len=*), intent(in) :: fStr",
+               "    integer, intent(out) :: ierr", "    character(kind=C_CHAR), pointer, contiguous :: cStr(:)",
+               "    integer :: i", "", "    allocate(cStr(len(fStr) + 1), stat=ierr)", "    if (ierr /= 0) return",
+               "    do i = 1, len(fStr)", "      cStr(i) = fStr(i:i)", "    end do",
+               "    cStr(len(fStr) + 1) = C_NULL_CHAR", "  end function f2cpp_copy_string", "",
+               "  !> deletes a C string of f2cpp_copy_string (NULL: nothing)",
+               "  subroutine f2cpp_delete_string(cStr_ptr)", "    type(C_PTR), intent(inout) :: cStr_ptr",
+               "    character(kind=C_CHAR), pointer :: buf(:)", "    integer :: n", "",
+               "    if (.not. c_associated(cStr_ptr)) return", "    call c_f_pointer(cStr_ptr, buf, [huge(n)])",
+               "    n = 1", "    do while (buf(n) /= C_NULL_CHAR)", "      n = n + 1", "    end do",
+               "    call c_f_pointer(cStr_ptr, buf, [n])      ! the allocated array", "    deallocate(buf)",
+               "    cStr_ptr = C_NULL_PTR", "  end subroutine f2cpp_delete_string"]
 
     def fortran_any_data(self, fb):
         """Fortran (binding, once): holder of Fortran data (class(*)) in the struct for C++, its destroy"""
@@ -895,10 +903,12 @@ inline {ah}* to_fortran(const std::any& v)
                          f"    class({ft}), pointer :: ptr => null()", f"  end type {fw}", ""]
         fb += ["", "  !> the C struct of a Fortran implementation (the caller stores both; fthing must outlive cthing)",
                f"  subroutine {create}(fthing, cthing, ierr)", f"    type({fw}), target, intent(in) :: fthing",
-               f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
-            [self.string_to_c(v) if k == "string" else
-             f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else
-                                         f"fthing%ptr%{v.cname}") for v, k in consts] + \
+               f"    type({st}), intent(out) :: cthing", "    integer, intent(out) :: ierr"] + \
+            [f"    character(kind=C_CHAR), pointer, contiguous :: {v.cname}_c(:)" for v, k in consts if k == "string"] + \
+            ["", "    ierr = 0"] + \
+            [x for v, k in consts for x in (self.string_to_c(v) if k == "string" else
+             [f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else
+                                          f"fthing%ptr%{v.cname}")])] + \
             [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
             [f"    ! {TODO}: {bd.spelling} not wrapped ({todo}): C++ {wcls}::{bd.spelling} throws"
              for bd, _, todo in todos] + \

@@ -2323,9 +2323,9 @@ def test_reverse_type_constants(tmp_path):
     assert "  //! name of the model\n  const std::string& label() const;" in hpp and "  std::string label_;" in hpp
     assert "  c_->label = label_.c_str();" in cpp and "  const char* label = nullptr;" in h
     assert "      allocate(x%label, source=trim(str_array_ptr_to_str(x%c%label)))" in cw     # no realloc-lhs
-    assert "    if (allocated(fthing%ptr%label)) cthing%label = f2cpp_c_string_new(fthing%ptr%label)" in b
+    assert "      PROJECT_CHK_IERR(label_c => f2cpp_copy_string(fthing%ptr%label, ierr), ierr)\n" in b  # wrap_chk_ierr
     assert "  subroutine destroy_Thing_C_from_Fortran(cthing, ierr)\n" in b and \
-        "    call f2cpp_c_string_free(cthing%label)\n    cthing = Thing_c()\n" in b
+        "    call f2cpp_delete_string(cthing%label)\n    cthing = Thing_c()\n" in b
     assert "  public :: destroy_Thing_C_from_Fortran\n" in b
     assert "  //! size of the state\n  int stateSize() const;" in hpp
     assert "int Thing::stateSize() const\n{\n  return c_->stateSize;\n}" in cpp and "  c_->stateSize = stateSize;" in cpp
@@ -2677,14 +2677,16 @@ def test_reverse_string_constants_with_project_helpers(tmp_path):
     """wrap_string_out: the project's helpers create / free the C strings of character constants"""
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
     (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
-                                     'wrap_string_out = ["project_str", "str_to_c_str", "c_str_free"]\n'
+                                     'wrap_string_out = ["project_str", "copyString", "deleteString"]\n'
                                      '[wrap_constants]\nThing_type = ["stateSize", "inputSize", "label"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     base = os.path.join(r, "model_base_mod.F90")
     translate([], c, d, wrap=[os.path.join(r, "convergence_mod.F90")], interface_only=[base])
     b = read((d,), "convergence_mod_c_binding.F90")
-    assert "  use project_str, only: str_to_c_str, c_str_free\n" in b and "f2cpp_c_string" not in b
-    assert "cthing%label = str_to_c_str(fthing%ptr%label)" in b and "    call c_str_free(cthing%label)\n" in b
+    assert "  use project_str, only: copyString, deleteString\n" in b and "f2cpp_" not in b
+    assert "    if (allocated(fthing%ptr%label)) then\n      label_c => copyString(fthing%ptr%label, ierr)\n" \
+           "      if (ierr /= 0) return\n      cthing%label = c_loc(label_c)\n    end if\n" in b
+    assert "    call deleteString(cthing%label)\n" in b
     if shutil.which("gfortran"):
         ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
               "-Wno-unused-dummy-argument", "-I" + CORPUS]

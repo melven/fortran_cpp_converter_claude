@@ -134,9 +134,9 @@ DEFAULTS = {
     # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
     "wrap_chk_ierr": None,
     "wrap_string_in": None,
-    # Fortran string -> new C string and its deletion (character constants of reverse types):
-    # [module, function(s) result(type(C_PTR)), subroutine(p: type(C_PTR), intent(inout))];
-    # None: generated helpers f2cpp_c_string_new / f2cpp_c_string_free
+    # Fortran string -> new C string and its deletion (character constants of reverse types): [module, copy, delete]
+    # copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:);
+    # delete(cStr_ptr): type(C_PTR), intent(inout); None: generated f2cpp_copy_string / f2cpp_delete_string
     "wrap_string_out": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}
