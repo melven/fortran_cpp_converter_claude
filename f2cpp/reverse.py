@@ -964,7 +964,8 @@ inline {ah}* to_fortran(const std::any& v)
             lines += [f"  {x}" for x in part["cpp_mid"]]      # owned results first (also on errors)
             if part["has_err"]:
                 lines += ["  if( ierr != 0 )",
-                          f'    throw std::runtime_error("ierr!=0 returned from {wcls}::{bd.spelling}");']
+                          f'    throw std::runtime_error("Error: calling C {ht}::{bd.name} function pointer in '
+                          f'{wcls}::{bd.spelling}!");']
             lines += [f"  {x}" for x in part["cpp_post"]] + ["}", ""]
             self.emit_lines(cpp, lines)
         for bd, iface, todo in todos:

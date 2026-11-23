@@ -2484,7 +2484,8 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "    state = f2cpp_any_new(state_f)" in b
     assert "    call move_alloc(state_h%p, state_f)\n    call wrapper%ptr%set_internal_state(state_f, ierr_f)\n" \
            "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
-    assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw" in cwc
+    assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
+           "project_StateModel::get_internal_state function pointer in CWrapperStateModel::get_internal_state!\");" in cwc
     assert "  other_->set_internal_state(other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
