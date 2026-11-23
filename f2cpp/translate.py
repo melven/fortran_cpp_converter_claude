@@ -810,7 +810,7 @@ class Translator:
             tl = [(1, None, 1)]
         const = sum(sg * v for sg, n, v in th if n is None) - sum(sg * v for sg, n, v in tl if n is None) + 1
         rest = [t for t in th if t[1] is not None]
-        for sg, n, key in [t for t in tl if t[1] is not None]:
+        for sg, _, key in [t for t in tl if t[1] is not None]:
             hit = next((t for t in rest if t[0] == sg and t[2] == key), None)
             if hit is None:
                 return None                     # lo has a term that hi does not have
@@ -871,7 +871,7 @@ class Translator:
         res = X("", 0, v.base, 100, v, v.tname)
         depth, lr = self.nest(v)
         if depth:
-            trail = [self.sub_code(s, lb) for s, lb in zip(subs[lr:], lbs[lr:])]
+            trail = [self.sub_code(s, lb) for s, lb in zip(subs[lr:], lbs[lr:], strict=True)]
             full = all(cls(s) == "Subscript_Triplet" and s.items == (None, None, None) for s in subs[:lr])
             if full and all(k == "all" for k, _ in trail):
                 return x
@@ -882,13 +882,13 @@ class Translator:
                 res.code = base
                 return res
             subs, lbs, res.obj = subs[:lr], lbs[:lr], True
-        sc = [self.sub_code(s, lb) for s, lb in zip(subs, lbs)]
+        sc = [self.sub_code(s, lb) for s, lb in zip(subs, lbs, strict=True)]
         kinds = [k for k, _ in sc]
         if st == "flat":
             if any(k != "idx" for k in kinds):
                 raise Untranslatable("slice-of-flat-array")
             ext, idx = self.extents(v), sc[-1][1]
-            for (_, c), e in zip(reversed(sc[:-1]), reversed(ext[:-1])):
+            for (_, c), e in zip(reversed(sc[:-1]), reversed(ext[:-1]), strict=True):
                 idx = f"{c} + {e} * ({idx})"
             self.note("flat-array", f"rank-{v.rank} array stored flat (column-major)")
             res.code = f"{base}({idx})" if v.base not in ("type", "character") else f"{base}[{idx}]"
@@ -1131,7 +1131,7 @@ class Translator:
         params = [iface.vars[a] for a in i_dummies if a not in gone]
         obj = self.expr(user_data)
         args = []
-        for ia, qa in zip(i_dummies, q_dummies):
+        for ia in i_dummies:                    # same length as q_dummies (checked above)
             if ia in gone:
                 if not q.cb_method:
                     args.append(obj.code)
@@ -1602,12 +1602,12 @@ class Translator:
         da, db = a.split(","), b.split(",")
         if len(da) != len(db):
             return False
-        for k, (x, y) in enumerate(zip(da, db)):
+        for k, (x, y) in enumerate(zip(da, db, strict=True)):
             if ":" in x or ":" in y:
                 continue
             if x != y and x.lstrip("-").isdigit() and y.lstrip("-").isdigit():
                 return True
-            if all(u == w for m, (u, w) in enumerate(zip(da, db)) if m != k):
+            if all(u == w for m, (u, w) in enumerate(zip(da, db, strict=True)) if m != k):
                 return True
         return False
 

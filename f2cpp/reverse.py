@@ -610,7 +610,7 @@ inline {ah}* to_fortran(const std::any& v)
         self.pure_virtuals(hpp, methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
-        for bd, iface, m in live:
+        for bd, _, m in live:
             hpp.emit(1, f"//! internal wrapper for {bd.spelling}")
             hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']}) noexcept;")
         hpp.emit(1, f"{ht}* fortran_ = nullptr;  //!< the Fortran object ({bridge}) calling this object")
@@ -659,7 +659,7 @@ inline {ah}* to_fortran(const std::any& v)
 
     def pure_virtuals(self, hpp, methods):
         """deferred: pure virtual; with a default implementation: virtual (definition: default_methods)"""
-        for bd, iface, m in methods:
+        for bd, iface, _ in methods:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             hpp.emit(0, "")
             self.doc(hpp, iface, 1, bd.spelling)
@@ -667,7 +667,7 @@ inline {ah}* to_fortran(const std::any& v)
 
     def default_methods(self, cpp, methods):
         """translated Fortran default implementations of the non-deferred bindings"""
-        for bd, p, m in methods:
+        for bd, p, _ in methods:
             if not bd.deferred:
                 self.emit_proc(cpp, p, 0)
                 cpp.emit(0, "")
@@ -770,7 +770,7 @@ inline {ah}* to_fortran(const std::any& v)
         self.pure_virtuals(hpp, all_methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
-        for bd, iface, m in live:
+        for bd, _, m in live:
             hpp.emit(1, f"//! internal wrapper for {bd.spelling}")
             hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']}) noexcept;")
         if factory is None:
@@ -938,7 +938,7 @@ inline {ah}* to_fortran(const std::any& v)
         for bd, iface in [(e[0], e[1]) for e in entries]:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             self.emit_lines(hpp, ["", f"  {over}", f"  virtual {ret} {bd.spelling}({params}){const} override;"])
-        for bd, iface, todo in todos:
+        for bd, iface, _ in todos:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             self.emit_lines(hpp, ["", f"  //! override base class implementation -> throws ({TODO}: not wrapped)",
                                   f"  virtual {ret} {bd.spelling}({params}){const} override;"])
@@ -953,7 +953,7 @@ inline {ah}* to_fortran(const std::any& v)
         self.emit_lines(cpp, [f"{wcls}::{wcls}({ht}& c) : " +
                               (f"{cls}({', '.join(cpp_const(v, k) for v, k in consts)}), " if consts else "") +
                               "other_(&c)", "{", "}", ""])
-        for bd, iface, routine, part in entries:
+        for bd, iface, _, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
                      f"  if( other_ == nullptr || other_->{bd.name} == nullptr )",

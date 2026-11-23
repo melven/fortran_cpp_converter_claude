@@ -325,7 +325,7 @@ def test_same_results_as_fortran(out, tmp_path):
          "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
     res = run_exe(["./cdriver"], d).split()
     assert len(res) == len(ref) == 69
-    for a, b in zip(res, ref):
+    for a, b in zip(res, ref, strict=True):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
 
@@ -966,7 +966,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     vals = " ".join(res[:9]).split()
     ref, ref_flag = ref[:-1], ref[-1]
     assert len(vals) == len(ref) == 20
-    for a, b in zip(vals, ref):
+    for a, b in zip(vals, ref, strict=True):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
     assert res[9] == "1" and ref_flag == "1"                         # logical setter
     assert res[10] == "project_MySolver_apply: size of x"
@@ -1113,7 +1113,7 @@ def test_wrapped_class_hierarchy(tmp_path):
     vol = 4.0 / 3.0 * math.pi * 8.0
     got = [float(x) for x in (lines[0] + " " + lines[1]).split()]
     vol2 = 4.0 / 3.0 * math.pi * 2.5 ** 3
-    for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2]):
+    for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2], strict=True):
         assert a == pytest.approx(b, rel=1e-12)
     assert lines[2] == "ierr!=0 returned from project_sphere_grow"
 

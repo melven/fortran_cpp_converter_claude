@@ -466,7 +466,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         for t in self.mod.types.values():
             if t.name in self.reverse_types():  # their constants: reverse_constants
                 continue
-            for v, kind, td in self.constants(t)[0]:
+            for _, kind, td in self.constants(t)[0]:
                 if kind == "struct":
                     res[td.name] = td
         return res
@@ -743,7 +743,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 glue.append(f"{present} ? {obj}.data() : nullptr" if present else f"{v.cname}.data()")
                 if dims[0] == f"{a}_n1":         # size unknown in Fortran: passed from C++
                     have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
-                    for d, h in zip(dims, have):
+                    for d, h in zip(dims, have, strict=True):
                         f_args.append(d)
                         c_args.append(f"int {d}")
                         decls.append(f"integer(C_INT), value :: {d}")
@@ -795,7 +795,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     glue.append(("pre", f"// {TODO}: size of {v.cname} is not checked"))
                 else:
                     have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
-                    cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes))
+                    cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes, strict=True))
                     if present:
                         cond = f"{present} && ({cond})"
                     glue.append(("pre", f'if ({cond}) throw std::invalid_argument("{cname}: size of {v.cname}");'))
