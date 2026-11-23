@@ -7,12 +7,14 @@
 #include "solver_user_mod.hpp"
 
 extern "C" project_MySolver* project_MySolver_create(int n);
+extern "C" void project_MySolver_release(project_MySolver* h);
 
 using namespace project;
 
 int main()
 {
-  std::unique_ptr<MySolver> ps = MySolver_private::wrapFromC(*project_MySolver_create(3));
+  project_MySolver* handle = project_MySolver_create(3);
+  std::unique_ptr<MySolver> ps = MySolver_private::wrapFromC(*handle);
   MySolver& s = *ps;
   vec x(3), y;
   x << 1.0, -2.0, 0.5;
@@ -43,5 +45,7 @@ int main()
   {
     std::printf("%s\n", e.what());
   }
+  ps.reset();
+  project_MySolver_release(handle);
   return 0;
 }

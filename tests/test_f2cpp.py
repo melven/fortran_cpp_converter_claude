@@ -26,6 +26,14 @@ def run(cmd, cwd):
     return r.stdout
 
 
+VALGRIND = ["valgrind", "-q", "--error-exitcode=99", "--leak-check=full", "--errors-for-leak-kinds=definite"]
+
+
+def run_exe(cmd, cwd):
+    """run a compiled test program; under valgrind if available (memory errors and definite leaks fail)"""
+    return run((VALGRIND if shutil.which("valgrind") else []) + cmd, cwd)
+
+
 def cfg(**kw):
     return config.load(os.path.join(SUPPORT, "f2cpp.toml"), **kw)
 
@@ -315,7 +323,7 @@ def test_same_results_as_fortran(out, tmp_path):
     ref = run([str(tmp_path / "fdriver")], d).split()
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
          "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
-    res = run(["./cdriver"], d).split()
+    res = run_exe(["./cdriver"], d).split()
     assert len(res) == len(ref) == 69
     for a, b in zip(res, ref):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
@@ -327,7 +335,7 @@ def test_translated_unit_tests_pass(out):
     d = out[0]
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "test_expm_mod.cpp", "expm_mod.cpp",
          "test_poly_mod.cpp", "poly_mod.cpp", "test_helpers_mod.cpp", "test_poly_shared_mod.cpp", "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
-    assert "[  PASSED  ] 7 tests." in run(["./gt"], d)
+    assert "[  PASSED  ] 7 tests." in run_exe(["./gt"], d)
 
 
 def test_custom_macro_names(tmp_path):
@@ -950,11 +958,11 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
         run(gxx + [src, "-o", obj], d)
     run(["g++", "glue.o", "user.o", "drv.o", "f/str.o", "f/mysolver.o", "f/binding.o", "f/factory.o",
          "-lgfortran", "-o", "cdrv"], d)
-    res = run(["./cdrv"], d).split("\n")
+    res = run_exe(["./cdrv"], d).split("\n")
     run(ff + [os.path.join(w, "solver_user_mod.F90"), "-o", "ref_user.o"], d)
     run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
          "ref_user.o", "-o", "fdrv"], d)
-    ref = run(["./fdrv"], d).split()
+    ref = run_exe(["./fdrv"], d).split()
     vals = " ".join(res[:9]).split()
     ref, ref_flag = ref[:-1], ref[-1]
     assert len(vals) == len(ref) == 20
@@ -1101,7 +1109,7 @@ def test_wrapped_class_hierarchy(tmp_path):
         objs.append(os.path.basename(src) + ".o")
         run(gxx + [src, "-o", objs[-1]], d)
     run(["g++"] + objs + ["-lgfortran", "-o", "drv"], d)
-    lines = run(["./drv"], d).split("\n")
+    lines = run_exe(["./drv"], d).split("\n")
     vol = 4.0 / 3.0 * math.pi * 8.0
     got = [float(x) for x in (lines[0] + " " + lines[1]).split()]
     vol2 = 4.0 / 3.0 * math.pi * 2.5 ** 3
@@ -1467,7 +1475,7 @@ def test_unwrapped_type_with_companions(tmp_path):
                                        '  project::Blocks b;\n  b.init(3);\n  std::printf("%g\\n", b.total());\n}\n')
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "blocks_mod.cpp", "main.cpp",
          "-o", "m"], str(tmp_path))
-    assert run(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
+    assert run_exe(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
 
 
 def test_wrapped_constant_of_a_translated_type(tmp_path):
@@ -1561,7 +1569,7 @@ end program drv
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "blocks_mod.o", "blocks_mod_c_binding.o", "drv.o", "glue.o", "print.o", "user.o", "-lstdc++",
          "-o", "m"], d)
-    assert run(["./m"], d).split() == ["10", "11", "20", "21", "30", "31", "60"]
+    assert run_exe(["./m"], d).split() == ["10", "11", "20", "21", "30", "31", "60"]
 
 
 def test_unwrapped_companions_of_an_existing_class(tmp_path):
@@ -1658,7 +1666,7 @@ end program drv
     for f, o in (("state_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "state_mod.o", "state_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["2", "3.00"]
+    assert run_exe(["./m"], d).split() == ["2", "3.00"]
 
 
 def test_wrapped_listener(tmp_path):
@@ -1773,7 +1781,7 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
     undefined = run(["nm", "-u", "listen_mod_c_binding.o"], d)
     assert "AbstractListener" not in undefined.replace("project_AbstractListener", "")
     run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:5] == ["2 0 2 1", "4 2 4 1", "caught", "other", "F"]
+    assert run_exe(["./m"], d).split("\n")[:5] == ["2 0 2 1", "4 2 4 1", "caught", "other", "F"]
 
 def test_wrapped_handle_member_name(tmp_path):
     """name of the handle member per root type (hand-written base classes); derived classes use it"""
@@ -1996,7 +2004,7 @@ def test_reverse_wrapped_types(tmp_path):
         run(ff + [os.path.join(r, f)], os.path.join(d, "ref"))
     run(["gfortran", "config_mod.o", "thing_mod.o", "thing_factory_mod.o", "linear_thing_mod.o", "thing_user_mod.o",
          "ref_main.o", "-o", "ref"], os.path.join(d, "ref"))
-    ref = run(["./ref"], os.path.join(d, "ref"))
+    ref = run_exe(["./ref"], os.path.join(d, "ref"))
     fsrc = [os.path.join(SUPPORT, "project_str.F90")] + wrapped + [os.path.join(r, "thing_user_mod.F90"), "config_mod_c_binding.F90",
             "thing_mod_c_binding.F90", "project_c_wrapper_thing_mod.F90", "thing_factory_mod_c_binding.F90",
             "project_c_wrapper_thing_factory_mod.F90", os.path.join(r, "mixed_main.F90")]
@@ -2012,13 +2020,13 @@ def test_reverse_wrapped_types(tmp_path):
     objs = [os.path.splitext(os.path.basename(f))[0] + ".o" for f in fsrc] + \
         [f + "_cpp.o" for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod")]
     run(["gfortran"] + objs + ["-lstdc++", "-o", "mixed"], d)
-    assert run(["./mixed"], d) == ref
+    assert run_exe(["./mixed"], d) == ref
     # the translated pFUnit test of the implementation (gtest, linked with the Fortran parts)
     if os.path.exists("/usr/include/gtest/gtest.h"):
         run(gxx + ["test_linear_thing_mod.cpp", "-o", "test_cpp.o"], d)
         run(["g++"] + [o for o in objs if o != "mixed_main.o"] + ["test_cpp.o", "-lgtest", "-lgtest_main", "-lpthread",
                                                                   "-lgfortran", "-o", "gt"], d)
-        assert "[  PASSED  ] 1 test" in run(["./gt"], d)
+        assert "[  PASSED  ] 1 test" in run_exe(["./gt"], d)
 
 
 def test_unlimited_polymorphic_as_any(tmp_path):
@@ -2103,7 +2111,7 @@ extern "C" void run(project_Counter* h)
     for f, o in (("fstate_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "fstate_mod.o", "fstate_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["5", "caught", "5"]
+    assert run_exe(["./m"], d).split() == ["5", "caught", "5"]
     if shutil.which("valgrind"):
         out = subprocess.run(["valgrind", "--error-exitcode=3", "--leak-check=full", "./m"], cwd=d,
                              capture_output=True, text=True)
@@ -2281,7 +2289,7 @@ extern "C" void run(project_AbstractThing* c)
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "thing_mod.o", "thing_mod_c_binding.o", "const_thing_mod.o", "drv.o", "glue.o", "cw.o", "run.o",
          "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["25", "caught", "empty"]
+    assert run_exe(["./m"], d).split() == ["25", "caught", "empty"]
 
 
 def test_wrap_sizes_from_documentation(tmp_path):
@@ -2451,7 +2459,7 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)       # convergence_mod.o: the Fortran module
     run(["g++", "project_str.o", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:4] == ["  2  1 cpp", "  0 F", " -2", " 1311"]     # -2: PROJECT_CHK_ARGUMENT
+    assert run_exe(["./m"], d).split("\n")[:4] == ["  2  1 cpp", "  0 F", " -2", " 1311"]     # -2: PROJECT_CHK_ARGUMENT
 
 
 def test_reverse_class_star_cpp_data(tmp_path):
@@ -2618,7 +2626,7 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
     run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
          "state_model_mod_cxx.o", "state_model_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
+    assert run_exe(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
 
 
 def test_reverse_any_name_of_a_prefixed_module(tmp_path):
