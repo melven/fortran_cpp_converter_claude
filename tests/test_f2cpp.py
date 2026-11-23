@@ -2364,8 +2364,8 @@ def test_reverse_type_constants(tmp_path):
     assert "    INTEGER, INTENT(OUT) :: ierr\n" + sep + "    procedure(project_Thing_check_convergence), pointer :: f\n" in cw
     assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
            "needAnotherIteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
-    assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
-           'size of state");' in cwc
+    assert '  if( state.size() != stateSize() )\n    throw std::invalid_argument("CWrapperThing::check_convergence: ' \
+           'wrong dimension of parameter state!");' in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
@@ -2484,7 +2484,7 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "    state = f2cpp_any_new(state_f)" in b
     assert "    call move_alloc(state_h%p, state_f)\n    call wrapper%ptr%set_internal_state(state_f, ierr_f)\n" \
            "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
-    assert "  state = any_from_fortran(state_c);\n  if (ierr != 0)" in cwc
+    assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw" in cwc
     assert "  other_->set_internal_state(other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return

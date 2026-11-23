@@ -956,14 +956,15 @@ inline {ah}* to_fortran(const std::any& v)
         for bd, iface, routine, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
-                     f"  if (other_ == nullptr || other_->{bd.name} == nullptr)",
+                     f"  if( other_ == nullptr || other_->{bd.name} == nullptr )",
                      f'    throw std::logic_error("{wcls}::{bd.spelling}: no implementation");']
             lines += [f"  {x}" for x in part["cpp_pre"]]
             call = f"other_->{bd.name}(other_{''.join(', ' + a for a in part['cpp_args'])});"
             lines.append(f"  {call}")
             lines += [f"  {x}" for x in part["cpp_mid"]]      # owned results first (also on errors)
             if part["has_err"]:
-                lines.append(f'  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from {wcls}::{bd.spelling}");')
+                lines += ["  if( ierr != 0 )",
+                          f'    throw std::runtime_error("ierr!=0 returned from {wcls}::{bd.spelling}");']
             lines += [f"  {x}" for x in part["cpp_post"]] + ["}", ""]
             self.emit_lines(cpp, lines)
         for bd, iface, todo in todos:
@@ -1017,8 +1018,9 @@ inline {ah}* to_fortran(const std::any& v)
                     locals_.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f(:)")   # Fortran kind (= C kind)
                     pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'this_c%')})")   # constants in the struct
                     call[key] = f"{a}_f"
-                    cpp_pre.append(f"{cn}.resize({n});" if intent == "out" else
-                                   f"if ({cn}.size() != {n}) throw std::invalid_argument(\"{wcls}::{bd.spelling}: size of {cn}\");")
+                    cpp_pre += [f"{cn}.resize({n});"] if intent == "out" else \
+                        [f"if( {cn}.size() != {n} )",
+                         f'  throw std::invalid_argument("{wcls}::{bd.spelling}: wrong dimension of parameter {cn}!");']
                     cpp_args.append(f"{cn}.data()")
                 else:
                     dummies += [a, f"{a}_n"]
