@@ -157,7 +157,7 @@ class Translator:
         return self.prog.find_type(tname, self.mod) if tname else None
 
     def note(self, category, msg):
-        self.report.add("todo", category)
+        self.report.add_once("todo", category, (self.mod.name, self.proc.name if self.proc else None, msg))
         if msg not in self.notes:
             self.notes.append(msg)
 

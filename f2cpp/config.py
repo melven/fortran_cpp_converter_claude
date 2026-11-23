@@ -222,6 +222,11 @@ def load(path=None, **overrides):
                 cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
             else:
                 cfg[key] = val
+    for key, val in overrides.items():          # keyword overrides: normalised like the TOML values
+        if val is not None:
+            if key not in cfg:
+                raise TypeError(f"f2cpp: unknown config key '{key}'")
+            cfg[key] = val
     # accessors: type -> {component: C++ accessor name or None (same name)}
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
@@ -256,9 +261,6 @@ def load(path=None, **overrides):
                                      for k, v in cfg["wrap_reverse_factories"].items()}
     cfg["reverse_factory_instances"] = {k.lower(): v for k, v in cfg["reverse_factory_instances"].items()}
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
-    for key, val in overrides.items():
-        if val is not None:
-            cfg[key] = val
     ns = cfg["namespace"].split("::")[0]
     cfg["c_prefix"] = cfg["c_prefix"] or ns.lower()
     cfg["c_real"] = cfg["c_real"] or f"{ns.upper()}_REAL"

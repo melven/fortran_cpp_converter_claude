@@ -43,9 +43,11 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
         try:
             mods = parse_file(path, cfg, parser)
         except Exception as e:      # fparser syntax errors
+            dump = os.path.join(outdir, os.path.basename(path) + ".f2cpp_prepass")    # not into the sources
             print(f"f2cpp: cannot parse {path} (line numbers refer to the pre-processed text, "
-                  f"written to {path}.f2cpp_prepass):\n{e}", file=sys.stderr)
-            with open(path) as f, open(path + ".f2cpp_prepass", "w") as g:
+                  f"written to {dump}):\n{e}", file=sys.stderr)
+            os.makedirs(outdir, exist_ok=True)
+            with open(path) as f, open(dump, "w") as g:
                 g.write(prepass(f.read(), cfg))
             report.start(path)
             report.add("untranslated", "parse-error")

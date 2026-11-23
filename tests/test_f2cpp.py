@@ -2324,6 +2324,7 @@ def test_reverse_type_constants(tmp_path):
     # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
     assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
+    assert "bool* needAnotherIteration, int* ierr) noexcept" in cpp       # declared spelling
     assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
     assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and \
         '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in b         # both macros used
@@ -2332,7 +2333,7 @@ def test_reverse_type_constants(tmp_path):
     assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer :: state_f(:)\n" in b
     assert "    state_f => state(1:this_c%stateSize)\n" in b
     assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
-           "needanotheriteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
+           "needAnotherIteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
     assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
            'size of state");' in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
@@ -2634,3 +2635,11 @@ def test_internal_errors_differ_from_unsupported_constructs(tmp_path, capsys, mo
     assert "// TODO(f2cpp): not translated (f2cpp internal error: KeyError)" in (tmp_path / "e_mod.cpp").read_text()
     with pytest.raises(KeyError):
         translate([str(tmp_path / "e_mod.F90")], cfg(), str(tmp_path))
+
+
+
+def test_config_overrides_are_normalised():
+    """keyword overrides are lower-cased like TOML values; unknown keys are errors"""
+    assert cfg(wrap_reverse=["StateModel_type"])["wrap_reverse"] == ["statemodel_type"]
+    with pytest.raises(TypeError):
+        cfg(no_such_option=1)

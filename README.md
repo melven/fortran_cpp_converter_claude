@@ -480,7 +480,7 @@ file that could not be resolved.
 ## Parse errors
 
 The parser accepts Fortran 2008. If a file cannot be parsed, the fparser message is printed
-and the pre-processed text is written to `<file>.f2cpp_prepass`; the reported line number
+and the pre-processed text is written to `<outdir>/<file>.f2cpp_prepass`; the reported line number
 refers to that file. Work around unsupported syntax with `pre_patches`.
 
 ## Known limitations (manual work)

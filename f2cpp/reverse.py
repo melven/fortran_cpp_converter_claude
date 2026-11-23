@@ -52,6 +52,7 @@ class ReverseMixin:
                 decl_nodes.append(v.node)
             if a == this or (has_err and a == err) or a == iface.result:
                 continue
+            a = v.cname                         # the declared spelling (C / C++ parameter names)
             intent = v.intent or "inout"
             rev = v.tname if v.base == "type" else None
             if v.base == "type" and v.tname == "*":   # C++ data (std::any) in a Fortran class(*)
@@ -158,7 +159,7 @@ class ReverseMixin:
                     cpp_args.append(f"*{a}")
             elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
                 const = "const " if intent == "in" else ""
-                known = self.known_size(lt, iface, a) if objects == "handle" else None
+                known = self.known_size(lt, iface, v.name) if objects == "handle" else None
                 if known:                       # size known on both sides: checked here, no size argument
                     n = known[0].replace("obj%", f"{this}%")
                     c_params.append(f"{const}{self.c_type(v)}* {a}")
@@ -899,12 +900,13 @@ inline {ah}* to_fortran(const std::any& v)
             v = iface.vars[a]
             if a == this or (has_err and a == err) or a == iface.result:
                 continue
+            key, a = a, v.cname                 # key: order of the actual arguments; a: declared spelling
             intent, cn = v.intent or "inout", v.cname
             if v.base in ("real", "integer") and not v.rank:
                 dummies.append(a)
                 decls.append(f"{self.f_type(v)}, value :: {a}" if intent == "in" else
                              f"{self.f_type(v)}, intent({intent}) :: {a}")
-                call[a] = a
+                call[key] = a
                 cpp_args.append(cn if intent == "in" else f"&{cn}")
             elif v.base == "logical" and not v.rank:
                 dummies.append(a)
@@ -915,17 +917,17 @@ inline {ah}* to_fortran(const std::any& v)
                     pre.append(f"{a}_f = {a}")
                 if intent != "in":
                     post.append(f"{a} = logical({a}_f, C_BOOL)")
-                call[a] = f"{a}_f"
+                call[key] = f"{a}_f"
                 cpp_args.append(cn if intent == "in" else f"&{cn}")
             elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
-                known = self.known_size(lt, iface, a)
+                known = self.known_size(lt, iface, v.name)
                 if known:                       # size known on both sides: checked / resized in C++
                     n = known[1].replace("{OBJ}", "")
                     dummies.append(a)
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
                     locals_.append(f"{self.fortran_decl(v)}, pointer :: {a}_f(:)")   # Fortran kind (= C kind)
                     pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'this_c%')})")   # constants in the struct
-                    call[a] = f"{a}_f"
+                    call[key] = f"{a}_f"
                     cpp_pre.append(f"{cn}.resize({n});" if intent == "out" else
                                    f"if ({cn}.size() != {n}) throw std::invalid_argument(\"{wcls}::{bd.spelling}: size of {cn}\");")
                     cpp_args.append(f"{cn}.data()")
@@ -933,14 +935,14 @@ inline {ah}* to_fortran(const std::any& v)
                     dummies += [a, f"{a}_n"]
                     sizes.append(f"integer(C_INT), value :: {a}_n")
                     decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}({a}_n)")
-                    call[a] = a
+                    call[key] = a
                     cpp_args += [f"{cn}.data()", f"static_cast<int>({cn}.size())"]
             elif v.base == "type" and v.tname == "*" and not v.rank and \
                     (intent == "out" and v.has("allocatable") or intent == "in"):     # Fortran data for C++
                 ca = self.cpp_any()
                 dummies.append(a)
                 locals_.append(f"class(*), allocatable :: {a}_f")
-                call[a] = f"{a}_f"
+                call[key] = f"{a}_f"
                 if intent == "out":             # moved into a new holder (owned by C++)
                     decls.append(f"type(C_PTR), intent(out) :: {a}")
                     post.append(f"{a} = f2cpp_any_new({a}_f)")
