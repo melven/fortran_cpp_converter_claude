@@ -56,6 +56,9 @@ class ReverseMixin:
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
         this = iface.pass_arg
         decl_nodes = []
+        if objects == "handle" and iface.vars.get(this) is not None and iface.vars[this].intent == "in":
+            self_c = "const " + self_c          # intent(in) object: const struct pointer (Fortran: type(C_PTR))
+            cpp_obj = cpp_obj.replace(f"static_cast<{cls}*>", f"static_cast<const {cls}*>")   # const method
         c_params, f_dummies, f_decls = [self_c], [self_dummy], [f"type(C_PTR), value :: {self_dummy}"]
         locals_, checks, pre, post, actuals = [], [], [], [], [self_actual]
         cpp_init, cpp_pre, cpp_args, cpp_post = [], [], [], []

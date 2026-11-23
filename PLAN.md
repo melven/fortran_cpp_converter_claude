@@ -75,8 +75,8 @@ Priorities: tests first (they protect every later step), then correctness, then 
 ### 2. Correctness (short / middle term)
 - [done] internal errors visible, `--strict`; keyword overrides normalised; prepass dump; parameter spelling;
   report noise.
-- `wrap_constants` with character components for forward-wrapped types (reverse types: done, with
-  `destroy_<Thing>_C_from_Fortran`).
+- [dropped] `wrap_constants` with character components for forward-wrapped types (not needed; reverse types: done,
+  with `destroy_<Thing>_C_from_Fortran`).
 - Runtime checks in generated C++ behind a macro (`F2CPP_CHECKS`): index bounds of shifted indices, sizes of
   intent(out) arrays, optional presence.
 - [dropped] Explicit kind check in the generated Fortran: a kind mismatch already gives compiler errors at the C
