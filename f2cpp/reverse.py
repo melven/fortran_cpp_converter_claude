@@ -933,11 +933,12 @@ inline {ah}* to_fortran(const std::any& v)
         ns = self.private_ns(name)
         over = "//! override base class implementation -> call corresponding C function pointer"
         self.emit_lines(hpp, [f"namespace {ns}", "{", "",
-                              f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}); the struct outlives it",
+                              f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}): a copy of the struct; "
+                              "its implementation (userData) outlives this object",
                               f"class {wcls} final : public {cls}", "{", "public:",
                               f"  {wcls}(){base} {{}}  //!< empty object (tests): the methods throw" if consts else
                               f"  {wcls}() = default;  //!< empty object (tests): the methods throw",
-                              f"  explicit {wcls}({ht}& c);  //!< calls the function pointers of c"])
+                              f"  explicit {wcls}(const {ht}& c);  //!< calls the function pointers of c"])
         for bd, iface in [(e[0], e[1]) for e in entries]:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             self.emit_lines(hpp, ["", f"  {over}", f"  virtual {ret} {bd.spelling}({params}){const} override;"])
@@ -945,7 +946,7 @@ inline {ah}* to_fortran(const std::any& v)
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             self.emit_lines(hpp, ["", f"  //! override base class implementation -> throws ({TODO}: not wrapped)",
                                   f"  virtual {ret} {bd.spelling}({params}){const} override;"])
-        self.emit_lines(hpp, ["", "private:", f"  {ht}* other_ = nullptr;  //!< the struct of the implementation", "};",
+        self.emit_lines(hpp, ["", "private:", f"  {ht} other_{{}};  //!< the struct of the implementation (copy)", "};",
                               "", f"}}  // namespace {ns}", ""])
         if any(part["any_data"] for _, _, _, part in entries) and not self.cwc.get("any"):
             self.cwc["any"] = True
@@ -953,16 +954,16 @@ inline {ah}* to_fortran(const std::any& v)
         cpp.emit(0, f"namespace {ns}")
         cpp.emit(0, "{")
         cpp.emit(0, "")
-        self.emit_lines(cpp, [f"{wcls}::{wcls}({ht}& c) : " +
+        self.emit_lines(cpp, [f"{wcls}::{wcls}(const {ht}& c) : " +
                               (f"{cls}({', '.join(cpp_const(v, k) for v, k in consts)}), " if consts else "") +
-                              "other_(&c)", "{", "}", ""])
+                              "other_(c)", "{", "}", ""])
         for bd, iface, _, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
-                     f"  if( other_ == nullptr || other_->{bd.name} == nullptr )",
+                     f"  if( other_.{bd.name} == nullptr )",
                      f'    throw std::logic_error("{wcls}::{bd.spelling}: no implementation");']
             lines += [f"  {x}" for x in part["cpp_pre"]]
-            call = f"other_->{bd.name}(other_{''.join(', ' + a for a in part['cpp_args'])});"
+            call = f"other_.{bd.name}(&other_{''.join(', ' + a for a in part['cpp_args'])});"
             lines.append(f"  {call}")
             lines += [f"  {x}" for x in part["cpp_mid"]]      # owned results first (also on errors)
             if part["has_err"]:

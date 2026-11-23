@@ -1373,10 +1373,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 if cfg["include_guard"] == "ifndef" else (["#pragma once"], [])
             banner = BANNER.format(src=os.path.basename(self.src)) + " (C++ classes calling C structs)"
             brief = "C++ wrapper of C structs: "
-            ch = self.cpp_file_header(hx, brief, "_c_wrapper") + [banner] + guard[0] + ["", f'#include "{base}{hx}"', "", self.open_ns(), ""] + \
+            ch = self.cpp_file_header(hx, brief, "_c_wrapper") + [banner] + guard[0] + \
+                ["", f'#include "{base}{hx}"', "", f'#include "{base}.h"  // the C struct (internal header)', "",
+                 self.open_ns(), ""] + \
                 strip_blank(self.cwc["hpp"].out) + ["", f"}}  // namespace {self.ns}", ""] + guard[1]
-            cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "", "#include <stdexcept>", "",
-                  f'#include "{base}.h"', ""] + \
+            cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "",
+                                                                  "#include <stdexcept>", ""] + \
                 (["#include <any>", "#include <memory>", "#include <typeinfo>", ""] if self.cwc.get("any") else []) + \
                 [self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
                 ["", f"}}  // namespace {self.ns}", ""]

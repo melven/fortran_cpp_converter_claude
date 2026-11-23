@@ -2200,7 +2200,9 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     translate([], c, d, wrap=[os.path.join(r, "thing_mod.F90")])
     hpp, cpp = (tmp_path / "thing_mod_c_wrapper.hpp").read_text(), (tmp_path / "thing_mod_c_wrapper.cpp").read_text()
     assert "Wrapper" not in (tmp_path / "thing_mod.hpp").read_text().replace("_wrapper", "")
-    assert '#include "thing_mod.hpp"\n\nnamespace project\n{\n\nnamespace AbstractThing_private\n{\n' in hpp
+    assert '#include "thing_mod.hpp"\n\n#include "thing_mod.h"  // the C struct (internal header)\n\nnamespace project\n{\n\n' \
+           'namespace AbstractThing_private\n{\n' in hpp
+    assert "  project_AbstractThing other_{};  //!< the struct of the implementation (copy)" in hpp
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
     # file headers: original header, @file renamed, @brief prefixed
     assert hpp.startswith("//! @file thing_mod_c_wrapper.hpp\n//! @brief C++ wrapper of C structs: things evaluated")
@@ -2208,13 +2210,13 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert (tmp_path / "project_c_wrapper_thing_mod.F90").read_text().startswith(
         "!> @file project_c_wrapper_thing_mod.F90\n!> @brief Fortran types implemented in C++: things evaluated")
     assert "class CWrapperThing final : public AbstractThing\n{\npublic:\n  CWrapperThing() = default;" in hpp
-    assert "  explicit CWrapperThing(project_AbstractThing& c);  //!< calls the function pointers of c" in hpp
-    assert "CWrapperThing::CWrapperThing(project_AbstractThing& c) : other_(&c)\n{\n}" in cpp
+    assert "  explicit CWrapperThing(const project_AbstractThing& c);  //!< calls the function pointers of c" in hpp
+    assert "CWrapperThing::CWrapperThing(const project_AbstractThing& c) : other_(c)\n{\n}" in cpp
     assert "  //! override base class implementation -> call corresponding C function pointer\n" \
            "  virtual void evaluate(const vec& x, vec& y) override;" in hpp
-    assert '#include "thing_mod_c_wrapper.hpp"' in cpp and '#include "thing_mod.h"' in cpp
+    assert '#include "thing_mod_c_wrapper.hpp"' in cpp and '#include "thing_mod.h"' in hpp     # internal header
     assert "namespace AbstractThing_private\n{\n\nCWrapperThing::CWrapperThing(" in cpp and "\nvoid CWrapperThing::evaluate(" in cpp
-    assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
+    assert "  other_.evaluate(&other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
     # no binding label (no global symbol): only the target of a function pointer
     assert "  subroutine wrap_evaluate(this, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
     assert "    call c_f_pointer(this_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x, y, ierr_f)" in b
@@ -2348,8 +2350,8 @@ def test_reverse_type_constants(tmp_path):
     assert "    integer(C_INT) :: stateSize = 0\n" in b and "    cthing%stateSize = fthing%ptr%stateSize" in b
     assert "      call c_f_pointer(c, x%c)\n      x%stateSize = x%c%stateSize\n      x%inputSize = x%c%inputSize" in cw
     cwc = read((d,), "convergence_mod_c_wrapper.cpp")
-    assert 'CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize, ' \
-           'std::string(c.label != nullptr ? c.label : "")), other_(&c)' in cwc
+    assert 'CWrapperThing::CWrapperThing(const project_Thing& c) : Thing(c.stateSize, c.inputSize, ' \
+           'std::string(c.label != nullptr ? c.label : "")), other_(c)' in cwc
     # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
     assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
@@ -2489,7 +2491,7 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
     assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
            "project_StateModel::get_internal_state function pointer in CWrapperStateModel::get_internal_state!\");" in cwc
-    assert "  other_->set_internal_state(other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
+    assert "  other_.set_internal_state(&other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
