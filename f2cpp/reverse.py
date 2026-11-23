@@ -81,7 +81,7 @@ class ReverseMixin:
         locals_, checks, pre, post, actuals = [], [], [], [], [self_actual]
         cpp_init, cpp_pre, cpp_args, cpp_post = [], [], [], []
         todo = None
-        fail = f"{err} = -1" if has_err else f'error stop "{proc}: called for another object than its owner"'
+        fail = self.fail_lines(err) if has_err else [f'error stop "{proc}: called for another object than its owner"']
         for a in iface.args:
             v = iface.vars[a]
             if v.node is not None and v.node not in decl_nodes:
@@ -111,7 +111,7 @@ class ReverseMixin:
                     f_dummies.append(a)
                     f_decls.append(f"type(C_PTR), value :: {a}")
                     locals_.append(f"type(C_PTR) :: {a}_p")
-                    stop = [f"  {err} = -1", "  return"] if has_err else \
+                    stop = [f"  {x}" for x in self.fail_lines(err)] if has_err else \
                         [f'  error stop "{proc}: {v.cname} is not C++ data of this module"']
                     sel = [f"select type ({a})", f"type is ({ca['fw']})", f"  if (associated({a}%c)) {a}_p = c_loc({a}%c)",
                            "class default"] + stop + ["end select"]
@@ -145,7 +145,7 @@ class ReverseMixin:
                 c_params.append(f"void* {a}")
                 f_dummies.append(a)
                 f_decls.append(f"type(C_PTR), value :: {a}")
-                checks += [f"if (.not. listener_same({this}%owner, {a})) then", f"  {fail}", "  return", "end if"]
+                checks += [f"if (.not. listener_same({this}%owner, {a})) then"] + [f"  {x}" for x in fail] + ["end if"]
                 actuals.append(f"{this}%user")
                 cpp_args.append(f"*static_cast<const {prog.type_name(v.tname, self.mod)}*>({a})")
             elif v.base == "type" and not v.rank:                            # temporary handle
@@ -206,7 +206,7 @@ class ReverseMixin:
                         checks.append(f"{chk[0]}(size({a}) == {n}, {err})")
                     else:
                         checks += [f"if (size({a}) /= {n}) then"] + \
-                            ([f"  {err} = -1", "  return"] if has_err else
+                            ([f"  {x}" for x in self.fail_lines(err)] if has_err else
                              [f'  error stop "{proc}: size of {v.cname} /= {n}"']) + ["end if"]
                     cpp_init.append(f"const int {a}_n = {known[1].replace('{OBJ}', cpp_obj + '->')};")
                 else:
@@ -337,6 +337,12 @@ class ReverseMixin:
             return None
         cpp = re.sub(r"obj%(\w+)", lambda m: "{OBJ}" + consts[m.group(1).lower()].cname + "()", text)
         return text, cpp
+
+    def fail_lines(self, err):
+        """Fortran statements for an error with error flag (and return): wrap_fail or ierr = -1"""
+        f = self.cfg["wrap_fail"]
+        f = f[0] if isinstance(f, list) else f
+        return [f.format(ierr=err)] if f else [f"{err} = -1", "return"]
 
     def fortran_decl(self, v):
         """type of a scalar result declared by the function prefix"""
@@ -1083,7 +1089,7 @@ inline {ah}* to_fortran(const std::any& v)
                 else:                           # moved out of its holder for the call and back
                     decls.append(f"type(C_PTR), value :: {a}")
                     locals_.append(f"type(AnyHolder_type), pointer :: {a}_h")
-                    stop = [f"  {err} = -1", "  return"] if has_err else \
+                    stop = [f"  {x}" for x in self.fail_lines(err)] if has_err else \
                         [f'  error stop "{routine}: {cn} is not Fortran data"']
                     pre += [f"if (.not. f2cpp_any_holder({a}, {a}_h)) then"] + stop + ["end if",
                             f"call move_alloc({a}_h%p, {a}_f)"]

@@ -133,6 +133,10 @@ DEFAULTS = {
     # error flag check of calls in generated Fortran (wrap_<method>): [macro, Fortran include file],
     # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
     "wrap_chk_ierr": None,
+    # error statement of generated Fortran with error flag (wrong object type, wrong class(*) data, size checks
+    # without wrap_chk_argument), {ierr}: the flag; must return; [statement, Fortran include file], e.g.
+    # ["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"] (or the statement alone); None: ierr = -1 and return
+    "wrap_fail": None,
     "wrap_string_in": None,
     # Fortran string -> new C string and its deletion (character constants of reverse types): [module, copy, delete]
     # copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:);

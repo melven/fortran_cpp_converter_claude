@@ -204,9 +204,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         if t.name == rname:                     # methods of the root: dynamic dispatch in Fortran
             decl.append(f"    class({t.spelling or t.name}), pointer :: obj")
             return decl, stmts + ["    obj => wrapper%ptr"] + [f"    {x}" for x in body]
-        fail = "ierr = -1" if has_err else f'error stop "{cname}: object of another type"'
+        fail = self.fail_lines("ierr") if has_err else [f'error stop "{cname}: object of another type"']
         return decl, stmts + ["    select type (obj => wrapper%ptr)", f"    class is ({t.spelling or t.name})"] + \
-            [f"      {x}" for x in body] + ["    class default", f"      {fail}", "    end select"]
+            [f"      {x}" for x in body] + ["    class default"] + [f"      {x}" for x in fail] + ["    end select"]
 
     def c_name(self, t, what):
         return f"{self.cfg['c_prefix']}_{self.c_class(t)}_{what}"
@@ -1426,7 +1426,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         del b[p:p + 5 + (b[p + 5:p + 6] == [""])]
         m = next(j for j, line in enumerate(b) if re.match(r"module \w+$", line))
         includes = []
-        for chk in (self.cfg["wrap_chk_argument"], self.cfg["wrap_chk_ierr"]):      # definitions of used macros
+        fail = self.cfg["wrap_fail"]
+        fail = [fail[0].split("(")[0], fail[1]] if isinstance(fail, list) and len(fail) > 1 else None
+        for chk in (self.cfg["wrap_chk_argument"], self.cfg["wrap_chk_ierr"], fail):      # definitions of used macros
             if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b) and \
                     f'#include "{chk[1]}"' not in includes:
                 includes.append(f'#include "{chk[1]}"')

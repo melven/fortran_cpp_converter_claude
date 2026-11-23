@@ -1094,7 +1094,7 @@ def test_wrapped_class_hierarchy(tmp_path):
     assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in sb
     assert "    call c_f_pointer(sphere, this_c)\n    call c_f_pointer(this_c%p_impl, wrapper)\n" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
     assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr, ierr)\n" \
-           "    class default\n      ierr = -1\n    end select" in sb
+           "    class default\n      ierr = -1\n      return\n    end select" in sb
     # file headers: original header, @file renamed, @brief prefixed
     assert read((d,), "body_mod_c_binding.F90").startswith(
         "!> @file body_mod_c_binding.F90\n!> @brief C binding: Abstract bodies")
@@ -2732,11 +2732,13 @@ def test_wrapped_calls_with_error_macro(tmp_path):
     """wrap_chk_ierr: binding calls of wrapped methods inside PROJECT_CHK_IERR (also in the select type of a derived
     class); positional actual arguments"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
-    translate([], cfg(wrap_chk_ierr=["PROJECT_CHK_IERR", "project_macros.h"]), d,
+    translate([], cfg(wrap_chk_ierr=["PROJECT_CHK_IERR", "project_macros.h"],
+                      wrap_fail=["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"]), d,
               wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
     sb = read((d,), "sphere_mod_c_binding.F90")
     assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n" \
-           "      PROJECT_CHK_IERR(call obj%grow(dr, ierr), ierr)\n    class default\n" in sb
+           "      PROJECT_CHK_IERR(call obj%grow(dr, ierr), ierr)\n    class default\n" \
+           "      PROJECT_ASSERT(.false., ierr)\n    end select" in sb        # wrap_fail
     assert '#include "project_macros.h"\n' in sb
     if shutil.which("gfortran"):
         ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
