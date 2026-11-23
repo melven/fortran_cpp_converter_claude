@@ -25,34 +25,40 @@ reverse types, `class(*)`); valgrind by hand on selected executables. No CI.
 
 ## Risks
 
-1. **Coverage of the real code base is unknown.** Development uses a synthetic corpus and construct reports;
-   real code can contain constructs, macro usages and naming patterns the corpus lacks. The report shows what was
-   not translated, not what was translated *wrongly*.
-2. **Silent mistranslation** (highest impact): 0-based index shifts, lower bounds, integer division / `mod`
-   semantics, Eigen aliasing and lazy evaluation, column-major vs. nested `std::vector`, optional arguments,
-   intent(out) sizes. Only the corpus programs are checked numerically.
-3. **Hidden internal errors**: `Translator.stmt` turns Python exceptions into `TODO` comments
-   (`internal:<Exception>` in the report); a bug looks like an unsupported construct.
-4. **Lifetime / ownership across C and Fortran** (wrap mode): pointers into Fortran objects held by C++, owned
-   objects, `class(*)` holders (no copy hook in Fortran: copies double-free), registration of factories (copy
-   stored). Tested on small cases, valgrind not automated.
-5. **Brittleness of the generated Fortran**: post-processing by regular expressions (`finish_module`); order
-   dependent; long lines with macros are not split.
-6. **Maintainability**: very long functions (`WrapEmitter.generate`, `method`, `ReverseMixin.forward`,
-   `ModuleEmitter.generate`), state in emitter attributes, two `class(*)` mechanisms, listeners vs. reverse types,
-   one 2,600-line test file with exact-text assertions (style changes touch many tests).
-7. **Tool chain**: fparser2 version specifics (node shapes; quirks documented in `CLAUDE.md`); compiler-specific
-   assumptions (`integer(C_INT)` = default `integer`, `-fdefault-real-8`, C++17).
-8. **Environment**: no CI; compile / run tests are skipped without the tool chain (some `return` silently).
+Assessment (with the user, 2026-11-23): status in brackets.
+
+1. **Coverage of the real code base**: the real code base has nearly complete unit and system tests; translated
+   code is checked there. [low, user testing]
+2. **Silent mistranslation** (0-based shifts, lower bounds, integer division / `mod`, Eigen aliasing, sizes):
+   annoying, but detectable by the real tests. [medium; corpus numerics + differential tests below]
+3. **Internal errors**: now distinct from unsupported constructs: report kind `error`, a log line with the Fortran
+   location (module::procedure, line) and the f2cpp location, exit code 2, `--strict` stops (used by the tests).
+   [done]
+4. **Lifetime / ownership across C and Fortran**: known; `class(*)` holders: `move_alloc` only (Fortran has no copy
+   hook), valgrind on the run tests by hand. [known; automate valgrind]
+5. **Regular expressions on the generated Fortran** (in f2cpp, not in the user's code): `WrapEmitter.finish_module`
+   rewrites the generated binding text (sections, public list, only-lists, short names, separators, line
+   continuation). Each step parses Fortran lines with patterns; the order matters and a new generated construct
+   can be misclassified. Covered by the compile tests of the generated Fortran. [medium; block IR below]
+6. **Maintainability**: long functions, emitter state in attributes, two `class(*)` mechanisms, listeners vs.
+   reverse types, one large test file with exact-text assertions. [room for improvement, section 3]
+7. **Tool chain**: fparser2 node shapes; compiler assumptions (`integer(C_INT)` = default `integer`, Fortran `real`
+   = `C_REAL` by compiler flags: a mismatch is a compile error at the C interface). [CI added]
+
+Small defects (from the review): fixed: internal errors, keyword config overrides normalised, prepass dump into
+the output directory, declared spelling of reverse wrapper arguments, notes counted once per procedure, Python 3.11
+syntax (f-strings). Not fixed (uncritical for the user, CMake build): output subdirectory for `_c_binding.F90`,
+`!` inside a string before a macro, same object file name for `x_mod.F90` / `x_mod.cpp` in simple builds.
 
 ## Plan
 
 Priorities: tests first (they protect every later step), then correctness, then structure for extensions.
 
 ### 1. Tests (short term)
-- CI (GitHub Actions or the project's CI): pytest with gfortran, g++, Eigen, googletest, LAPACK, valgrind; fail
-  when compile tests are skipped there.
-- Corpus-wide guard: no `internal:` category in the report of any corpus run (translate and wrap).
+- [done] CI (`.github/workflows/ci.yml`): ruff (pyflakes, syntax), pytest with coverage on Python 3.11 / 3.13,
+  full tool chain, `F2CPP_REQUIRE_TOOLCHAIN` fails when compile tools are missing. Line coverage 93%.
+- [done] Internal errors fail the tests (`strict = true` in `tests/support/f2cpp.toml`).
+- Ruff: extend the rules (bugbear `B`, line length 132) after cleaning the findings (~20 `B007` / `B905`).
 - Valgrind in the run tests (`valgrind --error-exitcode=1` when available) for all wrap / reverse executables.
 - Split `test_f2cpp.py` by area (`test_translate_*.py`, `test_wrap_*.py`, `test_reverse_*.py`, `conftest.py`
   with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test).
@@ -66,11 +72,10 @@ Priorities: tests first (they protect every later step), then correctness, then 
   noted gets a synthetic example.
 
 ### 2. Correctness (short / middle term)
-- Make internal errors visible: `--strict` (re-raise in `Translator.stmt`), used by the tests.
-- Normalise keyword overrides in `config.load` like TOML values (or reject mixed case).
-- Fix: output directory creation for `_c_binding.F90`; no `.f2cpp_prepass` file next to the input (write it to the
-  output directory); `!` inside strings in `expand_macros`; declared spelling for reverse wrapper parameter names;
-  report noise (`unlimited-polymorphic` once per argument).
+- [done] internal errors visible, `--strict`; keyword overrides normalised; prepass dump; parameter spelling;
+  report noise.
+- `wrap_constants` with character components for forward-wrapped types (reverse types: done, with
+  `destroy_<Thing>_C_from_Fortran`).
 - Runtime checks in generated C++ behind a macro (`F2CPP_CHECKS`): index bounds of shifted indices, sizes of
   intent(out) arrays, optional presence.
 - Document and test the assumptions of the C binding (kinds, `integer(C_INT)` vs. default `integer`) with a
