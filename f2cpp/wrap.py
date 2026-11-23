@@ -1331,7 +1331,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
-        b += typedefs + self.any_typedefs + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
+        b += c_prologue(typedefs + self.any_typedefs) + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
         for t in structs:                           # the handle points to this struct
             b += [f"  !> C struct {self.c_type_name(t)}: handle of {t.spelling or t.name}",
                   f"  type, bind(C), public :: {self.struct_type(t)}",
@@ -1448,6 +1448,37 @@ def fortran_continue(line, width=132):
         res.append(rest[:cut] + " &")
         rest = ind + rest[cut + 1:].lstrip()
     return res + [rest]
+
+
+def c_prologue(lines):
+    """first C declaration block: includes, then one forward typedef per struct (typedef struct X X;), then the
+    definitions as struct X { ... }; (no struct keyword needed elsewhere)"""
+    includes = [x for x in lines if x.startswith("!#include")]
+    rest = [x for x in lines if not x.startswith("!#include")]
+    forward, body, k = [], [], 0
+    while k < len(rest):
+        x = rest[k]
+        m = re.match(r"!typedef struct (\w+) (\w+);$", x)
+        d = re.match(r"!typedef struct (\w+)$", x)
+        if m:
+            if x not in forward:
+                forward.append(x)
+        elif d:                                 # typedef struct X { ... } X;  ->  struct X { ... };
+            name = d.group(1)
+            if f"!typedef struct {name} {name};" not in forward:
+                forward.append(f"!typedef struct {name} {name};")
+            body.append(f"!struct {name}")
+            k += 1
+            while not re.match(rf"!}}\s*{name};$", rest[k]):
+                body.append(rest[k])
+                k += 1
+            body.append("!};")
+        else:
+            body.append(x)
+        k += 1
+    while body and body[0] == "!":
+        body.pop(0)
+    return includes + (["!"] if includes else []) + forward + (["!"] if forward and body else []) + body
 
 
 def split_params(line, width):

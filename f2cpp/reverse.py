@@ -73,7 +73,7 @@ class ReverseMixin:
             if v.base == "type" and v.tname == "*":   # C++ data (std::any) in a Fortran class(*)
                 ca = self.cpp_any() if objects == "handle" and not v.rank else None
                 if ca and intent == "out" and v.has("allocatable"):     # new C++ data, owned by Fortran
-                    c_params.append(f"struct {ca['ht']}** {a}")
+                    c_params.append(f"{ca['ht']}** {a}")
                     f_dummies.append(a)
                     f_decls.append(f"type(C_PTR), intent(out) :: {a}")
                     locals_.append(f"type(C_PTR) :: {a}_p")
@@ -86,7 +86,7 @@ class ReverseMixin:
                     cpp_args.append(f"{a}_v")
                     cpp_post.append(f"*{a} = any_to_c(std::move({a}_v));")
                 elif ca and intent == "in":     # only C++ data (created by this module's C++ objects)
-                    c_params.append(f"const struct {ca['ht']}* {a}")
+                    c_params.append(f"const {ca['ht']}* {a}")
                     f_dummies.append(a)
                     f_decls.append(f"type(C_PTR), value :: {a}")
                     locals_.append(f"type(C_PTR) :: {a}_p")
@@ -720,7 +720,7 @@ inline {ah}* to_fortran(const std::any& v)
             this = iface.pass_arg
             proc = f"{bridge[:-5].lower()}_{bd.name}"
             m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.name}", funptr=f"{this}%c%{bd.name}",
-                             self_c=f"struct {ht}* self", self_dummy="this", self_actual=f"c_loc({this}%c)",
+                             self_c=f"{ht}* self", self_dummy="this", self_actual=f"c_loc({this}%c)",
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
             m["proc"] = proc
             methods.append((bd, iface, m))

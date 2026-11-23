@@ -857,11 +857,11 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "void project_MySolver_apply(const project_MySolver* mySolver, const PROJECT_REAL* x, PROJECT_REAL* y, " \
            "int* ierr);" in flat(h)
     assert "void project_MySolver_scale(project_MySolver* mySolver, PROJECT_REAL factor, int* ierr);" in flat(h)
-    assert "typedef struct project_MySolver\n{\n  void* p_impl = nullptr;\n  int n = 0;\n  PROJECT_REAL* diag = nullptr;\n" \
-           "  int diag_size = 0;\n  PROJECT_REAL weights[3] = {};\n  project_SolverParams params;\n} project_MySolver;" in flat(h)
-    assert "typedef struct project_SolverParams\n{\n  int maxit = 0;\n  PROJECT_REAL tol = 0;\n  bool restart = false;\n" \
-           "  PROJECT_REAL w[2] = {};\n} project_SolverParams;" in flat(h)
-    assert "!typedef struct project_MySolver\n!{\n!  void* p_impl = nullptr;\n" in binding
+    assert "struct project_MySolver\n{\n  void* p_impl = nullptr;\n  int n = 0;\n  PROJECT_REAL* diag = nullptr;\n" \
+           "  int diag_size = 0;\n  PROJECT_REAL weights[3] = {};\n  project_SolverParams params;\n};" in flat(h)
+    assert "struct project_SolverParams\n{\n  int maxit = 0;\n  PROJECT_REAL tol = 0;\n  bool restart = false;\n" \
+           "  PROJECT_REAL w[2] = {};\n};" in flat(h)
+    assert "!typedef struct project_MySolver project_MySolver;\n" in binding and "!struct project_MySolver\n!{\n!  void* p_impl = nullptr;\n" in binding
     assert "  type, bind(C) :: MySolver_c\n    type(C_PTR) :: p_impl = C_NULL_PTR   !< the Fortran object\n" \
            "    integer(C_INT) :: n = 0\n    type(C_PTR) :: diag = C_NULL_PTR\n    integer(C_INT) :: diag_size = 0\n" \
            "    real(C_REAL) :: weights(3) = 0\n    type(SolverParams_c) :: params\n  end type MySolver_c" in binding
@@ -996,7 +996,7 @@ def test_c_names_follow_the_namespace(tmp_path):
     w = os.path.join(CORPUS, "wrapped")
     translate([], cfg(namespace="Flow::detail"), str(tmp_path), wrap=[os.path.join(w, "mysolver_mod.F90")])
     h, binding = (tmp_path / "mysolver_mod.h").read_text(), (tmp_path / "mysolver_mod_c_binding.F90").read_text()
-    assert "typedef struct flow_MySolver\n{" in h and "#define FLOW_REAL double" in flat(h)
+    assert "typedef struct flow_MySolver flow_MySolver;\n" in h and "struct flow_MySolver\n{" in h and "#define FLOW_REAL double" in flat(h)
     assert "void flow_MySolver_apply(const flow_MySolver* mySolver, const FLOW_REAL* x, FLOW_REAL* y, int* ierr);" in flat(h)
     assert "#ifdef FLOW_SINGLE_PRECISION" in binding and "  use flow_str, only: str_array_ptr_to_str" in binding
 
@@ -1480,9 +1480,9 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
     h, b = (tmp_path / "holder_mod.h").read_text(), (tmp_path / "holder_mod_c_binding.F90").read_text()
     assert '#include "offsets_mod.hpp"' in hpp and "class Offsets" not in hpp
     assert "  //! position of the block\n  const Offsets& offsets() const { return offsets_; }" in hpp
-    assert "typedef struct project_Offsets\n{\n  int row = 0;\n  int col = 0;\n  PROJECT_REAL w[2] = {};\n" \
+    assert "struct project_Offsets\n{\n  int row = 0;\n  int col = 0;\n  PROJECT_REAL w[2] = {};\n" \
            "  PROJECT_REAL* scale = nullptr;\n  int scale_size = 0;\n  int* idx = nullptr;\n  int idx_size = 0;\n" \
-           "  bool mask[2] = {};\n  bool* active = nullptr;\n  int active_size = 0;\n} project_Offsets;" in flat(h)
+           "  bool mask[2] = {};\n  bool* active = nullptr;\n  int active_size = 0;\n};" in flat(h)
     # logical arrays: copied into logical(C_BOOL) (the buffer is released in destroy)
     assert "    this_c%offsets%mask = logical(obj%offsets%mask, C_BOOL)\n" in b
     assert "      allocate(buf1(size(obj%offsets%active)))\n      buf1 = logical(obj%offsets%active, C_BOOL)\n" in b
@@ -1949,7 +1949,7 @@ def test_reverse_wrapped_types(tmp_path):
     assert "  virtual void reset();" in th and "  virtual scalar offset() const;" in th
     assert "void AbstractThing::reset()\n{\n}" in tc and "scalar AbstractThing::offset() const\n{\n  scalar o = 0.0;\n  return o;\n}" in tc
     assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tw
-    assert "  static void evaluate_wrapper(struct project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
+    assert "  static void evaluate_wrapper(project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
            "int y_n, int* ierr) noexcept;" in th
     assert "  //! internal wrapper for evaluate\n  static void evaluate_wrapper(" in th
     assert "  //! internal wrapper for the destruction (the object is owned by the caller)\n" \
