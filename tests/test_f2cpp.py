@@ -2705,3 +2705,13 @@ def test_reverse_string_constants_with_project_helpers(tmp_path):
         for f in (os.path.join(SUPPORT, "project_str.F90"), base, os.path.join(r, "convergence_mod.F90"),
                   "convergence_mod_c_binding.F90"):
             run(ff + [f], d)
+
+
+
+def test_wrapped_module_in_a_subdirectory(tmp_path):
+    """module_headers with a directory: all outputs of a wrapped module go there (created)"""
+    (tmp_path / "x.toml").write_text('[module_headers]\nmysolver_mod = "solvers/MySolver.hpp"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path / "out"), wrap=[os.path.join(CORPUS, "wrapped", "mysolver_mod.F90")])
+    for f in ("MySolver.hpp", "MySolver.cpp", "MySolver.h", "MySolver_c_binding.F90"):
+        assert (tmp_path / "out" / "solvers" / f).exists(), f

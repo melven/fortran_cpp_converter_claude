@@ -47,7 +47,7 @@ Assessment (with the user, 2026-11-23): status in brackets.
 
 Small defects (from the review): fixed: internal errors, keyword config overrides normalised, prepass dump into
 the output directory, declared spelling of reverse wrapper arguments, notes counted once per procedure, Python 3.11
-syntax (f-strings). Not fixed (uncritical for the user, CMake build): output subdirectory for `_c_binding.F90`,
+syntax (f-strings). Fixed later: output subdirectory for `_c_binding.F90`. Not fixed (uncritical for the user, CMake build):
 `!` inside a string before a macro, same object file name for `x_mod.F90` / `x_mod.cpp` in simple builds.
 
 ## Plan
