@@ -2102,7 +2102,8 @@ extern "C" void run(project_Counter* h)
 
 
 def test_reverse_class_star_is_todo(tmp_path):
-    """class(*) arguments of reverse-wrapped methods: C++ data is not passed to Fortran (translate the caller)"""
+    """class(*) arguments of reverse-wrapped methods: only allocatable intent(out) / intent(in) (C++ data);
+    Fortran implementations behind the struct: TODO"""
     (tmp_path / "rs_mod.F90").write_text("""module rs_mod
   implicit none
   type, abstract :: AbstractS_type
@@ -2113,14 +2114,14 @@ def test_reverse_class_star_is_todo(tmp_path):
     subroutine save_iface(this, state)
       import :: AbstractS_type
       class(AbstractS_type), intent(in) :: this
-      class(*), allocatable, intent(out) :: state
+      class(*), allocatable, intent(inout) :: state
     end subroutine save_iface
   end interface
 end module rs_mod
 """)
     translate([], cfg(wrap_reverse=["abstracts_type"]), str(tmp_path), wrap=[str(tmp_path / "rs_mod.F90")])
     b = (tmp_path / "project_c_wrapper_rs_mod.F90").read_text()
-    assert "! TODO(f2cpp): argument state: class(*) (C++ data is not passed to Fortran; translate the caller)" in b
+    assert "! TODO(f2cpp): argument state: class(*) (C++ data: allocatable intent(out) / intent(in) scalars)" in b
     assert 'error stop "cwrappers_save_state:' in b
     # the other direction (Fortran implementation behind the struct): TODO in the binding, the C++ wrapper throws
     fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod_c_wrapper.hpp",
@@ -2422,3 +2423,85 @@ int main()
     run(["g++", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
     assert run(["./m"], d).split("\n")[:4] == ["  2  1", "  0 F", " -2", " 311"]     # -2: PROJECT_CHK_ARGUMENT
+
+
+def test_reverse_class_star_cpp_data(tmp_path):
+    """class(*) arguments of reverse types: C++ data (std::any) held by Fortran in a CWrapperAny_type (owns it,
+    move_alloc only); passed back to C++ unchanged; Fortran data is rejected (ierr)"""
+    d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "state_model_mod.F90")
+    translate([], cfg(wrap_reverse=["statemodel_type"]), d, wrap=[src])
+    cpp, h, cw = read((d,), "state_model_mod.cpp"), read((d,), "state_model_mod.h"), \
+        read((d,), "project_c_wrapper_state_model_mod.F90")
+    assert "struct project_state_model_mod_CppAny\n{\n  project_state_model_mod_CppAny_destroy destroy = nullptr;\n" \
+           "  void* userData = nullptr;\n};" in h
+    assert "    *state = any_to_c(std::move(state_v));" in cpp and "set_internal_state(any_from_c(state));" in cpp
+    assert "  c->userData = new std::any(std::move(a));  // owned by c (destroy_any)" in cpp
+    assert "    allocate(CWrapperAny_type :: state)\n    select type (state)\n    type is (CWrapperAny_type)\n" \
+           "      call c_f_pointer(state_p, state%c)\n    end select" in cw
+    assert "    type is (CWrapperAny_type)\n      if (associated(state%c)) state_p = c_loc(state%c)\n" \
+           "    class default\n      ierr = -1\n      return\n    end select" in cw
+    assert "public :: CWrapperAny_type" not in cw and "    final :: cwrapperany_final" in cw
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""module drv_mod
+  use, intrinsic :: iso_c_binding, only: C_PTR
+  use state_model_mod, only: StateModel_type
+  use project_c_wrapper_state_model_mod, only: project_StateModel_wrap
+  implicit none
+contains
+  subroutine use_model(c) bind(C, name="use_model")
+    type(C_PTR), value :: c
+    class(StateModel_type), allocatable :: m
+    class(*), allocatable :: s, s2
+    integer :: ierr
+    call project_StateModel_wrap(c, m)
+    call m%step()
+    call m%get_internal_state(s, ierr)        ! C++ data (value 1)
+    call m%step()
+    call m%step()
+    print '(2i3)', ierr, m%value()
+    call m%set_internal_state(s, ierr)
+    print '(2i3)', ierr, m%value()
+    call move_alloc(s, s2)                     ! moved, not copied
+    call m%step()
+    call m%set_internal_state(s2, ierr)
+    print '(2i3)', ierr, m%value()
+    call m%set_internal_state(42, ierr)        ! Fortran data: rejected
+    print '(i3)', ierr
+    deallocate(s2)                             ! deletes the C++ data
+  end subroutine use_model
+end module drv_mod
+""")
+    (tmp_path / "run.cpp").write_text(r"""#include "state_model_mod.hpp"
+#include <any>
+#include <memory>
+extern "C" void use_model(project_StateModel* c);
+class Counter : public project::StateModel
+{
+public:
+  void get_internal_state(std::any& state) const override { state = n_; }
+  void set_internal_state(const std::any& state) override { n_ = std::any_cast<int>(state); }
+  void step() override { ++n_; }
+  int value() const override { return n_; }
+
+private:
+  int n_ = 0;
+};
+int main()
+{
+  auto m = std::make_unique<Counter>();
+  use_model(project::StateModel_private::toC(*m));
+  m.release(); // NOLINT(bugprone-unused-return-value)
+  return 0;
+}
+""")
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+          "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    for f in (src, "state_model_mod_c_binding.F90", "project_c_wrapper_state_model_mod.F90", "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f in ("state_model_mod.cpp", "run.cpp"):
+        run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
+    run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
+         "state_model_mod_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
+    assert run(["./m"], d).split("\n")[:4] == ["  0  3", "  0  1", "  0  1", " -1"]

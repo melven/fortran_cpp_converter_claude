@@ -343,7 +343,12 @@ such a type is a wrapped class instead (`wrap_owned` for arrays of it passed to 
 C++ and passed back, moved and never copied. C: the opaque holder `project_FortranAny*` (NULL: unallocated);
 C++: `std::any` with a `std::shared_ptr<FortranState>` (copies share it, the last one releases the holder in
 Fortran: `project_<module>_any_release`). C++ data in a `std::any` cannot be passed to Fortran
-(`std::invalid_argument`); `class(*)` arguments of reverse-wrapped methods are TODOs (translate the caller).
+(`std::invalid_argument`).
+`class(*)` arguments of reverse-wrapped methods (C++ implementations; `allocatable, intent(out)` /
+`intent(in)`): C++ data held by Fortran, per module: C struct `project_<module>_CppAny` (`destroy`, `userData`:
+the `std::any`), in Fortran a private `CWrapperAny_type` in the `class(*)` (owns it, final -> `destroy`;
+`move_alloc` only, never copy); passed back to C++ unchanged (only the creating module can unpack it; Fortran
+data: `ierr = -1`). Fortran implementations behind the struct (`CWrapper<Thing>`): still TODO.
 
 ## Objects that are neither copyable nor movable
 

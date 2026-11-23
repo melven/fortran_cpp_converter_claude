@@ -1099,6 +1099,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
         self.cwc = {"hpp": self.tr(), "cpp": self.tr()}     # C++ CWrapper<Thing> (Fortran implementations)
+        self.cppany, self.any_typedefs = None, []          # C++ data (std::any) held by Fortran (cpp_any)
         stem_h = os.path.basename(stem) + ".h"
         values = self.value_types()
         vstructs = []
@@ -1289,6 +1290,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             h += [""] + [f"struct {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
         if self.any_used:                           # opaque handle of Fortran data (class(*))
             h += [f"struct {self.any_handle()};  //!< Fortran data (class(*)), see {os.path.basename(stem)}.h"]
+        if self.cppany:                             # C++ data held by Fortran
+            h += [f"struct {self.cppany['ht']};  //!< C++ data (std::any) held by Fortran, see {os.path.basename(stem)}.h"]
         h += ["", self.open_ns(), ""] + ([self.any_cpp(), ""] if self.any_used else [])
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
@@ -1312,7 +1315,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
              f'#include "{os.path.basename(stem)}.h"', ""] + self.log_includes() + \
             [self.open_ns(), ""]
-        c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
+        c += (self.cpp_any_helpers() if self.cppany else []) + strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
 
         # binding module
         single, real = cfg["c_single_precision"], cfg["c_real"]
@@ -1328,7 +1331,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
-        b += typedefs + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
+        b += typedefs + self.any_typedefs + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
         for t in structs:                           # the handle points to this struct
             b += [f"  !> C struct {self.c_type_name(t)}: handle of {t.spelling or t.name}",
                   f"  type, bind(C), public :: {self.struct_type(t)}",
@@ -1389,7 +1392,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             out += split_params(line.lstrip(), self.cfg["c_decl_width"]) if inside else [line]
             if line.strip() == "!@end_c_declaration":
                 inside = False
-        b[:] = [x for line in out for x in fortran_continue(line)]
+        b[:] = [x for text in out for line in text.split("\n") for x in fortran_continue(line)]
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         types = []                                  # public: one statement per name (types included)
