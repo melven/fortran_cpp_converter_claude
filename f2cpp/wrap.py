@@ -828,8 +828,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             target = f"obj%{bd.generic or bd.name}" if bd.access == "private" else f"obj%{bd.name}"
         else:                       # private specific of a public generic interface: through the generic
             target = p.cname if self.mod.is_public(p.name) or not p.generic else p.generic
-        body = list(pre) + [f"res = {target}({', '.join(call)})" if r is not None else
-                            f"call {target}({', '.join(call)})"] + list(post)
+        actuals = ", ".join(positional(call, [a for a in p.args if t is None or a != p.pass_arg]))
+        stmt = f"res = {target}({actuals})" if r is not None else f"call {target}({actuals})"
+        chk = self.cfg["wrap_chk_ierr"]
+        if has_err and chk and not any("f2cpp_any_back" in x for x in post):     # (data moved back also on errors)
+            stmt = f"{chk[0]}({stmt}, ierr)"
+        body = list(pre) + [stmt] + list(post)
         if t is not None:
             odecl, ostmts = self.object_access(t, cname, handle, has_err, body)
             fb.extend(odecl)
@@ -1431,6 +1435,21 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
 
 
 SEPARATOR = "  !" + "=" * 80
+
+
+def positional(call, dummies):
+    """actual arguments "name=expr" in the order of the dummies; positional up to the first omitted dummy"""
+    given = {}
+    for c in call:
+        m = re.match(r"(\w+)=(?!=)(.*)$", c)
+        given[m.group(1).lower() if m else None] = m.group(2) if m else c
+    out, gap = [], False
+    for d in dummies:
+        if d in given:
+            out.append(f"{d}={given.pop(d)}" if gap else given.pop(d))
+        else:
+            gap = True
+    return out + [f"{k}={v}" if k else v for k, v in given.items()]
 
 
 def fortran_continue(line, width=132):

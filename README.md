@@ -260,7 +260,7 @@ LinearThingFactory_type = "linear"
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
   pointers to the private `bind(C, name="")` routines `wrap_<method>` (arrays of known size: pointer views
   `x_f => x(1:this_c%n)`; positional actual arguments; `wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]`:
-  `PROJECT_CHK_IERR(call wrapper%ptr%f(..., ierr), ierr)`; no global symbol; plain `bind(C)`
+  `PROJECT_CHK_IERR(call wrapper%ptr%f(..., ierr), ierr)`, also for the calls of forward-wrapped methods; no global symbol; plain `bind(C)`
   would give clashing global symbols `wrap_<method>` across modules); C++
   `AbstractThing_private::CWrapperThing(project_AbstractThing&)` (own files `<stem>_c_wrapper.hpp/.cpp`) derives
   from `AbstractThing` and calls them (the struct outlives it; the default constructor gives an empty object);

@@ -909,9 +909,9 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
     assert "struct project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
     assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
-    assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
+    assert "    call obj%apply(x(1:obj%n), y(1:(obj%n)), ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
-    assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
+    assert "    call obj%set_label(str_array_ptr_to_str(label), ierr)" in binding
     assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
     assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
     assert "  //! component verbose\n  bool verbose() const;\n  //! component verbose (setter)\n  void verbose(bool value);\n" \
@@ -933,7 +933,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
         assert "scalar MySolver::norm(const vec& x) const\n{\n" in cpp and "diag()" in cpp
     else:
         assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in flat(h)
-        assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
+        assert "    res = residual_norm(r(1:n), b(1:n), n)" in binding
     # size unknown in Fortran (x(:) without check): passed from C++
     assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in flat(h)
     assert "  project_scale_vector(x.data(), static_cast<int>(x.size()), factor, &ierr);" in cpp
@@ -943,7 +943,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
     assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
     assert "    if (c_associated(tag)) allocate(tag_f, source=str_array_ptr_to_str(tag))\n" \
-           "    res = tagged_length(msg=str_array_ptr_to_str(msg), tag=tag_f)" in binding
+           "    res = tagged_length(str_array_ptr_to_str(msg), tag_f)" in binding
     user = read((d,), "solver_user_mod.cpp")
     assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
     os.makedirs(os.path.join(d, "f"))
@@ -979,14 +979,14 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
            "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
     assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
            "static_cast<int>(modelMask.size()) : 0);" in cpp
-    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x=x(1:obj%n), pos=pos_f)\n" \
+    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x(1:obj%n), pos_f)\n" \
            "    if (allocated(pos_f)) pos_c = logical(pos_f, C_BOOL)" in binding
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in flat(h)
     assert "    type(C_PTR), value :: r\n    real, pointer, contiguous :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
-    assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
+    assert "res = obj%weighted(x(1:obj%n), r_f, w_f)" in binding
     assert "  if( r )\n    r->get().resize(n());\n" in cpp
     assert "project_MySolver_weighted(handle_, x.data(), r ? r->get().data() : nullptr, " \
            "w.size() > 0 ? w.data() : nullptr);" in cpp
@@ -1091,7 +1091,7 @@ def test_wrapped_class_hierarchy(tmp_path):
         read((d,), "body_mod_c_binding.F90")
     assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in sb
     assert "    call c_f_pointer(sphere, this_c)\n    call c_f_pointer(this_c%p_impl, wrapper)\n" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
-    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr=dr, ierr=ierr)\n" \
+    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr, ierr)\n" \
            "    class default\n      ierr = -1\n    end select" in sb
     # file headers: original header, @file renamed, @brief prefixed
     assert read((d,), "body_mod_c_binding.F90").startswith(
@@ -1414,7 +1414,7 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     assert "  // TODO(f2cpp): binding version not wrapped: nopass" in bh
     assert "// TODO(f2cpp): module variable b_count not wrapped" in bh
     assert "type :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
-    assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
+    assert "    obj => wrapper%ptr\n    call obj%write_state(ierr)" in bb
 
 
 def test_method_template_declaring_the_object(tmp_path):
@@ -1604,7 +1604,7 @@ end module q_mod
 """)
     translate([], cfg(wrap_sizes={"q_type%fill": {"y": "this%m"}}), str(tmp_path), wrap=[str(tmp_path / "q_mod.F90")])
     cpp, b = (tmp_path / "q_mod.cpp").read_text(), (tmp_path / "q_mod_c_binding.F90").read_text()
-    assert "call obj%fill(y=y(1:obj%m))" in b
+    assert "call obj%fill(y(1:obj%m))" in b
     assert "  // TODO(f2cpp): size of y (obj%m in Fortran) not translatable: resize y before the call" in cpp
 
 
@@ -2308,7 +2308,7 @@ def test_wrap_sizes_from_documentation(tmp_path):
     cpp, b = read((d,), "shape_mod.cpp"), read((d,), "shape_mod_c_binding.F90")
     assert "void shape::areas(vec& a) const\n{\n  a.resize(nSurface());\n" in cpp
     assert "void shape::normals(mat& nrm) const\n{\n  nrm.resize(3, nSurface());\n" in cpp
-    assert "    call obj%areas(a=a(1:obj%nSurface), ierr=ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
+    assert "    call obj%areas(a(1:obj%nSurface), ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
     info = report.files[os.path.join(CORPUS, "wrapped", "shape_mod.F90")]["info"]
     assert info["wrap-size-from-doc:shape_type%areas:a"] == 1 and info["wrap-size-from-doc:shape_type%normals:nrm"] == 1
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
@@ -2720,3 +2720,22 @@ def test_wrapped_module_in_a_subdirectory(tmp_path):
     translate([], c, str(tmp_path / "out"), wrap=[os.path.join(CORPUS, "wrapped", "mysolver_mod.F90")])
     for f in ("MySolver.hpp", "MySolver.cpp", "MySolver.h", "MySolver_c_binding.F90"):
         assert (tmp_path / "out" / "solvers" / f).exists(), f
+
+
+
+def test_wrapped_calls_with_error_macro(tmp_path):
+    """wrap_chk_ierr: binding calls of wrapped methods inside PROJECT_CHK_IERR (also in the select type of a derived
+    class); positional actual arguments"""
+    d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
+    translate([], cfg(wrap_chk_ierr=["PROJECT_CHK_IERR", "project_macros.h"]), d,
+              wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
+    sb = read((d,), "sphere_mod_c_binding.F90")
+    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n" \
+           "      PROJECT_CHK_IERR(call obj%grow(dr, ierr), ierr)\n    class default\n" in sb
+    assert '#include "project_macros.h"\n' in sb
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+              "-Wno-unused-dummy-argument", "-I" + CORPUS]
+        for f in (os.path.join(w, "body_mod.F90"), "body_mod_c_binding.F90", os.path.join(w, "sphere_mod.F90"),
+                  "sphere_mod_c_binding.F90"):
+            run(ff + [f], d)
