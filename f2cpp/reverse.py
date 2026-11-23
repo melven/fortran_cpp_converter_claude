@@ -374,16 +374,25 @@ class ReverseMixin:
 
     def string_to_c(self, v):
         """create_<Thing>_C_from_Fortran: a C string copy of the character constant (freed by destroy_...)"""
-        n = v.cname
+        n, new = v.cname, self.c_string_names()[0]
         if v.has("allocatable"):
-            return f"    if (allocated(fthing%ptr%{n})) cthing%{n} = f2cpp_c_string_new(fthing%ptr%{n})"
-        return f"    cthing%{n} = f2cpp_c_string_new(trim(fthing%ptr%{n}))"
+            return f"    if (allocated(fthing%ptr%{n})) cthing%{n} = {new}(fthing%ptr%{n})"
+        return f"    cthing%{n} = {new}(trim(fthing%ptr%{n}))"
+
+    def c_string_names(self):
+        """(new, free) of C strings: the project's helpers (wrap_string_out) or generated ones"""
+        out = self.cfg["wrap_string_out"]
+        return (out[1], out[2]) if out else ("f2cpp_c_string_new", "f2cpp_c_string_free")
 
     def c_string_helpers(self, fb):
-        """Fortran (binding, once): C strings allocated / freed in Fortran"""
+        """Fortran (binding, once): C strings allocated / freed in Fortran (generated unless wrap_string_out)"""
         if getattr(self, "c_string_done", False):
             return
         self.c_string_done = True
+        out = self.cfg["wrap_string_out"]
+        if out:
+            self.extra_uses.add(f"  use {out[0]}, only: {out[1]}, {out[2]}")
+            return
         fb += ["", "  !> a new C string (NUL-terminated copy of s), freed by f2cpp_c_string_free",
                "  function f2cpp_c_string_new(s) result(p)", "    character(len=*), intent(in) :: s",
                "    type(C_PTR) :: p", "    character(kind=C_CHAR), pointer :: buf(:)", "    integer :: i", "",
@@ -901,7 +910,7 @@ inline {ah}* to_fortran(const std::any& v)
         fb += ["", f"  !> frees what {create} allocated (C strings) and resets the struct",
                f"  subroutine {destroy}(cthing, ierr)", f"    type({st}), intent(inout) :: cthing",
                "    integer, intent(out) :: ierr", "", "    ierr = 0"] + \
-            [f"    call f2cpp_c_string_free(cthing%{v.cname})" for v in strings] + \
+            [f"    call {self.c_string_names()[1]}(cthing%{v.cname})" for v in strings] + \
             [f"    cthing = {st}()", f"  end subroutine {destroy}"]
         self.public_extra += [create, destroy]
         for _, _, _, part in entries:          # after create_<Thing>_C_from_Fortran

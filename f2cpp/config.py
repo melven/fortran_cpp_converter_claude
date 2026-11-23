@@ -133,7 +133,11 @@ DEFAULTS = {
     # error flag check of calls in generated Fortran (wrap_<method>): [macro, Fortran include file],
     # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
     "wrap_chk_ierr": None,
-    "wrap_string_in": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
+    "wrap_string_in": None,
+    # Fortran string -> new C string and its deletion (character constants of reverse types):
+    # [module, function(s) result(type(C_PTR)), subroutine(p: type(C_PTR), intent(inout))];
+    # None: generated helpers f2cpp_c_string_new / f2cpp_c_string_free
+    "wrap_string_out": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}
     "wrap_sizes": {},

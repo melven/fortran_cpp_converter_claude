@@ -248,7 +248,8 @@ LinearThingFactory_type = "linear"
   C++ constructor (`explicit Thing(int stateSize)`), const getters `stateSize()` (used by translated defaults),
   copied into the Fortran object by `project_Thing_wrap`; Fortran implementations: by `create_Thing_C_from_Fortran`;
   character constants: `std::string` member in C++ (`c_str()` in the struct), C string copies allocated by
-  `create_Thing_C_from_Fortran` and freed by `destroy_Thing_C_from_Fortran(cthing, ierr)` (resets the struct)
+  `create_Thing_C_from_Fortran` and freed by `destroy_Thing_C_from_Fortran(cthing, ierr)` (resets the struct);
+  `wrap_string_out = [module, new, free]`: the project's helpers instead of the generated ones
 - array sizes that both sides know (integer literals and constants, from `wrap_sizes`, a size check or the
   documentation `dimension (this\%stateSize)`): no `_n` argument; Fortran checks `size(x)` (`ierr = -1`, or
   `wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`

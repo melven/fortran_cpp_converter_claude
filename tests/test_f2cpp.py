@@ -2670,3 +2670,24 @@ def test_config_overrides_are_normalised():
     assert cfg(wrap_reverse=["StateModel_type"])["wrap_reverse"] == ["statemodel_type"]
     with pytest.raises(TypeError):
         cfg(no_such_option=1)
+
+
+
+def test_reverse_string_constants_with_project_helpers(tmp_path):
+    """wrap_string_out: the project's helpers create / free the C strings of character constants"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
+                                     'wrap_string_out = ["project_str", "str_to_c_str", "c_str_free"]\n'
+                                     '[wrap_constants]\nThing_type = ["stateSize", "inputSize", "label"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    base = os.path.join(r, "model_base_mod.F90")
+    translate([], c, d, wrap=[os.path.join(r, "convergence_mod.F90")], interface_only=[base])
+    b = read((d,), "convergence_mod_c_binding.F90")
+    assert "  use project_str, only: str_to_c_str, c_str_free\n" in b and "f2cpp_c_string" not in b
+    assert "cthing%label = str_to_c_str(fthing%ptr%label)" in b and "    call c_str_free(cthing%label)\n" in b
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+              "-Wno-unused-dummy-argument", "-I" + CORPUS]
+        for f in (os.path.join(SUPPORT, "project_str.F90"), base, os.path.join(r, "convergence_mod.F90"),
+                  "convergence_mod_c_binding.F90"):
+            run(ff + [f], d)
