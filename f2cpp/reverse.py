@@ -129,23 +129,32 @@ class ReverseMixin:
                 post.append(f"call {destroy}({a}_h)")
                 cpp_pre.append(f"std::unique_ptr<{xcls}> {a}_w = {self.private_ns(xcls)}::wrapFromC(*{a});")
                 cpp_args.append(f"*{a}_w")
-            elif v.base in ("real", "integer", "logical") and not v.rank:
-                conv = {"real": "real", "integer": "int", "logical": "logical"}[v.base]
-                kind = {"real": "C_REAL", "integer": "C_INT", "logical": "C_BOOL"}[v.base]
+            elif v.base in ("real", "integer") and not v.rank:      # same kind as the C type (else: compile error)
+                f_dummies.append(a)
+                actuals.append(a)
+                if intent == "in":
+                    c_params.append(f"{self.c_type(v)} {a}")
+                    f_decls.append(f"{self.f_type(v)}, value :: {a}")
+                    cpp_args.append(a)
+                else:                           # by reference
+                    c_params.append(f"{self.c_type(v)}* {a}")
+                    f_decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}")
+                    cpp_args.append(f"*{a}")
+            elif v.base == "logical" and not v.rank:      # C bool: a copy
                 f_dummies.append(a)
                 locals_.append(f"{self.f_type(v)} :: {a}_c")
                 actuals.append(f"{a}_c")
                 if intent == "in":
                     c_params.append(f"{self.c_type(v)} {a}")
                     f_decls.append(f"{self.f_type(v)}, value :: {a}")
-                    pre.append(f"{a}_c = {conv}({a}, {kind})")
+                    pre.append(f"{a}_c = logical({a}, C_BOOL)")
                     cpp_args.append(a)
                 else:                           # by reference, copied back
                     c_params.append(f"{self.c_type(v)}* {a}")
                     f_decls.append(f"{self.f_type(v)}, intent(inout) :: {a}")
                     if intent == "inout":
-                        pre.append(f"{a}_c = {conv}({a}, {kind})")
-                    post.append(f"{a} = logical({a}_c)" if v.base == "logical" else f"{a} = {a}_c")
+                        pre.append(f"{a}_c = logical({a}, C_BOOL)")
+                    post.append(f"{a} = logical({a}_c)")
                     cpp_args.append(f"*{a}")
             elif v.base in ("real", "integer") and v.rank == 1 and not v.has("allocatable") and not v.has("pointer"):
                 const = "const " if intent == "in" else ""
@@ -167,15 +176,12 @@ class ReverseMixin:
                     c_params += [f"{const}{self.c_type(v)}* {a}", f"int {a}_n"]
                     f_dummies += [a, f"{a}_n"]
                     f_decls += [f"{self.f_type(v)}, intent({intent}) :: {a}(*)", f"integer(C_INT), value :: {a}_n"]
-                # a contiguous copy of the C kind (by reference: the address of its first element)
-                locals_.append(f"{self.f_type(v)}, allocatable :: {a}_c(:)")
-                pre += [f"allocate({a}_c(size({a})))"] + ([] if intent == "out" else [f"{a}_c(:) = {a}"])
-                actuals += [f"{a}_c"] + ([] if known else [f"int(size({a}_c), C_INT)"])
+                # passed directly (same kind as the C type, else: compile error; contiguous copy by the compiler)
+                actuals += [a] + ([] if known else [f"int(size({a}), C_INT)"])
                 et = tr.eigen_type(v, 1)
                 if intent == "in":
                     cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")
                 else:                           # a C++ vector, copied back (the size must not change)
-                    post.append(f"{a}(:) = {a}_c")
                     cpp_pre.append(f"{et} {a}_v({a}_n);" if intent == "out" else
                                    f"{et} {a}_v = Eigen::Map<const {et}>({a}, {a}_n);")
                     cpp_args.append(f"{a}_v")
@@ -191,14 +197,16 @@ class ReverseMixin:
             c_params.append(f"{self.c_type(res_v)}* {r}")
             f_dummies.append(r)
             f_decls.append(f"{self.f_type(res_v)}, intent(out) :: {r}")
-            locals_.append(f"{self.f_type(res_v)} :: {r}_c")
-            actuals.append(f"{r}_c")
+            if res_v.base == "logical":
+                locals_.append(f"{self.f_type(res_v)} :: {r}_c")
+                actuals.append(f"{r}_c")
+            else:
+                actuals.append(r)
         if has_err:
             c_params.append(f"int* {err}")
             f_dummies.append(err)
             f_decls.append(f"integer(C_INT), intent(out) :: {err}")
-            locals_.append(f"integer(C_INT) :: {err}_c")
-            actuals.append(f"{err}_c")
+            actuals.append(err)
         out = ["", f"  !> {bd.spelling}: {cls}::{tramp}"]
         if todo:
             self.report.add("todo", f"wrap-reverse:{bd.name}")
@@ -222,12 +230,9 @@ class ReverseMixin:
         out += [f"    procedure({aiface}), pointer :: f"] + [f"    {d}" for d in locals_] + [""]
         out += [f"    {x}" for x in ([f"{err} = 0"] if has_err else []) + checks + pre]
         out += [f"    call c_f_procpointer({funptr}, f)", f"    call f({', '.join(actuals)})"]
-        if has_err:
-            out.append(f"    {err} = {err}_c")
         out += [f"    {x}" for x in post]
-        if res_v is not None:
-            r = iface.result
-            out.append(f"    {r} = logical({r}_c)" if res_v.base == "logical" else f"    {r} = {r}_c")
+        if res_v is not None and res_v.base == "logical":
+            out.append(f"    {iface.result} = logical({iface.result}_c)")
         res["fortran"] = out + [f"  end {kw} {proc}"]
         res["c_params"] = ", ".join(c_params)
         # C++ declaration / definition: the C++ real type (same type as the C macro, which is not in the .hpp)
@@ -258,7 +263,7 @@ class ReverseMixin:
                 "  abstract interface", f"    !> {doc}", f"    subroutine {name}({', '.join(dummies)}) bind(C)",
                 f"      import {', '.join(self.imported(decls))}",
                 "      implicit none"] + [f"      {d}" for d in decls] + \
-            [f"    end subroutine {name}", "  end interface", ""]
+            ["    end subroutine", "  end interface", ""]
 
     @staticmethod
     def imported(decls):
@@ -327,12 +332,12 @@ class ReverseMixin:
         by Fortran; the creator unpacks it), bind(C) Any_c; C++ data in Fortran: CWrapperAny_type (c_wrapper
         module, private, owns it: move_alloc only), C++ any_to_c / any_from_c (.cpp)"""
         if getattr(self, "cppany", None) is None:
-            ht = f"{self.cfg['c_prefix']}_{self.mod.spelling}_Any"
+            ht = f"{self.module_c_name()}_Any"
             self.cppany = {"ht": ht, "st": "Any_c", "fw": "CWrapperAny_type", "destroy": f"{ht}_destroy"}
             cw = self.cw
             self.any_typedefs.append(f"!typedef struct {ht} {ht};")
             self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", "destroy of C++ data (std::any)",
-                                                    ["self"], ["type(C_PTR), value :: self"])
+                                                    ["this"], ["type(C_PTR), value :: this"])
             self.bridges += ["!@c_declaration", f"!struct {ht}", "!{", f"!  {ht}_destroy destroy = nullptr;",
                              "!  void* userData = nullptr;", "!};", "!@end_c_declaration",
                              f"  !> C struct {ht}: class(*) / std::any data owned by the other side (created by C++ or Fortran)",
@@ -366,9 +371,9 @@ class ReverseMixin:
                "    allocate(cs)", "    cs%userData = c_loc(hp)", "    cs%destroy = c_funloc(f2cpp_any_destroy)",
                "    c = c_loc(cs)", "  end function f2cpp_any_new", "",
                "  !> deletes the struct and the Fortran data (called from C++)",
-               "  subroutine f2cpp_any_destroy(self) bind(C, name=\"\")", "    type(C_PTR), value :: self",
+               "  subroutine f2cpp_any_destroy(this) bind(C, name=\"\")", "    type(C_PTR), value :: this",
                f"    type({st}), pointer :: cs", "    type(AnyHolder_type), pointer :: hp", "",
-               "    call c_f_pointer(self, cs)", "    call c_f_pointer(cs%userData, hp)", "    deallocate(hp)",
+               "    call c_f_pointer(this, cs)", "    call c_f_pointer(cs%userData, hp)", "    deallocate(hp)",
                "    deallocate(cs)", "  end subroutine f2cpp_any_destroy", "",
                "  !> the holder of the struct c if it holds Fortran data",
                "  logical function f2cpp_any_holder(c, hp)", "    type(C_PTR), intent(in) :: c",
@@ -418,8 +423,13 @@ class ReverseMixin:
                 "  return c == nullptr ? empty : *static_cast<const std::any*>(c->userData);", "}", "",
                 "}  // namespace", ""]
 
+    def module_c_name(self):
+        """C name of the module: <prefix>_<module>, the module name alone if it starts with <prefix>_"""
+        sp, pre = self.mod.spelling, self.cfg["c_prefix"]
+        return sp if sp.lower().startswith(pre.lower() + "_") else f"{pre}_{sp}"
+
     def any_release_name(self):
-        return f"{self.cfg['c_prefix']}_{self.mod.spelling}_any_release"
+        return f"{self.module_c_name()}_any_release"
 
     def any_handle(self):
         """opaque C type of the Fortran holder of a class(*) object"""
@@ -649,7 +659,7 @@ inline {ah}* to_fortran(const std::any& v)
             this = iface.pass_arg
             proc = f"{bridge[:-5].lower()}_{bd.name}"
             m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.name}", funptr=f"{this}%c%{bd.name}",
-                             self_c=f"struct {ht}* self", self_dummy="self", self_actual=f"c_loc({this}%c)",
+                             self_c=f"struct {ht}* self", self_dummy="this", self_actual=f"c_loc({this}%c)",
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
             m["proc"] = proc
             methods.append((bd, iface, m))
@@ -734,8 +744,8 @@ inline {ah}* to_fortran(const std::any& v)
             self.bridges += m["abstract"]
         cw["binding_names"] += [f"{ht}_{bd.name}" for bd, _, _ in live] + [st]
         if factory is None:
-            self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", f"{cls}::destroy_wrapper", ["self"],
-                                                    ["type(C_PTR), value :: self"])
+            self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", f"{cls}::destroy_wrapper", ["this"],
+                                                    ["type(C_PTR), value :: this"])
             cw["binding_names"].append(f"{ht}_destroy")
         self.bridges += ["!@c_declaration", f"!struct {ht}", "!{"] + [f"!{x}" for x in members] + ["!};",
                          "!@end_c_declaration", f"  !> C struct {ht}: functions of the C++ object",
@@ -883,7 +893,7 @@ inline {ah}* to_fortran(const std::any& v)
         this = iface.pass_arg
         wcls = "CWrapper" + re.sub(r"^Abstract", "", self.prog.type_name(lt.name).split("::")[-1])
         dummies, sizes, decls, locals_, pre, post, call, cpp_pre, cpp_args, cpp_post = \
-            ["self"], [], ["type(C_PTR), value :: self"], [], [], [], {}, [], [], []    # call: actual per dummy
+            ["this"], [], ["type(C_PTR), value :: this"], [], [], [], {}, [], [], []    # call: actual per dummy
         cpp_mid, keep_ierr, any_data = [], False, False     # cpp_mid: after the call (before the ierr check)
         for a in iface.args:
             v = iface.vars[a]
@@ -913,8 +923,8 @@ inline {ah}* to_fortran(const std::any& v)
                     n = known[1].replace("{OBJ}", "")
                     dummies.append(a)
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
-                    locals_.append(f"{self.f_type(v)}, pointer :: {a}_f(:)")
-                    pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'self_c%')})")   # constants in the struct
+                    locals_.append(f"{self.fortran_decl(v)}, pointer :: {a}_f(:)")   # Fortran kind (= C kind)
+                    pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'this_c%')})")   # constants in the struct
                     call[a] = f"{a}_f"
                     cpp_pre.append(f"{cn}.resize({n});" if intent == "out" else
                                    f"if ({cn}.size() != {n}) throw std::invalid_argument(\"{wcls}::{bd.spelling}: size of {cn}\");")
@@ -981,8 +991,8 @@ inline {ah}* to_fortran(const std::any& v)
         fortran = ["", f"  !> {bd.spelling} of a Fortran implementation (function pointer {st}%{bd.name})",
                    f"  subroutine {routine}({', '.join(dummies)}) bind(C, name=\"\")"] + \
             [f"    {d}" for d in sizes + decls] + \
-            [f"    type({st}), pointer :: self_c", f"    type({fw}), pointer :: wrapper"] + [f"    {d}" for d in locals_] + \
-            ["", "    call c_f_pointer(self, self_c)", "    call c_f_pointer(self_c%userData, wrapper)"] + \
+            [f"    type({st}), pointer :: this_c", f"    type({fw}), pointer :: wrapper"] + [f"    {d}" for d in locals_] + \
+            ["", "    call c_f_pointer(this, this_c)", "    call c_f_pointer(this_c%userData, wrapper)"] + \
             [f"    {x}" for x in pre + body + post] + [f"  end subroutine {routine}"]
         return {"fortran": fortran, "cpp_pre": cpp_pre, "cpp_args": cpp_args, "cpp_post": cpp_post,
                 "cpp_mid": cpp_mid, "any_data": any_data,

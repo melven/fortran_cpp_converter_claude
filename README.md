@@ -256,7 +256,7 @@ LinearThingFactory_type = "linear"
   `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
   pointers to the private `bind(C, name="")` routines `wrap_<method>` (arrays of known size: pointer views
-  `x_f => x(1:self_c%n)`; positional actual arguments; `wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]`:
+  `x_f => x(1:this_c%n)`; positional actual arguments; `wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]`:
   `PROJECT_CHK_IERR(call wrapper%ptr%f(..., ierr), ierr)`; no global symbol; plain `bind(C)`
   would give clashing global symbols `wrap_<method>` across modules); C++
   `AbstractThing_private::CWrapperThing(project_AbstractThing&)` (own files `<stem>_c_wrapper.hpp/.cpp`) derives
@@ -286,7 +286,9 @@ procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests 
 binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; the C prologue (`stdbool.h`,
 macros, forward declarations) between `implicit none` and `private`; sections `public declarations`,
 `interface declarations` (one `abstract interface` block; bodies with explicit `import` list and `implicit none`),
-a `!====...` line before each module procedure, `type declarations` (comment line `!====...`).
+a `!====...` line before each module procedure; the C pointer argument of the binding is `this`; Fortran-side
+locals have the Fortran kind (`real`): only `bind(C)` arguments use `C_REAL` / `C_INT` (a kind mismatch is a
+compile error), `type declarations` (comment line `!====...`).
 C declarations longer than `c_decl_width` (100): one parameter per line; code lines over 132 characters are
 continued (`&`). C++ declarations without Fortran
 documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).

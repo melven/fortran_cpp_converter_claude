@@ -967,7 +967,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in flat(h)
-    assert "    type(C_PTR), value :: r\n    real(C_REAL), pointer :: r_f(:)\n" in binding and "=> null()\n    real(C" not in binding
+    assert "    type(C_PTR), value :: r\n    real, pointer :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
     assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
     assert "  if (r) r->get().resize(n());\n" in cpp
@@ -1681,7 +1681,7 @@ def test_wrapped_listener(tmp_path):
            "&AbstractListener::state_changed_wrapper))" in cpp
     assert "    type(C_FUNPTR) :: state_changed_fn = C_NULL_FUNPTR" in b
     assert "    call c_f_procpointer(this%state_changed_fn, f)\n" \
-           "    call f(this%userData, this%user, old_c, history_c, int(size(history_c), C_INT), ierr_c)\n    ierr = ierr_c" in b
+           "    call f(this%userData, this%user, old, history, int(size(history), C_INT), ierr)\n" in b
     assert "    if (.not. listener_same(this%owner, thing)) then\n      ierr = -1\n      return\n    end if" in b
     assert "extern" not in cpp and "    *ierr = -1;" in cpp
     # error logging (log_error): instead of std::fprintf
@@ -1929,9 +1929,10 @@ def test_reverse_wrapped_types(tmp_path):
            "!typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*,\n" in tb
     assert "!" + " " * 47 + "int*);\n!@end_c_declaration\n" \
            "    !> AbstractThing::evaluate_wrapper\n    subroutine project_AbstractThing_evaluate(" in tb
-    assert "    end subroutine project_AbstractThing_evaluate\n\n!@c_declaration\n!typedef void (*project_AbstractThing_weight)" in tb
-    assert "    subroutine project_AbstractThing_evaluate(self, x, x_n, y, y_n, ierr) bind(C)\n" \
-           "      import C_PTR, C_REAL, C_INT\n      implicit none\n      type(C_PTR), value :: self\n" \
+    assert "      integer(C_INT), intent(out) :: ierr\n    end subroutine\n\n!@c_declaration\n" \
+           "!typedef void (*project_AbstractThing_weight)" in tb                 # only "end subroutine"
+    assert "    subroutine project_AbstractThing_evaluate(this, x, x_n, y, y_n, ierr) bind(C)\n" \
+           "      import C_PTR, C_REAL, C_INT\n      implicit none\n      type(C_PTR), value :: this\n" \
            "      real(C_REAL), intent(in) :: x(*)\n      integer(C_INT), value :: x_n\n" \
            "      real(C_REAL), intent(out) :: y(*)\n" in tb and "      import C_PTR, C_REAL\n" in tb and "      import\n" not in tb
     # C++ base classes: pure virtual (translation signatures), private static <method>_wrapper
@@ -1968,8 +1969,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert tb.index("  ! interface declarations\n  abstract interface\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
         tb.index("  ! type declarations\n!@c_declaration\n!struct project_AbstractThing\n") < tb.index("\ncontains\n")
     assert "public :: cwrapperthing_evaluate" not in tw
-    assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x_c, int(size(x_c), C_INT), y_c, " \
-           "int(size(y_c), C_INT), ierr_c)" in tw
+    assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x, int(size(x), C_INT), y, " \
+           "int(size(y), C_INT), ierr)\n" in tw and "_c(:)" not in tw      # same kinds: passed directly
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fw
     assert "  use project_c_wrapper_thing_mod, only: project_AbstractThing_wrap" in fw
     assert "    call register_thing_factory(str_array_ptr_to_str(name), f)" in fw
@@ -2196,8 +2197,8 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert "namespace AbstractThing_private\n{\n\nCWrapperThing::CWrapperThing(" in cpp and "\nvoid CWrapperThing::evaluate(" in cpp
     assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
     # no binding label (no global symbol): only the target of a function pointer
-    assert "  subroutine wrap_evaluate(self, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
-    assert "    call c_f_pointer(self_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x, y, ierr_f)" in b
+    assert "  subroutine wrap_evaluate(this, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
+    assert "    call c_f_pointer(this_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x, y, ierr_f)" in b
     assert "  subroutine create_Thing_C_from_Fortran(fthing, cthing, ierr)\n" \
            "    type(AbstractThingWrapper_type), target, intent(in) :: fthing\n" \
            "    type(AbstractThing_c), intent(out) :: cthing\n" in b
@@ -2328,8 +2329,8 @@ def test_reverse_type_constants(tmp_path):
         '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in b         # both macros used
     # wrap_<method>: pointer views (sizes: constants of the struct), positional arguments, PROJECT_CHK_IERR
     assert "  !" + "=" * 80 + "\n  !> check_convergence of a Fortran implementation" in b
-    assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real(C_REAL), pointer :: state_f(:)\n" in b
-    assert "    state_f => state(1:self_c%stateSize)\n" in b
+    assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer :: state_f(:)\n" in b
+    assert "    state_f => state(1:this_c%stateSize)\n" in b
     assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
            "needanotheriteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
     assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
@@ -2590,3 +2591,25 @@ int main()
     run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
          "state_model_mod_cxx.o", "state_model_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
     assert run(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
+
+
+def test_reverse_any_name_of_a_prefixed_module(tmp_path):
+    """module project_thing: C names project_thing_Any (not project_project_thing_Any)"""
+    (tmp_path / "project_thing.F90").write_text("""module project_thing
+  implicit none
+  type, abstract :: Saver_type
+  contains
+    procedure(save_iface), deferred :: save_state
+  end type Saver_type
+  abstract interface
+    subroutine save_iface(this, state)
+      import :: Saver_type
+      class(Saver_type), intent(in) :: this
+      class(*), allocatable, intent(out) :: state
+    end subroutine save_iface
+  end interface
+end module project_thing
+""")
+    translate([], cfg(wrap_reverse=["saver_type"]), str(tmp_path), wrap=[str(tmp_path / "project_thing.F90")])
+    h = (tmp_path / "project_thing.h").read_text()
+    assert "struct project_thing_Any\n" in h and "project_project" not in h

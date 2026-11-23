@@ -762,7 +762,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
                     # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
-                    decls.append(f"{self.f_type(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)})")
+                    decls.append(f"{self.fortran_decl(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
                     pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
                 elif v.rank == 1:
@@ -770,7 +770,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     call.append(f"{a}={a}(1:{dims[0]})")
                 else:
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
-                    decls.append(f"{self.f_type(v)}, pointer, contiguous :: {a}_2d(:, :)")
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_2d(:, :)")   # Fortran kind
                     pre.append(f"{a}_2d(1:{dims[0]}, 1:{dims[1]}) => {a}(1:({dims[0]}) * ({dims[1]}))")
                     call.append(f"{a}={a}_2d")
                 # C++: the C interface has no sizes -> out arrays get the size of the Fortran check,
