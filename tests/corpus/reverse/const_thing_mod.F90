@@ -1,4 +1,4 @@
-!> a Fortran implementation (stays Fortran), used in C++ through WrapperThing
+!> a Fortran implementation (stays Fortran), used in C++ through AbstractThing_private::CWrapperThing
 module const_thing_mod
   use thing_mod, only: AbstractThing_type
   implicit none
