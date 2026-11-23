@@ -59,7 +59,7 @@ Priorities: tests first (they protect every later step), then correctness, then 
   full tool chain, `F2CPP_REQUIRE_TOOLCHAIN` fails when compile tools are missing. Line coverage 93%.
 - [done] Internal errors fail the tests (`strict = true` in `tests/support/f2cpp.toml`).
 - [done] Ruff bugbear (`B`): unused loop variables, `zip(..., strict=True)` where the lengths must match (a
-  mismatch is now an internal error instead of silent truncation). Open: line length 132 (E501, ~10 lines).
+  mismatch is now an internal error instead of silent truncation). [done] line length 132 (E501; not for the test file: long assertions of generated code).
 - [done] Valgrind in the run tests (`run_exe`: memory errors and definite leaks fail) for all compiled programs.
 - Split `test_f2cpp.py` by area (`test_translate_*.py`, `test_wrap_*.py`, `test_reverse_*.py`, `conftest.py`
   with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test).

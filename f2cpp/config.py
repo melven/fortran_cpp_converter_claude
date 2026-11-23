@@ -122,7 +122,7 @@ DEFAULTS = {
     # NS_SINGLE_PRECISION, module ns_str
     "c_prefix": None,                         # <ns>_<Class>_<method>
     "c_class_names": {},
-    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)                      # Fortran type -> class name in C names (shorter names)
+    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)
     "c_real": None,                           # C type macro of real: <NS>_REAL
     "c_single_precision": None,               # <NS>_SINGLE_PRECISION
     "c_decl_width": 100,                      # longer C declarations (binding comments): one parameter per line
@@ -248,7 +248,8 @@ def load(path=None, **overrides):
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
     cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
     cfg["c_procedure_names"] = {k.lower(): v for k, v in cfg["c_procedure_names"].items()}
-    for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
+    for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map",
+                "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]

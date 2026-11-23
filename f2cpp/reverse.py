@@ -204,7 +204,8 @@ class ReverseMixin:
                     cpp_pre.append(f"{et} {a}_v({a}_n);" if intent == "out" else
                                    f"{et} {a}_v = Eigen::Map<const {et}>({a}, {a}_n);")
                     cpp_args.append(f"{a}_v")
-                    cpp_post += [f'if ({a}_v.size() != {a}_n) throw std::length_error("{v.cname}: size changed");',
+                    cpp_post += [f"if( {a}_v.size() != {a}_n )",
+                                 f'  throw std::length_error("{cls}::{bd.spelling}: dimension of parameter {v.cname} changed!");',
                                  f"Eigen::Map<{et}>({a}, {a}_n) = {a}_v;"]
             else:
                 todo = f"argument {v.cname}: {self.component_kind(v)}"
@@ -359,10 +360,12 @@ class ReverseMixin:
                                                     ["this"], ["type(C_PTR), value :: this"])
             self.bridges += ["!@c_declaration", f"!struct {ht}", "!{", f"!  {ht}_destroy destroy = nullptr;",
                              "!  void* userData = nullptr;", "!};", "!@end_c_declaration",
-                             f"  !> C struct {ht}: class(*) / std::any data owned by the other side (created by C++ or Fortran)",
+                             f"  !> C struct {ht}: class(*) / std::any data owned by the other side "
+                             "(created by C++ or Fortran)",
                              "  type, bind(C), public :: Any_c",
                              "    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR",
-                             "    type(C_PTR) :: userData = C_NULL_PTR  !< std::any (C++) / AnyHolder_type (Fortran)", "  end type Any_c", ""]
+                             "    type(C_PTR) :: userData = C_NULL_PTR  !< std::any (C++) / AnyHolder_type (Fortran)",
+                             "  end type Any_c", ""]
             cw["binding_names"] += ["Any_c", f"{ht}_destroy"]
             cw["spec"] += ["  !> C++ data (std::any) in a class(*): owns it (move_alloc only, never copy)",
                            "  type :: CWrapperAny_type", "    type(Any_c), pointer :: c => null()", "  contains",
@@ -451,16 +454,16 @@ class ReverseMixin:
                 "//! Fortran data (class(*)) held by C++: deleted in Fortran (destroy of the struct)",
                 "class FortranData", "{", "public:",
                 f"  explicit FortranData({ht}* c) : c_(c) {{}}  //!< owns c", "  //! deletes the Fortran data",
-                "  ~FortranData()", "  {", "    if (c_ != nullptr && c_->destroy != nullptr)", "      c_->destroy(c_);",
+                "  ~FortranData()", "  {", "    if( c_ != nullptr && c_->destroy != nullptr )", "      c_->destroy(c_);",
                 "  }", "  FortranData(const FortranData&) = delete;  //!< no copies (shared through std::shared_ptr)",
                 "  FortranData& operator=(const FortranData&) = delete;  //!< no copies",
                 f"  {ht}* c_ = nullptr;  //!< the struct (userData: the Fortran holder)", "};", "",
                 "//! from Fortran: empty (NULL) or the Fortran data (copies of the std::any share it)",
-                f"std::any any_from_fortran({ht}* c)", "{", "  if (c == nullptr)", "    return {};",
+                f"std::any any_from_fortran({ht}* c)", "{", "  if( c == nullptr )", "    return {};",
                 "  return std::make_shared<FortranData>(c);", "}", "",
                 "//! to Fortran: only Fortran data (created by a Fortran implementation)",
                 f"const {ht}* any_to_fortran(const std::any& a)", "{",
-                "  if (a.type() != typeid(std::shared_ptr<FortranData>))",
+                "  if( a.type() != typeid(std::shared_ptr<FortranData>) )",
                 '    throw std::invalid_argument("std::any passed to Fortran: not Fortran data");',
                 "  return std::any_cast<const std::shared_ptr<FortranData>&>(a)->c_;", "}", "",
                 "}  // namespace", ""]
@@ -539,7 +542,7 @@ public:
   //! releases the Fortran data
   ~FortranState()
   {{
-    if (release != nullptr && handle != nullptr)
+    if( release != nullptr && handle != nullptr )
       release(handle);
   }}
   FortranState(const FortranState&) = delete;  //!< no copies (shared through std::shared_ptr)
@@ -554,7 +557,7 @@ namespace f2cpp_any
 //! from Fortran: empty (NULL) or the Fortran data (copies of the std::any share it)
 inline std::any from_fortran({ah}* h, void (*release)({ah}*))
 {{
-  if (h == nullptr)
+  if( h == nullptr )
     return {{}};
   return std::make_shared<FortranState>(h, release);
 }}
@@ -562,9 +565,9 @@ inline std::any from_fortran({ah}* h, void (*release)({ah}*))
 //! to Fortran: NULL (empty) or the holder of Fortran data; C++ data cannot be passed to Fortran
 inline {ah}* to_fortran(const std::any& v)
 {{
-  if (!v.has_value())
+  if( !v.has_value() )
     return nullptr;
-  if (v.type() != typeid(std::shared_ptr<FortranState>))
+  if( v.type() != typeid(std::shared_ptr<FortranState>) )
     throw std::invalid_argument("C++ data (std::any) passed to Fortran (only Fortran data can be passed back)");
   return std::any_cast<const std::shared_ptr<FortranState>&>(v)->handle;
 }}

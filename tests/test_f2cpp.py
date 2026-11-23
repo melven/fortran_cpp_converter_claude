@@ -1938,6 +1938,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert "typedef void (*project_AbstractThing_reset)(project_AbstractThing*);" in h                    # intent(inout)
     assert "  static void weight_wrapper(const project_AbstractThing* self, scalar* w) noexcept;" in th
     assert "static_cast<const AbstractThing*>(self->userData)->weight()" in tc
+    assert '    if( y_v.size() != y_n )\n      throw std::length_error("AbstractThing::evaluate: dimension of ' \
+           'parameter y changed!");' in tc
     assert "struct project_AbstractThing\n{\n  project_AbstractThing_evaluate evaluate = nullptr;\n" \
            "  project_AbstractThing_weight weight = nullptr;\n  project_AbstractThing_reset reset = nullptr;\n" in flat(h)
     assert "  project_AbstractThing_destroy destroy = nullptr;\n  void* userData = nullptr;\n};" in h and "p_impl" not in h

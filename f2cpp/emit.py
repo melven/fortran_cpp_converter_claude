@@ -768,11 +768,14 @@ class ModuleEmitter:
                 names.add(m.ifaces[n].cname)
         return {x for x in names if x}
 
-    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr", "std::shared_ptr"]), ("stdexcept", ["std::invalid_argument"]), ("any", ["std::any"]),
+    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]),
+                       ("memory", ["std::unique_ptr", "std::shared_ptr"]), ("stdexcept", ["std::invalid_argument"]),
+                       ("any", ["std::any"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
                        ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
     SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),
-                       ("cmath", ["std::"]), ("cstdlib", ["std::rand"]), ("iostream", ["std::cout"]), ("limits", ["numeric_limits"]),
+                       ("cmath", ["std::"]), ("cstdlib", ["std::rand"]), ("iostream", ["std::cout"]),
+                       ("limits", ["numeric_limits"]),
                        ("numeric", ["std::iota"]), ("stdexcept", ["throw std::"]),
                        ("string", ["std::to_string", "std::string"]), ("typeinfo", ["typeid("]),
                        ("utility", ["std::move"])]

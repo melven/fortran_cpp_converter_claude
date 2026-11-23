@@ -762,7 +762,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
                     # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
-                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: "
+                                 f"{a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
                     pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
                 elif v.rank == 1:
@@ -845,7 +846,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         for g in glue:
             if isinstance(g, tuple) and g[0] == "pre":
                 cpp.emit(1, g[1])
-        cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+        cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] +
+                          (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
         posts = [g[1] for g in glue if isinstance(g, tuple) and g[0] == "post"]
