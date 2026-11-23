@@ -59,7 +59,7 @@ Priorities: tests first (they protect every later step), then correctness, then 
   full tool chain, `F2CPP_REQUIRE_TOOLCHAIN` fails when compile tools are missing. Line coverage 93%.
 - [done] Internal errors fail the tests (`strict = true` in `tests/support/f2cpp.toml`).
 - Ruff: extend the rules (bugbear `B`, line length 132) after cleaning the findings (~20 `B007` / `B905`).
-- Valgrind in the run tests (`valgrind --error-exitcode=1` when available) for all wrap / reverse executables.
+- [done] Valgrind in the run tests (`run_exe`: memory errors and definite leaks fail) for all compiled programs.
 - Split `test_f2cpp.py` by area (`test_translate_*.py`, `test_wrap_*.py`, `test_reverse_*.py`, `conftest.py`
   with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test).
 - Golden files for a few representative outputs (reviewed diffs instead of many substring assertions), keep
@@ -78,8 +78,8 @@ Priorities: tests first (they protect every later step), then correctness, then 
   `destroy_<Thing>_C_from_Fortran`).
 - Runtime checks in generated C++ behind a macro (`F2CPP_CHECKS`): index bounds of shifted indices, sizes of
   intent(out) arrays, optional presence.
-- Document and test the assumptions of the C binding (kinds, `integer(C_INT)` vs. default `integer`) with a
-  compile-time check in the generated Fortran (`static_assert`-like `c_sizeof` comparison at setup).
+- [dropped] Explicit kind check in the generated Fortran: a kind mismatch already gives compiler errors at the C
+  interface (real / integer passed directly to the `bind(C)` dummies).
 
 ### 3. Structure and extensibility (middle term)
 - One `class(*)` mechanism: the `project_<module>_Any` struct (destroy + userData) for forward wrapping too;
