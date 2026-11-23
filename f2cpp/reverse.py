@@ -29,6 +29,18 @@ def fill(stmt, obj):
     return stmt[7:].replace("@", obj) if stmt.startswith("#ALLOC#") else f"{obj}%{stmt.replace('@', obj)}"
 
 
+KEYWORDS = re.compile(r"\b(REAL|INTEGER|LOGICAL|CHARACTER|COMPLEX|DOUBLE\s+PRECISION|TYPE|CLASS|PROCEDURE|"
+                      r"INTENT|IN|OUT|INOUT|DIMENSION|ALLOCATABLE|POINTER|TARGET|CONTIGUOUS|OPTIONAL|VALUE|"
+                      r"PARAMETER|SAVE|KIND|LEN|NULL)\b(?=\s*[(,:=)]|\s*$|\s+::)")
+
+
+def lower_keywords(text):
+    """declarations printed by fparser (upper case keywords) in the project's style: lower case keywords, names
+    as declared (not inside strings)"""
+    parts = re.split(r"""('[^']*'|"[^"]*")""", text)
+    return "".join(pt if pt[:1] in "'\"" else KEYWORDS.sub(lambda m: m.group(1).lower(), pt) for pt in parts)
+
+
 FORTRAN_INTRINSICS = set("""abs all allocated any associated ceiling count cpu_time dble dot_product epsilon exp
 floor huge index int kind lbound len len_trim log log10 matmul max maxloc maxval merge min minloc minval mod modulo
 move_alloc nint norm2 null pack present product random_number real reshape scan shape sign sin size sqrt sum
@@ -241,14 +253,14 @@ class ReverseMixin:
         args = [fspell(iface.vars[a]) if a in iface.vars else a for a in iface.args if a != iface.result]
         out.append(f"  {kw} {proc}({', '.join(args)})" + (f" result({iface.result})" if res_v is not None else ""))
         for node in decl_nodes:                 # the interface of the deferred binding, the bridge as object
-            text = str(node)
+            text = lower_keywords(str(node))
             if this in [lname(e.items[0]) for e in items_of(node.items[2])]:
                 text = re.sub(rf"(?i)class\s*\(\s*{re.escape(lt.name)}\s*\)", f"class({self.bridge_name(lt)})", text)
             out.append(f"    {text}")
         if res_v is not None and res_v.node is None:        # result declared by the function prefix
             out.append(f"    {self.fortran_decl(res_v)} :: {iface.result}")
         elif res_v is not None and res_v.node not in decl_nodes:
-            out.append(f"    {res_v.node}")
+            out.append(f"    {lower_keywords(str(res_v.node))}")
         res = {"todo": todo, "tramp": tramp}
         if todo:
             res["fortran"] = out + [f'    error stop "{proc}: {todo}"', f"  end {kw} {proc}"]
