@@ -2,7 +2,7 @@
 import os
 import re
 
-from .model import cls, lname, items_of, Var
+from .model import cls, lname, items_of
 from .prepass import PF_MARK, CPP_MARK, BLANK_MARK
 from .translate import Translator, Untranslatable, TODO, par, is_zero, last_line
 
@@ -195,6 +195,9 @@ class ModuleEmitter:
         final = " final" if closed and not t.children and not t.abstract else ""
         tr.emit(ind, f"class {name}{final}{base} {{")
         tr.emit(ind, "public:")
+        if t.parent and any(a.name in self.cfg["wrap_reverse_factories"] for a in prog.ancestors(t)):
+            parent = prog.type_name(t.parent, self.mod)     # factory implemented in C++: its name constructor
+            tr.emit(ind + 1, f"using {parent}::{parent.split('::')[-1]};")
         mine = [p for p in t.module.procs.values() if p.method_of == t.name]
         callbacks = [q for m in prog.modules.values() for q in m.procs.values()
                      if q.cb_method and prog.find_type(q.method_of, q.module) is t]
@@ -599,7 +602,7 @@ class ModuleEmitter:
                 tr.out[k] = f"// {TODO}: unbalanced preprocessor line: {s}"
                 self.report.add("todo", "unbalanced-preprocessor")
         for _ in range(depth):
-            tr.out.append(f"#endif  // TODO(f2cpp): added, the Fortran #endif could not be placed")
+            tr.out.append("#endif  // TODO(f2cpp): added, the Fortran #endif could not be placed")
             self.report.add("todo", "unbalanced-preprocessor")
 
     def emit_proc(self, tr_out, p, ind, head=None, close="}"):
@@ -765,7 +768,7 @@ class ModuleEmitter:
                 names.add(m.ifaces[n].cname)
         return {x for x in names if x}
 
-    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr"]),
+    HEADER_INCLUDES = [("functional", ["std::reference_wrapper", "std::function"]), ("memory", ["std::unique_ptr", "std::shared_ptr"]), ("stdexcept", ["std::invalid_argument"]), ("any", ["std::any"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
                        ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
     SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),
@@ -827,7 +830,7 @@ class ModuleEmitter:
         aliases = self.tr()     # std::function aliases: before the classes, which use them as arguments
         # a test module used by other (test) modules provides shared helpers: it gets a header
         shared = mod.is_test and any(mod.name in m.uses for m in self.prog.modules.values() if m is not mod)
-        pending, prev = [], None
+        pending = []
         spec = [p for p in mod.node.content if cls(p) == "Specification_Part"]
         for s in (spec[0].content if spec else []):
             k = cls(s)
@@ -1003,7 +1006,14 @@ class ModuleEmitter:
         if cpp_priv.out or protos_priv.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \
                  protos_priv.out + ["", "}  // namespace", ""]
-        c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
+        inst = []                               # global instances of factories implemented in C++
+        for t in mod.types.values():
+            if t.name in cfg["reverse_factory_instances"]:
+                fac = self.prog.type_name(t.name, mod).split("::")[-1]
+                inst += [f"namespace {fac}_private", "{",
+                         f'{fac} instance("{cfg["reverse_factory_instances"][t.name]}");  //!< registers the factory',
+                         "}", ""]
+        c += strip_blank(cpp.out) + ([""] + inst if inst else []) + ["", f"}}  // namespace {self.ns}", ""]
         return "\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c)))
 
     def missing_modules(self):
@@ -1051,10 +1061,10 @@ class ModuleEmitter:
             out += [ind + head, ind + "{"]
         return out
 
-    def file_header(self, top, ext):
-        """file header comment of the Fortran source with the file name replaced"""
+    def file_header(self, top, ext, suffix=""):
+        """file header comment of the Fortran source with the file name replaced (<stem><suffix><ext>)"""
         import re
-        new = os.path.basename(self.prog.file_stem(self.mod.name)) + ext
+        new = os.path.basename(self.prog.file_stem(self.mod.name)) + suffix + ext
         src = re.escape(os.path.basename(self.src))
         res = []
         for line in top.out:

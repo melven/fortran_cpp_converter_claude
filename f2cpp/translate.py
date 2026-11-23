@@ -1,11 +1,15 @@
 """Expression and statement translation (Fortran parse tree -> C++ text)."""
 import re
+import sys
 from dataclasses import dataclass
 
 from .model import cls, lname, items_of, cname, Var
 from .prepass import CPP_MARK, PF_MARK, BLANK_MARK, ASSERT_PREFIX
 
 TODO = "TODO(f2cpp)"
+
+
+NON_WORD = r"\W"      # (no backslash inside f-string expressions: Python 3.11)
 
 
 class Untranslatable(Exception):
@@ -35,6 +39,7 @@ class X:
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
+    via_accessor: bool = False   # component through a getter (accessor, wrapped class)
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -67,6 +72,7 @@ class Translator:
         self.prog, self.mod, self.proc, self.report = program, module, proc, report
         self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
         self.brace_arrays = False   # array constructors as braced lists
+        self.via_getters = False    # translated method of a wrapped class: components are getters
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -154,7 +160,7 @@ class Translator:
         return self.prog.find_type(tname, self.mod) if tname else None
 
     def note(self, category, msg):
-        self.report.add("todo", category)
+        self.report.add_once("todo", category, (self.mod.name, self.proc.name if self.proc else None, msg))
         if msg not in self.notes:
             self.notes.append(msg)
 
@@ -173,6 +179,9 @@ class Translator:
             return f"std::complex<{cfg['scalar']}>"
         if v.base == "procedure":
             return self.proc_type(v.tname)
+        if v.base == "type" and v.tname == "*":     # unlimited polymorphic: no C++ counterpart
+            self.note("unlimited-polymorphic", f"class(*) {v.cname}: std::any (check the use)")
+            return "std::any"
         if v.base == "type":
             if v.tname not in self.cfg["type_map"] and self.find_type(v.tname) is None:
                 self.report.add("info", "unknown-type:" + v.tname)
@@ -253,7 +262,7 @@ class Translator:
         if v.rank == 0:
             if v.base == "procedure":
                 return "scalar"
-            if v.base == "type" and v.has("allocatable"):
+            if v.base == "type" and v.has("allocatable") and v.tname != "*":     # class(*): std::any
                 return "uptr"
             return "ptr" if v.has("pointer") else "scalar"
         if v.int_vec:
@@ -685,7 +694,9 @@ class Translator:
                         raise Untranslatable("unwrapped-object-of-wrapped-class")
                 if acc:     # the accessor returns a reference, also for pointer components
                     x = X(self.member(cur, acc, cur.qual) + "()", comp.rank, comp.base, 100, comp,
-                          comp.tname, whole=True)
+                          comp.tname, whole=True, via_accessor=True)
+                    if self.via_getters and n in self.cfg["wrap_constants"].get(td.name, []):
+                        self.note("wrapped-constant", f"{comp.cname}: copy made at setup (changes are not seen)")
                 else:
                     x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
                 if subs is not None:
@@ -1159,7 +1170,6 @@ class Translator:
         if obj is None:
             raise Untranslatable("passed-object")
         qual = f"{tn}::" if t is not None and self.prog.polymorphic(t) else ""   # non-virtual call
-        sep = "->" if obj.raw is not None else "."
         if p.is_ctor or p.is_dtor:
             plain = self.member(obj, p.cname) + "()"
             return self.lifetime_call(p, obj, self.bound_args(p, rest),
@@ -1203,7 +1213,6 @@ class Translator:
         else:
             self.report.add("info", "unknown-binding:" + n)
             argc = self.plain_args(items_of(args))
-        sep = "->" if obj.raw is not None else "."
         spelled = cname(str(bname))             # spelling of the definition if known
         if owner is not None:
             spelled = b.spelling if b is not None else owner.generic_spelling.get(n, spelled)
@@ -1248,6 +1257,16 @@ class Translator:
     # ------------------------------------------------------------------ statements
     def emit(self, ind, text):
         self.out.append("  " * ind + text if text else "")
+
+    def internal_error(self, e, node):
+        """log an internal error (stderr): where in the Fortran source and in f2cpp"""
+        import traceback
+        frame = traceback.extract_tb(e.__traceback__)[-1]
+        proc = self.proc.cname if self.proc is not None else "(module)"
+        line = last_line(node)
+        print(f"f2cpp: internal error in {self.mod.spelling}::{proc}" + (f", line {line}" if line else "") +
+              f": {type(e).__name__}: {e} (f2cpp/{frame.filename.split('f2cpp/')[-1]}:{frame.lineno} {frame.name});"
+              " statement kept as Fortran comment (--strict: stop)", file=sys.stderr)
 
     def fortran_comment(self, node, ind, why):
         self.emit(ind, f"// {TODO}: {why}")
@@ -1410,14 +1429,21 @@ class Translator:
             del self.out[start:]
             self.report.add("untranslated", e.category)
             self.fortran_comment(node, ind, f"not translated ({e.category})")
-        except Exception as e:      # robust against unexpected parse tree shapes
+        except Exception as e:      # a bug of f2cpp (not an unsupported construct): logged, reported as error
+            if self.cfg["strict"]:
+                raise
             del self.out[start:]
-            self.report.add("untranslated", f"internal:{type(e).__name__}:{k}")
-            self.fortran_comment(node, ind, f"not translated (internal error: {type(e).__name__})")
+            self.report.add("error", f"internal:{type(e).__name__}:{k}")
+            self.internal_error(e, node)
+            self.fortran_comment(node, ind, f"not translated (f2cpp internal error: {type(e).__name__})")
 
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
+        if self.via_getters and cls(lhs_n) in ("Data_Ref", "Name"):
+            lx = self.ref(lhs_n)
+            if lx.via_accessor and lx.whole and lx.rank > 0 and self.expr(rhs_n).rank > 0:
+                raise Untranslatable("wrapped-component-resize")    # may change the size (reallocation)
         if cls(lhs_n) == "Part_Ref" and getattr(self.lookup(lname(lhs_n.items[0])), "named_elements", False):
             # inputs(1) = Variable_type(...) -> Variable inputs_1(...);  (declaration of the element)
             v = self.lookup(lname(lhs_n.items[0]))
@@ -1778,6 +1804,15 @@ class Translator:
 
     def s_Allocate_Stmt(self, node, ind):
         tspec, allocs, opts = node.items
+        if self.via_getters and any(self.ref(a.items[0] if cls(a) == "Allocation" else a).via_accessor
+                                    for a in items_of(allocs)):
+            raise Untranslatable("wrapped-component-allocate")   # an Eigen::Map of Fortran memory
+        src = [o for o in items_of(opts) if lname(o.items[0]) == "source"]
+        if src and len(items_of(allocs)) == 1:  # allocate(x, source=v) of class(*): std::any holds a copy
+            x = self.ref(items_of(allocs)[0])
+            if x.var is not None and x.var.base == "type" and x.var.tname == "*":
+                self.emit(ind, f"{x.code} = {self.expr(src[0].items[1]).code};")
+                return
         named = [a for a in items_of(allocs) if cls(a) == "Allocation" and cls(a.items[0]) == "Name"
                  and getattr(self.lookup(lname(a.items[0])), "named_elements", False)]
         if named:                               # named_elements: only the size (elements declared later)
@@ -1828,6 +1863,8 @@ class Translator:
                 self.emit(ind, f"{name}.assign({self.nested_ctor(v, dims)});")
 
     def s_Deallocate_Stmt(self, node, ind):
+        if self.via_getters and any(self.ref(a).via_accessor for a in items_of(node.items[0])):
+            raise Untranslatable("wrapped-component-allocate")
         if all(cls(a) == "Name" and getattr(self.lookup(lname(a)), "named_elements", False)
                for a in items_of(node.items[0])):
             return                              # named_elements: end of scope
@@ -1867,7 +1904,7 @@ class Translator:
         cond = X(self.condition(node.items[0]))
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
-        sub.named = self.named
+        sub.named, sub.via_getters = self.named, self.via_getters
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
             self.overrides, self.shift, self.loop_local, self.loop_decl
         sub.stmt(node.items[1], 0)
@@ -2132,6 +2169,7 @@ class Translator:
         alias = lname(assoc) if assoc is not None else sel.var.name
         const = "const " if sel.var is not None and (sel.var.is_const or self.in_const_method(sel)) else ""
         obj = par(sel, P_UNARY)
+        any_sel = sel.var is not None and sel.var.base == "type" and sel.var.tname == "*"
         first, saved = True, dict(self.overrides)
         alias_line = None
 
@@ -2152,8 +2190,16 @@ class Translator:
                 if tn is None:
                     self.emit(ind, "} else {" if kw != "if" else "{")
                     continue
+                if any_sel:                     # class(*) as std::any: type() / any_cast
+                    t = self.guard_type(tn)
+                    new = f"{alias}_{re.sub(NON_WORD, '_', t.split('::')[-1])}"
+                    self.emit(ind, f"{kw} ({obj}.type() == typeid({t})) {{")
+                    self.emit(ind + 1, f"auto& {new} = std::any_cast<const {t}&>({obj});")   # read access
+                    alias_line = (len(self.out) - 1, new)
+                    self.overrides[alias] = Var(alias, new, *self.guard_var(tn), is_const=bool(const))
+                    continue
                 t = self.prog.type_name(lname(tn), self.mod)
-                new = f"{alias}_{re.sub(r'\W', '_', t.split('::')[-1])}"
+                new = f"{alias}_{re.sub(NON_WORD, '_', t.split('::')[-1])}"
                 if kind == "TYPE IS":
                     self.emit(ind, f"{kw} (typeid({obj}) == typeid({t})) {{")
                 else:
@@ -2166,6 +2212,23 @@ class Translator:
             else:
                 self.block([c], ind + 1)
         self.overrides = saved
+
+    def guard_type(self, tn):
+        """C++ type of a type guard (intrinsic types of class(*) selectors)"""
+        base = self.guard_var(tn)
+        if base[0] != "type":
+            return self.elem_type(Var("", "", base[0], kind=base[2]))
+        return self.prog.type_name(base[1], self.mod)
+
+    def guard_var(self, tn):
+        """(base, tname, kind) of a type guard's type"""
+        if cls(tn) == "Intrinsic_Type_Spec":
+            base = str(tn.items[0]).lower().replace("double precision", "real")
+            kind = None
+            if tn.items[1] is not None:
+                kind = re.sub(r"\s|kind=|[()]", "", str(tn.items[1]).lower())
+            return base, None, kind
+        return "type", lname(tn), None
 
     def in_const_method(self, x):
         p = self.method_proc()

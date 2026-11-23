@@ -43,9 +43,11 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
         try:
             mods = parse_file(path, cfg, parser)
         except Exception as e:      # fparser syntax errors
+            dump = os.path.join(outdir, os.path.basename(path) + ".f2cpp_prepass")    # not into the sources
             print(f"f2cpp: cannot parse {path} (line numbers refer to the pre-processed text, "
-                  f"written to {path}.f2cpp_prepass):\n{e}", file=sys.stderr)
-            with open(path) as f, open(path + ".f2cpp_prepass", "w") as g:
+                  f"written to {dump}):\n{e}", file=sys.stderr)
+            os.makedirs(outdir, exist_ok=True)
+            with open(path) as f, open(dump, "w") as g:
                 g.write(prepass(f.read(), cfg))
             report.start(path)
             report.add("untranslated", "parse-error")
@@ -81,11 +83,24 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
     prog.decide_int_vectors([m for _, m in todo])
     for path, m in todo:
         if m in wrapped:
-            hpp, cpp, binding = WrapEmitter(prog, m, report, path).generate()
+            emitter = WrapEmitter(prog, m, report, path)
+            hpp, cpp, binding, cwrapper, files = emitter.generate()
+            for suffix, text in files.items():          # C++ CWrapper<Thing>
+                out = os.path.join(outdir, prog.file_stem(m.name) + suffix)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with open(out, "w") as f:
+                    f.write(text)
+                written.append(out)
             out = os.path.join(outdir, prog.file_stem(m.name) + "_c_binding.F90")
             with open(out, "w") as f:
                 f.write(binding)
             written.append(out)
+            if cwrapper is not None:                    # Fortran types implemented by C++ objects
+                out = os.path.join(outdir, os.path.dirname(prog.file_stem(m.name)), emitter.cwrapper_module(m) + ".F90")
+                with open(out, "w") as f:
+                    f.write(cwrapper)
+                written.append(out)
+                binding += "\n" + cwrapper             # its C declarations are in the same .h
             from .wrap import c_header                  # normally generated from the binding by the build
             stem = prog.file_stem(m.name)
             out = os.path.join(outdir, stem + ".h")
@@ -120,10 +135,12 @@ def main(argv=None):
     ap.add_argument("--keep-original", action="store_true", default=None,
                     help="emit each Fortran statement as comment above its translation")
     ap.add_argument("--report", metavar="JSON", help="write construct coverage report (no source text)")
+    ap.add_argument("--strict", action="store_true", default=None,
+                    help="stop at internal errors (f2cpp bugs) instead of keeping the statement as comment")
     args = ap.parse_args(argv)
     if not args.files and not args.wrap:
         ap.error("no files to translate or wrap")
-    cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original)
+    cfg = config.load(args.config, namespace=args.namespace, keep_original=args.keep_original, strict=args.strict)
     cfg["exclude"] += [e.lower().replace(" ", "") for e in args.exclude]
     # parsing and translation recurse over the expression trees: very long expressions (hundreds of
     # operands) need more than the default recursion limit and stack
@@ -142,3 +159,5 @@ def main(argv=None):
     print(report.summary(), file=sys.stderr)
     if args.report:
         report.write_json(args.report)
+    if any(sum(c["error"].values()) for c in report.files.values()):
+        raise SystemExit(2)                     # internal errors: the output is complete, but f2cpp has bugs

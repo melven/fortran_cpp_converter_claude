@@ -217,7 +217,8 @@ into a Fortran array (`X_private::toC` gives the handles).
 Listeners: `wrap_listeners = ["AbstractListener_type"]` (abstract type with deferred bindings, `intent(in)`
 arguments: the owner object, real / integer / logical scalars, real / integer rank-1 arrays; error flag). C++:
 class `AbstractListener` with pure virtual methods (no error argument) and private static trampolines
-`state_changed_wrapper(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr; without error flag:
+`state_changed_wrapper(..., int* ierr)` (exceptions -> `*ierr = -1`, message on stderr or through
+`log_error = "project_log_error"` (`project_log_error("<Class>", ("encountered exception in <method>: " + std::string(e.what())).c_str())`, `catch (...)`: `"encountered exception in <method>"`; header: `log_error_include`); without error flag:
 terminate); non-copyable (its Fortran object knows its address). The binding defines
 `AbstractListener_cpp` extending the Fortran type: `userData` (the C++ listener), `user` / `owner` (the C++ /
 Fortran object it was set on) and one `type(C_FUNPTR)` per method, passed by the C++ constructor to
@@ -229,6 +230,82 @@ is destroyed.
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
 
+Abstract types implemented in C++ (Fortran dependents stay, the implementations are translated):
+
+```toml
+wrap_reverse = ["AbstractThing_type"]
+[wrap_reverse_factories]
+AbstractThingFactory_type = { register = "register_thing_factory", unregister = "unregister_thing_factory" }
+[reverse_factory_instances]                    # translated factories: global instance with its name
+LinearThingFactory_type = "linear"
+```
+
+- abstract C struct `project_AbstractThing`: one function pointer per binding (the struct is the first
+  argument), `destroy`, `userData` (the implementation: C++ or Fortran object); for C++ objects set by the
+  C++ constructor
+- `wrap_constants` (`Thing_type = ["stateSize"]`, real / integer / logical / character scalars, also inherited components;
+  first in the C struct): C struct members set by the
+  C++ constructor (`explicit Thing(int stateSize)`), const getters `stateSize()` (used by translated defaults),
+  copied into the Fortran object by `project_Thing_wrap`; Fortran implementations: by `create_Thing_C_from_Fortran`;
+  character constants: `std::string` member in C++ (`c_str()` in the struct), C string copies allocated by
+  `create_Thing_C_from_Fortran` and freed by `destroy_Thing_C_from_Fortran(cthing, ierr)` (resets the struct);
+  `wrap_string_out = [module, copy, delete]` (`copy(fStr, ierr)` → C_CHAR pointer array, `delete(cStr_ptr)`): the project's helpers
+- array sizes that both sides know (integer literals and constants, from `wrap_sizes`, a size check or the
+  documentation `dimension (this\%stateSize)`): no `_n` argument; Fortran checks `size(x)` (`ierr = -1`, or
+  `wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`
+  with the include before the module; without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
+  and resizes outputs; otherwise the size is passed (`x, x_n`)
+- the other direction: a Fortran implementation behind the struct for C / C++:
+  `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
+  `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
+  pointers to the private `bind(C, name="")` routines `wrap_<method>` (arrays of known size: pointer views
+  `x_f => x(1:this_c%n)`; positional actual arguments; `wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]`:
+  `PROJECT_CHK_IERR(call wrapper%ptr%f(..., ierr), ierr)`; no global symbol; plain `bind(C)`
+  would give clashing global symbols `wrap_<method>` across modules); C++
+  `AbstractThing_private::CWrapperThing(project_AbstractThing&)` (own files `<stem>_c_wrapper.hpp/.cpp`) derives
+  from `AbstractThing` and calls them (the struct outlives it; the default constructor gives an empty object);
+  methods that cannot be passed (e.g. class(*)): TODO in the binding, the C++ override throws
+- all bindings are forwarded (Fortran bindings are overridable): deferred ones are pure virtual in C++,
+  those with a default implementation `virtual` with the translated default as definition
+- C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
+  (`noexcept`; arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
+  `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
+- the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions, each with a C
+  function pointer typedef of the same name, e.g. `project_AbstractThing_evaluate`, used by the struct); the
+  module `project_c_wrapper_<module>` (file of the same name) has `CWrapperThing_type`: extends the abstract
+  type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
+  makes one; factories: `CWrapperThingFactory_type` and register / unregister
+- factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
+  in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor
+  unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)`: `release()` to Fortran
+- translated factories get `using Base::Base;` and `<Factory>_private::instance("name")`
+- arguments: wrapped objects (temporary handles), real / integer / logical scalars (in / out / inout),
+  real / integer rank-1 arrays (copied; the size must not change), created objects, scalar results, `ierr`
+- the Fortran library references no symbol of the C++ library (registration at run time); a global
+  factory instance in a static library is only constructed if its object file is linked
+
+The binding module is `private`; one `public ::` statement per name for the types, the `bind(C)`
+procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests in Fortran). Layout of the
+binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; the C prologue (`stdbool.h`,
+macros, forward declarations) between `implicit none` and `private`; sections `public declarations`,
+`interface declarations` (one `abstract interface` block; bodies with explicit `import` list and `implicit none`),
+C header: one forward declaration per struct (`typedef struct X X;`) at the top, definitions as
+`struct X { ... };`, no `struct` keyword in parameters (C and C++); a `!====...` line before each module procedure, a `!----...` line after the dummy and after the local declarations; the C pointer argument of the binding is `this`; Fortran-side
+locals have the Fortran kind (`real`): only `bind(C)` arguments use `C_REAL` / `C_INT` (a kind mismatch is a
+compile error), `type declarations` (comment line `!====...`).
+C declarations longer than `c_decl_width` (100): one parameter per line; code lines over 132 characters are
+continued (`&`). C++ declarations without Fortran
+documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).
+
+Mixing: `wrap_translate = ["mysolver_type%norm", "residual_norm"]` (glob patterns) implements listed
+methods / procedures of a wrapped module in C++: same declaration (the header does not change), the
+translation as definition, no binding. Components are getters into the Fortran object; `allocate` /
+`deallocate` of components and array assignments that may change their size are TODOs (`Eigen::Map`),
+constants (`wrap_constants`) are noted (copies from `setup`). Private components, private procedures and
+module variables are not available (compile errors / TODOs). Fortran callers keep using the Fortran
+implementation (`wrapped-translated:` in the report). Reverse types: listed bindings with a default
+implementation get no `_wrapper` (C++ only; Fortran keeps its default).
+
 Not wrapped (each with `// TODO(f2cpp): ...` and the reason in `M.hpp`, counted in the report):
 methods / procedures with unsupported arguments (declared, the definition throws
 `std::logic_error`), `nopass` bindings, components without getter, public module variables and
@@ -236,8 +313,9 @@ constants.
 
 Supported so far: classes and class hierarchies, public module procedures (C name
 `project_<procedure>`, `c_procedure_names` for others), methods
-with scalar, rank-1/2 array (sizes from `CHK_ARGUMENT(size(x) == this%n)`, explicit shapes or
-`wrap_sizes`), input string (`str_array_ptr_to_str`), optional scalar, optional string and optional array (`NULL`; binding: disassociated pointer = absent) arguments, logical arrays (copied between `bool` and `logical`; optional: unallocated = absent), `intent(in)` / `inout` arrays of unknown size (extra C parameter `int x_n1` from `x.size()`), scalar
+with scalar, rank-1/2 array (sizes from `wrap_sizes`, `CHK_ARGUMENT(size(x) == this%n)`, `allocate`, explicit
+shapes; for `intent(out)` finally from the documentation `!< ..., dimension (this\%n)`, report info
+`wrap-size-from-doc`), input string (`str_array_ptr_to_str`), optional scalar, optional string and optional array (`NULL`; binding: disassociated pointer = absent) arguments, logical arrays (copied between `bool` and `logical`; optional: unallocated = absent), `intent(in)` / `inout` arrays of unknown size (extra C parameter `int x_n1` from `x.size()`), scalar
 function results. Other methods are declared and throw `std::logic_error` (TODO). Configuration:
 `c_prefix` (default: the namespace in lower case, `project_MySolver_apply`), `c_class_names`
 (shorter class names in C names), `c_real` / `c_single_precision` (default `PROJECT_REAL` /
@@ -259,6 +337,26 @@ parameters. A template that declares the object (`"Type {self}(...);"`) replaces
 `project::config::solverXConfig_wrapper config(tixiHandle, xml_path);`. `examples/eigen_solvers.toml` shows
 an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a linear solver
 (`Eigen::PartialPivLU`) and a least-squares solver (`Eigen::ColPivHouseholderQR`).
+
+## Unlimited polymorphic objects
+
+`class(*), allocatable :: p` (black-box data) is translated as `std::any p;` (noted as
+`unlimited-polymorphic`): `allocate(p, source=v)` → `p = v;`, `select type (q => p)` / `type is (real)` →
+`p.type() == typeid(scalar)` / `std::any_cast<const scalar&>(p)` (read access). In a wrapped module (`-W`)
+such a type is a wrapped class instead (`wrap_owned` for arrays of it passed to / from C++).
+
+`class(*), allocatable` arguments (`intent(out)` / `intent(in)`) of wrapped methods: Fortran data held by
+C++ and passed back, moved and never copied. C: the opaque holder `project_FortranAny*` (NULL: unallocated);
+C++: `std::any` with a `std::shared_ptr<FortranState>` (copies share it, the last one releases the holder in
+Fortran: `project_<module>_any_release`). C++ data in a `std::any` cannot be passed to Fortran
+(`std::invalid_argument`).
+`class(*)` arguments of reverse-wrapped methods (`allocatable, intent(out)` / `intent(in)`): data owned by
+the other side, per module in the C struct `project_<module>_Any` (binding: `Any_c`; `destroy`, `userData`); only
+its creator unpacks it. C++ implementations: `userData` is a `std::any`; in Fortran a private `CWrapperAny_type`
+in the `class(*)` (owns it, final -> `destroy`; `move_alloc` only, never copy); passed back unchanged, Fortran
+data: `ierr = -1`. Fortran implementations used in C++ (`CWrapper<Thing>`): `userData` is an `AnyHolder_type`
+(`f2cpp_any_new`, moved, deleted by `destroy` in Fortran); in C++ a `std::any` with a shared `FortranData`;
+passed back by moving the data out of its holder for the call; C++ data: `std::invalid_argument`.
 
 ## Objects that are neither copyable nor movable
 
@@ -386,7 +484,7 @@ file that could not be resolved.
 ## Parse errors
 
 The parser accepts Fortran 2008. If a file cannot be parsed, the fparser message is printed
-and the pre-processed text is written to `<file>.f2cpp_prepass`; the reported line number
+and the pre-processed text is written to `<outdir>/<file>.f2cpp_prepass`; the reported line number
 refers to that file. Work around unsupported syntax with `pre_patches`.
 
 ## Known limitations (manual work)
@@ -415,6 +513,9 @@ refers to that file. Work around unsupported syntax with `pre_patches`.
 - Fortran is case-insensitive: the spelling of the declaration is used. Names differing only
   in case from other C++ names in scope are not detected.
 
+- **Listeners and reverse types** are two variants of the same mechanism (possible simplification):
+  listeners could become reverse types without `destroy` (C struct in the C++ object, `set_listener`
+  passes it, Fortran wraps it non-owning).
 ## Development
 
 ```bash

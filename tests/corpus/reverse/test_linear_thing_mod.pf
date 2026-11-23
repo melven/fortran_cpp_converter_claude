@@ -1,0 +1,19 @@
+!> tests of the implementation (translated with it)
+module test_linear_thing_mod
+  use funit
+  use linear_thing_mod, only: LinearThing_type
+  implicit none
+contains
+  @test
+  subroutine test_evaluate
+    type(LinearThing_type) :: thing
+    real :: x(2), y(2)
+    integer :: ierr
+    thing%factor = 3.0
+    x = [1.0, 2.0]
+    call thing%evaluate(x, y, ierr)
+    @assertEqual(0, ierr)
+    @assertEqual(6.0, y(2), 1.0e-12)
+    @assertEqual(6.0, thing%weight(), 1.0e-12)
+  end subroutine test_evaluate
+end module test_linear_thing_mod

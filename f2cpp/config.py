@@ -60,6 +60,10 @@ DEFAULTS = {
     "source_ext": ".cpp",
     # included by every generated header (must provide scalar, vec, mat)
     "extra_includes": [],
+    # error logging in the C++ wrappers called through function pointers (catch blocks):
+    # <log_error>("<Class>", e.what()); empty: std::fprintf(stderr, ...); log_error_include: its header
+    "log_error": "",                          # e.g. "project_log_error"
+    "log_error_include": "",                  # e.g. "\"project_log.hpp\""
     # Fortran #include "x" -> C++ #include "y"; "" drops the include
     "include_map": {},
     # Fortran derived type (lower case) -> existing C++ class, e.g. "foo_type" = "wrappers::Foo"
@@ -121,7 +125,19 @@ DEFAULTS = {
     "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)                      # Fortran type -> class name in C names (shorter names)
     "c_real": None,                           # C type macro of real: <NS>_REAL
     "c_single_precision": None,               # <NS>_SINGLE_PRECISION
-    "wrap_string_in": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
+    "c_decl_width": 100,                      # longer C declarations (binding comments): one parameter per line
+    # argument check in generated Fortran (sizes of reverse-type arrays): [macro, Fortran include file],
+    # e.g. ["PROJECT_CHK_ARGUMENT", "project_macros.h"] -> PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr);
+    # None: if (...) then; ierr = -1; return; end if
+    "wrap_chk_argument": None,
+    # error flag check of calls in generated Fortran (wrap_<method>): [macro, Fortran include file],
+    # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
+    "wrap_chk_ierr": None,
+    "wrap_string_in": None,
+    # Fortran string -> new C string and its deletion (character constants of reverse types): [module, copy, delete]
+    # copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:);
+    # delete(cStr_ptr): type(C_PTR), intent(inout); None: generated f2cpp_copy_string / f2cpp_delete_string
+    "wrap_string_out": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}
     "wrap_sizes": {},
@@ -143,6 +159,9 @@ DEFAULTS = {
     # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
     # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
     "wrap_owned": [],
+    # methods ("type%binding") / procedures of wrapped modules implemented in C++ (their translation instead of
+    # the glue; same declaration); reverse types: no <method>_wrapper (C++ only); glob patterns
+    "wrap_translate": [],
     # types whose C++ objects are neither copyable nor movable: local arrays of them become one named
     # variable per element (inputs(1) = T(...) -> Cls inputs_1(...); inputs -> {inputs_1, inputs_2});
     # type -> C++ class ("" = the type's class name)
@@ -156,6 +175,13 @@ DEFAULTS = {
     # abstract types used as listeners (only deferred bindings with intent(in) arguments): a C++ class with
     # pure virtual methods; its objects can be set as listener of wrapped objects
     "wrap_listeners": [],
+    # abstract types implemented in C++ (C struct per C++ object, Fortran CWrapper<Thing>_type owning it)
+    "wrap_reverse": [],
+    # abstract factories implemented in C++: type -> {register = "proc", unregister = "proc"} of the
+    # Fortran factory registration (call register(name, factory), call unregister(name))
+    "wrap_reverse_factories": {},
+    # translated factories: type -> name of the global instance (<Factory>_private::instance("name"))
+    "reverse_factory_instances": {},
     # macro for the DLL export attribute of the bind(C) routines ("" for none):
     # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
     "wrap_dllexport": "DLLEXPORT",
@@ -177,6 +203,7 @@ DEFAULTS = {
     # False: EXPECT_LE((expected - actual).cwiseAbs().maxCoeff(), tolerance)
     "gtest_eigen_near": True,
     "test_includes": [],           # additional includes of translated test files
+    "strict": False,               # internal errors (f2cpp bugs) stop the run instead of a TODO comment
     "keep_original": False,        # emit the Fortran statement as comment above each statement
 }
 
@@ -199,6 +226,11 @@ def load(path=None, **overrides):
                 cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
             else:
                 cfg[key] = val
+    for key, val in overrides.items():          # keyword overrides: normalised like the TOML values
+        if val is not None:
+            if key not in cfg:
+                raise TypeError(f"f2cpp: unknown config key '{key}'")
+            cfg[key] = val
     # accessors: type -> {component: C++ accessor name or None (same name)}
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
@@ -223,14 +255,16 @@ def load(path=None, **overrides):
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
+    cfg["wrap_translate"] = [t.lower().replace(" ", "") for t in cfg["wrap_translate"]]
     cfg["named_elements"] = {k.lower(): v for k, v in cfg["named_elements"].items()}
     cfg["named_element_lists"] = {k.lower(): v for k, v in cfg["named_element_lists"].items()}
     cfg["wrap_handle_member"] = {k.lower(): v for k, v in cfg["wrap_handle_member"].items()}
     cfg["wrap_listeners"] = [t.lower() for t in cfg["wrap_listeners"]]
+    cfg["wrap_reverse"] = [t.lower() for t in cfg["wrap_reverse"]]
+    cfg["wrap_reverse_factories"] = {k.lower(): {a.lower(): p for a, p in v.items()}
+                                     for k, v in cfg["wrap_reverse_factories"].items()}
+    cfg["reverse_factory_instances"] = {k.lower(): v for k, v in cfg["reverse_factory_instances"].items()}
     cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
-    for key, val in overrides.items():
-        if val is not None:
-            cfg[key] = val
     ns = cfg["namespace"].split("::")[0]
     cfg["c_prefix"] = cfg["c_prefix"] or ns.lower()
     cfg["c_real"] = cfg["c_real"] or f"{ns.upper()}_REAL"

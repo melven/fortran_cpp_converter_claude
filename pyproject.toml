@@ -21,3 +21,15 @@ packages = ["f2cpp"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 132
+
+[tool.ruff.lint]
+# pyflakes, syntax / statement errors, warnings; style (E501 line length) is not enforced yet
+select = ["E4", "E7", "E9", "F", "W"]
+ignore = ["E731", "E741"]
+
+[tool.coverage.run]
+source = ["f2cpp"]

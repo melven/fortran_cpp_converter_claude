@@ -16,8 +16,13 @@ and against construct reports (`--report`, no source text) supplied by the user.
 - `f2cpp/model.py` — symbol table (`Var`, `Proc`, `TypeDef`, `Module`, `Program`) from the fparser2 tree
 - `f2cpp/translate.py` — `Translator`: expressions (`x_<NodeClass>`), statements (`s_<NodeClass>`), intrinsic table
 - `f2cpp/emit.py` — module → `.hpp`/`.cpp`, classes, signatures, pFUnit module → gtest
+- `f2cpp/wrap.py` — wrapped modules (`-W`): C binding module, C header, C++ wrapper classes and glue
+- `f2cpp/reverse.py` — listeners, reverse types (C++ implements Fortran abstract types), `class(*)` ↔ `std::any`
 - `f2cpp/config.py` — all options with defaults; `f2cpp/report.py` — coverage report
 - `tests/corpus` — synthetic Fortran; `tests/support` — stand-ins for project headers, hand-written C++ driver
+
+Details: [`f2cpp/CLAUDE.md`](f2cpp/CLAUDE.md) (pipeline, every function in one line, known problems),
+[`tests/CLAUDE.md`](tests/CLAUDE.md) (tests, corpus, pitfalls), [`PLAN.md`](PLAN.md) (state, risks, plan).
 
 ## Conventions
 

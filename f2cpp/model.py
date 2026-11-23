@@ -89,7 +89,8 @@ class Var:
             return True
         if self.base == "procedure":
             return False
-        if self.rank == 0 and self.base == "type" and (self.has("allocatable") or self.has("pointer")):
+        if self.rank == 0 and self.base == "type" and (self.has("allocatable") or self.has("pointer")) \
+                and self.tname != "*":             # class(*): a std::any value
             return True
         return self.rank == 0 and self.has("pointer")
 

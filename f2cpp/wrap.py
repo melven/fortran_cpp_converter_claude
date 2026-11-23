@@ -18,13 +18,14 @@ from fparser.two import Fortran2003 as F
 from .emit import ModuleEmitter, BANNER, squeeze, strip_blank
 from .model import cls, lname, items_of
 from .translate import TODO, Untranslatable
+from .reverse import ReverseMixin
 
 
 def lower_camel(name):
     return name[:1].lower() + name[1:]
 
 
-class WrapEmitter(ModuleEmitter):
+class WrapEmitter(ReverseMixin, ModuleEmitter):
     """emits header, glue code and C binding of a wrapped module"""
 
     # ------------------------------------------------------------------ names
@@ -63,7 +64,9 @@ class WrapEmitter(ModuleEmitter):
         return f"{self.c_class_name(self.root(t)[1])}Wrapper_type"
 
     def c_type_name(self, t):
-        """C typedef of the handle (one per class hierarchy): project_MySolver"""
+        """C typedef of the handle (one per class hierarchy): project_MySolver; reverse types: their own struct"""
+        if t.name in self.reverse_types():
+            return f"{self.cfg['c_prefix']}_{self.c_class(t)}"
         return f"{self.cfg['c_prefix']}_{self.c_class_name(self.root(t)[1])}"
 
     def struct_handle(self, t):
@@ -121,6 +124,10 @@ class WrapEmitter(ModuleEmitter):
                 line += piece
             res.append("\n".join(out + [line]))
         return "\n".join(res)
+
+    def wrapped_types(self):
+        """public, not excluded types of the module"""
+        return [t for t in self.mod.types.values() if not self.excluded(t.name) and self.mod.is_public(t.name)]
 
     def owned(self, t):
         """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
@@ -209,8 +216,41 @@ class WrapEmitter(ModuleEmitter):
         return [f"#ifdef {m}", f"  {m} :: {cname}", "#endif"] if m else []
 
     # ------------------------------------------------------------------ analysis
-    def array_sizes(self, p, t):
-        """{(dummy, dim or None): Fortran expression node} from size checks and explicit shapes"""
+    def doc_sizes(self, p):
+        """{(dummy, dim): Fortran expression node} from the documentation ('!< ..., dimension (this\\%n, 3)')"""
+        sizes = {}
+        for names, lines in p.param_docs:
+            text = " ".join(lines).replace("\\%", "%")
+            m = re.search(r"(?i)\bdimension\s*\(", text)
+            if not m:
+                continue
+            depth, cur, extents = 0, "", []
+            for ch in text[m.end():]:
+                if ch == ")" and depth == 0:
+                    extents.append(cur.strip())
+                    break
+                depth += {"(": 1, ")": -1}.get(ch, 0)
+                if ch == "," and depth == 0:
+                    extents.append(cur.strip())
+                    cur = ""
+                else:
+                    cur += ch
+            else:
+                continue                        # unbalanced
+            try:
+                nodes = [F.Expr(e) for e in extents]
+            except Exception:                   # not a Fortran expression: ignored
+                continue
+            for a in names:
+                v = p.vars.get(a)
+                if v is not None and v.rank == len(nodes):
+                    for k, node in enumerate(nodes):
+                        sizes[(a, k + 1)] = node
+        return sizes
+
+    def array_sizes(self, p, t, doc=False):
+        """{(dummy, dim or None): Fortran expression node} from size checks, allocate and explicit shapes;
+        doc: also from the documentation (lowest precedence; used for intent(out) arrays)"""
         tr = self.tr(p)
         sizes = {}
         execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
@@ -241,6 +281,10 @@ class WrapEmitter(ModuleEmitter):
                 for k, (lo, hi) in enumerate(v.dims):
                     if lo is None:
                         sizes.setdefault((a, k + 1), hi)
+        if doc:
+            for (a, dim), node in self.doc_sizes(p).items():
+                if (a, dim) not in sizes and not (dim == 1 and (a, None) in sizes):
+                    sizes[(a, dim)] = node
         return sizes
 
     def fortran_size(self, p, sizes, a, dim, depth=0):
@@ -275,7 +319,19 @@ class WrapEmitter(ModuleEmitter):
     def wrappable(self, p, t):
         """-> (list of (dummy, kind, sizes), None) or (None, reason)"""
         err = self.tr(p).err
-        sizes = self.array_sizes(p, t)
+        sizes, doc_sizes = self.array_sizes(p, t), self.array_sizes(p, t, doc=True)
+        bname = next((b.name for b in t.bindings.values() if b.deferred and b.iface == p.name), None) \
+            if t is not None else None          # deferred: the interface
+        key = f"{t.name}%{bname or (p.bind_name or p.name).lower()}" if t is not None else p.name
+
+        def from_doc(a, dims):                  # intent(out): the documented size as the last resort
+            if None not in dims:
+                return dims
+            dims = [self.fortran_size(p, doc_sizes, a, d) for d in
+                    ([None] if p.vars[a].rank == 1 else range(1, p.vars[a].rank + 1))]
+            if None not in dims:
+                self.report.add("info", f"wrap-size-from-doc:{key}:{a}")
+            return dims
         res = []
         for a in p.args:
             if a in (p.pass_arg, err):
@@ -293,11 +349,17 @@ class WrapEmitter(ModuleEmitter):
                 if why:
                     return None, why
                 n = self.fortran_size(p, sizes, a, None)
+                if v.intent == "out":
+                    n = from_doc(a, [n])[0]
                 if v.intent == "out" and n is None:
                     return None, f"size of argument {v.cname} unknown (size check or wrap_sizes)"
                 if v.intent not in ("in", "out"):
                     return None, f"argument {v.cname} (wrap_owned array: intent(in) / intent(out))"
                 res.append((a, "owned-" + v.intent, [n or f"{a}_n1"]))
+                continue
+            if v.base == "type" and v.tname == "*" and not v.rank and v.has("allocatable") and \
+                    v.intent in ("in", "out"):          # class(*): std::any in C++
+                res.append((a, "any-" + v.intent, None))
                 continue
             if v.base in ("procedure", "type", "complex", "unknown"):
                 return None, f"argument {v.cname} ({v.base})"
@@ -314,6 +376,8 @@ class WrapEmitter(ModuleEmitter):
             if v.rank > 2 or v.has("allocatable") or v.has("pointer"):
                 return None, f"argument {v.cname} (array: rank 1 / 2, not allocatable / pointer)"
             dims = [self.fortran_size(p, sizes, a, d + 1 if v.rank == 2 else None) for d in range(v.rank)]
+            if v.intent == "out":
+                dims = from_doc(a, dims)
             if None in dims and (v.intent or "inout") != "out":
                 dims = [f"{a}_n{d + 1}" for d in range(v.rank)]      # size passed from C++
             elif None in dims:
@@ -400,6 +464,8 @@ class WrapEmitter(ModuleEmitter):
         (types of other modules: their translation is the C++ class)"""
         res = {}
         for t in self.mod.types.values():
+            if t.name in self.reverse_types():  # their constants: reverse_constants
+                continue
             for v, kind, td in self.constants(t)[0]:
                 if kind == "struct":
                     res[td.name] = td
@@ -474,7 +540,7 @@ class WrapEmitter(ModuleEmitter):
                 body += [f"{n} = C_NULL_PTR", f"{n}_size = 0", f"if ({test}({whole})) then"]
                 if v.base == "logical" or v.companion_of:   # not C bool / not contiguous: a copy
                     buf = f"buf{len(decls) + 1}"
-                    decls.append(f"{self.f_type(v)}, pointer :: {buf}(:)")
+                    decls.append(f"{self.f_type(v)}, pointer, contiguous :: {buf}(:)")
                     conv = f"logical({m}, C_BOOL)" if v.base == "logical" else m
                     body += [f"  allocate({buf}(size({whole})))", f"  {buf} = {conv}",
                              f"  if (size({buf}) > 0) {n} = c_loc({buf}(1))"]
@@ -602,6 +668,24 @@ class WrapEmitter(ModuleEmitter):
                 pre.append(f"if (c_associated({a})) allocate({a}_f, source={self.cfg['wrap_string_in'][1]}({a}))")
                 call.append(f"{a}={a}_f")
                 glue.append(f"{v.cname} ? {v.cname}->c_str() : nullptr")
+            elif kind in ("any-in", "any-out"):     # class(*): Fortran data held by C++ (see f2cpp_any)
+                self.any_used = True
+                cn, ah = v.cname, self.any_handle()
+                decls += [f"type(C_PTR), {'value' if kind == 'any-in' else 'intent(out)'} :: {a}",
+                          f"class(*), allocatable :: {a}_f"]
+                call.append(f"{a}={a}_f")
+                if kind == "any-in":            # moved out of the holder for the call and back
+                    c_args.append(f"{ah}* {a}")
+                    pre.append(f"call f2cpp_any_from_holder({a}, {a}_f)")
+                    post.append(f"call f2cpp_any_back({a}, {a}_f)")
+                    self.any_helpers |= {"f2cpp_any_from_holder", "f2cpp_any_back"}
+                    glue.append(f"f2cpp_any::to_fortran({cn})")
+                else:                           # a new holder (NULL: unallocated)
+                    c_args.append(f"{ah}** {a}")
+                    post.append(f"call f2cpp_any_to_holder({a}_f, {a})")
+                    self.any_helpers.add("f2cpp_any_to_holder")
+                    glue += [("pre", f"{ah}* {cn}_h = nullptr;"), f"&{cn}_h",
+                             ("post", f"{cn} = f2cpp_any::from_fortran({cn}_h, &{self.any_release_name()});")]
             elif kind == "listener":           # the C++ listener's Fortran bridge object; user: this C++ object
                 lt = self.prog.find_type(v.tname, self.mod)
                 bridge = f"{self.c_class(lt)}_cpp"
@@ -666,7 +750,7 @@ class WrapEmitter(ModuleEmitter):
                         glue.append(f"{present} ? static_cast<int>({h}) : 0" if present else f"static_cast<int>({h})")
                 if v.base == "logical":         # C bool -> Fortran logical: a copy (unallocated = absent)
                     shape, colons = ", ".join(dims), ", ".join([":"] * v.rank)
-                    decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer :: {a}_c({colons})",
+                    decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer, contiguous :: {a}_c({colons})",
                               f"logical, allocatable :: {a}_f({colons})"]
                     pre += [f"if (c_associated({a})) then", f"  call c_f_pointer({a}, {a}_c, [{shape}])",
                             f"  allocate({a}_f({shape}))"] + \
@@ -678,7 +762,7 @@ class WrapEmitter(ModuleEmitter):
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
                     # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
-                    decls.append(f"{self.f_type(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)})")
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
                     pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
                 elif v.rank == 1:
@@ -686,12 +770,12 @@ class WrapEmitter(ModuleEmitter):
                     call.append(f"{a}={a}(1:{dims[0]})")
                 else:
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
-                    decls.append(f"{self.f_type(v)}, pointer, contiguous :: {a}_2d(:, :)")
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_2d(:, :)")   # Fortran kind
                     pre.append(f"{a}_2d(1:{dims[0]}, 1:{dims[1]}) => {a}(1:({dims[0]}) * ({dims[1]}))")
                     call.append(f"{a}={a}_2d")
                 # C++: the C interface has no sizes -> out arrays get the size of the Fortran check,
                 # the others are checked before the call (the binding would read / write past the end)
-                sizes = self.array_sizes(p, t)
+                sizes = self.array_sizes(p, t, doc=intent == "out")
                 nodes = [sizes.get((a, None)) or sizes.get((a, 1))] if v.rank == 1 else \
                     [sizes.get((a, 1)), sizes.get((a, 2))]
                 try:
@@ -800,7 +884,8 @@ class WrapEmitter(ModuleEmitter):
             post += [f"{a}(1:{n}) = C_NULL_PTR", f"if (allocated({a}_f)) then",
                      f"  do {a}_i = 1, min({n}, size({a}_f))", f"    allocate({a}_e, source={a}_f({a}_i))",
                      f"    {a}({a}_i) = {self.c_name(ot, 'setup')}({a}_e)", "  end do", "end if"]
-            node = self.array_sizes(p, t).get((a, None)) or self.array_sizes(p, t).get((a, 1))
+            sizes = self.array_sizes(p, t, doc=True)
+            node = sizes.get((a, None)) or sizes.get((a, 1))
             try:
                 size = self.tr(p).expr(node).code if node is not None else None
             except Untranslatable:
@@ -829,180 +914,41 @@ class WrapEmitter(ModuleEmitter):
                 decls.append(f"integer(C_INT), value :: {n}")
                 glue.append(f"static_cast<int>({cn}.size())")
 
-    def listener(self, lt, hpp, cpp, fb, typedefs):
-        """abstract listener type: C++ class with pure virtual methods and private static trampolines; Fortran
-        bridge type extending it (in the binding) that calls the trampolines through function pointers passed
-        at creation (no symbol of the C++ library is referenced by the Fortran library)"""
-        prog = self.prog
-        name = prog.type_name(lt.name)
-        cls, ht = name.split("::")[-1], self.c_type_name(lt)
-        bridge, ft = f"{self.c_class(lt)}_cpp", lt.spelling or lt.name
-        create, free = self.c_name(lt, "create"), self.c_name(lt, "free")
-        typedefs.append(f"!typedef struct {ht} {ht};")
-        methods = []
-        for bd in lt.bindings.values():
-            iface = prog.binding_proc(lt, bd)
-            if bd.deferred and iface is not None:
-                methods.append((bd, iface, self.listener_method(lt, bd, iface, bridge, cls)))
-        live = [m for m in methods if not m[2]["todo"]]
-        # --- C++ class
-        hpp.emit(0, f"namespace {cls}_private")
-        hpp.emit(0, "{")
-        hpp.emit(0, f"{ht}* toC(const {cls}& l);  //!< the Fortran object of the listener")
-        hpp.emit(0, "}")
-        hpp.emit(0, "")
-        hpp.emit(0, f"class {name}")
-        hpp.emit(0, "{")
-        hpp.emit(0, "public:")
-        hpp.emit(1, f"{cls}();  //!< creates its Fortran object")
-        hpp.emit(1, f"virtual ~{cls}();  //!< frees it: unset the listener before")
-        hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to Fortran")
-        hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;")
-        for bd, iface, m in methods:
-            ret, _, params, const = self.signature(self.tr(iface), iface, True)
-            hpp.emit(0, "")
-            self.doc(hpp, iface, 1)
-            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const} = 0;")
-        hpp.emit(0, "")
-        hpp.emit(0, "private:")
-        for bd, iface, m in live:
-            hpp.emit(1, f"static void {m['tramp']}({m['cpp_params']});  //!< called from Fortran")
-        hpp.emit(1, f"{ht}* fortran_ = nullptr;  //!< the Fortran object ({bridge}) calling this object")
-        hpp.emit(1, f"friend {ht}* {cls}_private::toC(const {cls}& l);")
-        hpp.emit(0, "};")
-        hpp.emit(0, "")
-        fns = "".join(f", &{cls}::{m['tramp']}" for _, _, m in live)
-        lines = [f"{name}::{cls}() : fortran_({create}(this{fns}))", "{", "}", "",
-                 f"{name}::~{cls}()", "{", f"  {free}(fortran_);", "}", "",
-                 f"{ht}* {cls}_private::toC(const {cls}& l)", "{", "  return l.fortran_;", "}", ""]
-        for _, _, m in live:
-            lines += m["cpp"]
-        for line in lines:
-            ind = (len(line) - len(line.lstrip())) // 2
-            cpp.emit(ind, line.strip()) if line.strip() else cpp.emit(0, "")
-        self.needs_cstdio = True
-        # --- Fortran: interfaces of the trampolines, bridge type, its procedures, create / free
-        for _, _, m in live:
-            self.bridges += m["abstract"]
-        self.bridges += [f"  !> {ft} implemented in C++: calls the C++ object through function pointers",
-                         f"  type, extends({ft}), public :: {bridge}",
-                         "    type(C_PTR) :: userData = C_NULL_PTR !< the C++ listener",
-                         "    type(C_PTR) :: user = C_NULL_PTR     !< C++ object of the owner (set_listener)",
-                         "    class(*), pointer :: owner => null() !< Fortran object of the owner"] + \
-            [f"    type(C_FUNPTR) :: {m['fn']} = C_NULL_FUNPTR   !< {cls}::{m['tramp']}" for _, _, m in live] + \
-            ["  contains"] + [f"    procedure :: {bd.spelling} => {m['proc']}" for bd, _, m in methods] + \
-            [f"  end type {bridge}", ""]
-        for _, _, m in methods:
-            fb += m["fortran"]
-        if not any(line.startswith("  logical function listener_same") for line in fb):
-            fb += ["", "  !> is x the Fortran object of p", "  logical function listener_same(p, x)",
-                   "    class(*), pointer, intent(in) :: p", "    class(*), target, intent(in) :: x",
-                   "    listener_same = associated(p, x)", "  end function listener_same"]
-        c_fns = "".join(f", void (*{m['fn']})({m['c_types']})" for _, _, m in live)
-        f_fns = "".join(f", {m['fn']}" for _, _, m in live)
-        fb += ["", "!@c_declaration", f"!  {ht}* {create}(void* userData{c_fns});", f"!  void {free}({ht}* listener);",
-               "!@end_c_declaration", f"  !> Fortran object of the C++ listener cpp (with its trampolines)",
-               f"  function {create}(userData{f_fns}) result(listener) bind(C, name=\"{create}\")"] + self.dllexport(create) + \
-            ["    type(C_PTR), value :: userData"] + [f"    type(C_FUNPTR), value :: {m['fn']}" for _, _, m in live] + \
-            ["    type(C_PTR) :: listener", f"    type({bridge}), pointer :: b", "", "    allocate(b)", "    b%userData = userData"] + \
-            [f"    b%{m['fn']} = {m['fn']}" for _, _, m in live] + ["    listener = c_loc(b)", f"  end function {create}", "",
-             f"  subroutine {free}(listener) bind(C, name=\"{free}\")"] + self.dllexport(free) + \
-            ["    type(C_PTR), value :: listener", f"    type({bridge}), pointer :: b", "",
-             "    if (.not. c_associated(listener)) return", "    call c_f_pointer(listener, b)", "    deallocate(b)",
-             f"  end subroutine {free}"]
-        self.report.add("translated", "wrapped-listener")
+    def tr(self, proc=None):
+        tr = super().tr(proc)
+        tr.via_getters = getattr(self, "via_getters", False)     # translated method of a wrapped class
+        return tr
 
-    def listener_method(self, lt, bd, iface, bridge, cls):
-        """parts of one deferred binding: bridge procedure (arguments to C, call through the function pointer),
-        Fortran interface and C++ definition of the trampoline (calls the virtual method; exceptions -> ierr)"""
-        prog = self.prog
-        proc, fn, tramp = f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{bd.name}_fn", f"{bd.name}_wrapper"
-        aiface = f"{self.c_class(lt)}_{bd.name}_c"
-        err = self.tr(iface).err
-        has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
-        this = iface.pass_arg
-        decl_nodes, c_params, f_dummies, f_decls, locals_, checks, body, actuals, cpp_args = \
-            [], ["void* userData"], ["userData"], ["type(C_PTR), value :: userData"], [], [], [], [f"{this}%userData"], []
-        todo = None
-        fail = (f"{err} = -1" if has_err else f'error stop "{proc}: called for another object than its owner"')
-        for a in iface.args:
-            v = iface.vars[a]
-            if v.node is not None and v.node not in decl_nodes:
-                decl_nodes.append(v.node)
-            if a == this or (has_err and a == err):
-                continue
-            if v.intent != "in":
-                todo = f"argument {v.cname}: only intent(in)"
-            elif v.base == "type" and not v.rank:            # only the owner: its C++ object
-                c_params.append(f"void* {a}")
-                f_dummies.append(a)
-                f_decls.append(f"type(C_PTR), value :: {a}")
-                checks += [f"if (.not. listener_same({this}%owner, {a})) then", f"  {fail}", "  return", "end if"]
-                actuals.append(f"{this}%user")
-                xcls = prog.type_name(v.tname, self.mod)
-                cpp_args.append(f"*static_cast<const {xcls}*>({a})")
-            elif v.base in ("real", "integer", "logical") and not v.rank:
-                conv = {"real": "real", "integer": "int", "logical": "logical"}[v.base]
-                kind = {"real": "C_REAL", "integer": "C_INT", "logical": "C_BOOL"}[v.base]
-                c_params.append(f"{self.c_type(v)} {a}")
-                f_dummies.append(a)
-                f_decls.append(f"{self.f_type(v)}, value :: {a}")
-                locals_.append(f"{self.f_type(v)} :: {a}_c")
-                body.append(f"{a}_c = {conv}({a}, {kind})")
-                actuals.append(f"{a}_c")
-                cpp_args.append(a)
-            elif v.base in ("real", "integer") and v.rank == 1:
-                c_params += [f"const {self.c_type(v)}* {a}", f"int {a}_n"]
-                f_dummies += [a, f"{a}_n"]
-                f_decls += [f"type(C_PTR), value :: {a}", f"integer(C_INT), value :: {a}_n"]
-                locals_ += [f"{self.f_type(v)}, allocatable, target :: {a}_c(:)", f"type(C_PTR) :: {a}_p"]
-                body += [f"allocate({a}_c(size({a})))", f"{a}_c(:) = {a}", f"{a}_p = C_NULL_PTR",
-                         f"if (size({a}_c) > 0) {a}_p = c_loc({a}_c(1))"]
-                actuals += [f"{a}_p", f"int(size({a}_c), C_INT)"]
-                et = self.tr(iface).eigen_type(v, 1)
-                cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")
-            else:
-                todo = f"argument {v.cname}: {self.component_kind(v)}"
-        if has_err:
-            c_params.append(f"int* {err}")
-            f_dummies.append(err)
-            f_decls.append(f"integer(C_INT), intent(out) :: {err}")
-            locals_.append(f"integer(C_INT) :: {err}_c")
-            actuals.append(f"{err}_c")
-        out = ["", f"  !> {bd.spelling} of the C++ listener: {cls}::{tramp}"]
-        if todo:
-            self.report.add("todo", f"wrap-listener:{bd.name}")
-            out.append(f"  ! {TODO}: {todo}")
-        out.append(f"  subroutine {proc}({', '.join(iface.args)})")
-        for node in decl_nodes:                 # the interface of the deferred binding, the bridge as object
-            text = str(node)
-            if this in [lname(e.items[0]) for e in items_of(node.items[2])]:
-                text = re.sub(rf"(?i)class\s*\(\s*{re.escape(lt.name)}\s*\)", f"class({bridge})", text)
-            out.append(f"    {text}")
-        res = {"todo": todo, "proc": proc, "fn": fn, "tramp": tramp}
-        if todo:
-            res["fortran"] = out + [f'    error stop "{proc}: {todo}"', f"  end subroutine {proc}"]
-            return res
-        out += [f"    procedure({aiface}), pointer :: f"] + [f"    {d}" for d in locals_] + [""]
-        out += [f"    {x}" for x in (([f"{err} = 0"] if has_err else []) + checks + body)]
-        out += [f"    call c_f_procpointer({this}%{fn}, f)", f"    call f({', '.join(actuals)})"]
-        if has_err:
-            out.append(f"    {err} = {err}_c")
-        res["fortran"] = out + [f"  end subroutine {proc}"]
-        res["abstract"] = ["  abstract interface", f"    !> {cls}::{tramp}",
-                           f"    subroutine {aiface}({', '.join(f_dummies)}) bind(C)", "      import"] + \
-            [f"      {d}" for d in f_decls] + [f"    end subroutine {aiface}", "  end interface", ""]
-        res["c_params"] = ", ".join(c_params)
-        # C++ declaration / definition: the C++ real type (same type as the C macro, which is not in the .hpp)
-        res["cpp_params"] = re.sub(rf"\b{re.escape(self.cfg['c_real'])}\b", self.cfg["scalar"], res["c_params"])
-        res["c_types"] = ", ".join(re.sub(r"\s*\w+$", "", c) for c in c_params)
-        on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
-        res["cpp"] = [f"void {cls}::{tramp}({res['cpp_params']})", "{"] + ([f"  *{err} = 0;"] if has_err else []) + \
-            ["  try", "  {", f"    static_cast<{cls}*>(userData)->{bd.spelling}({', '.join(cpp_args)});", "  }",
-             "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
-             f'    std::fprintf(stderr, "{cls}::{bd.spelling}: %s\\n", e.what());'] + on_error + \
-            ["  }", "  catch (...)", "  {"] + on_error + ["  }", "}", ""]
-        return res
+    def translated_here(self, t, bd, p):
+        """listed in wrap_translate ("type%binding" / procedure, glob patterns): implemented in C++"""
+        import fnmatch
+        key = f"{t.name}%{bd.name}" if t is not None else p.name
+        return any(fnmatch.fnmatch(key, pat) for pat in self.cfg["wrap_translate"])
+
+    def doc(self, tr, p, ind, name=None):
+        """the documentation of p; without a doxygen comment: one naming the Fortran procedure"""
+        n = len(tr.out)
+        super().doc(tr, p, ind)
+        if not any(line.lstrip().startswith(self.cfg["doxygen"]) for line in tr.out[n:]):
+            tr.emit(ind, f"{self.cfg['doxygen']} Fortran {name or p.cname} (undocumented)")
+            tr.out.insert(n, tr.out.pop())
+
+    def translated_method(self, t, bd, p, hdecl, cpp):
+        """the same declaration as the wrapped method, the translation as implementation (no binding)"""
+        tr = self.tr(p)
+        ret, fname, decl_params, const = self.signature(tr, p, True)
+        ind, name = (1, bd.spelling if bd.deferred else p.bind_name) if t is not None else (0, fname)
+        self.doc(hdecl, p, ind)
+        hdecl.emit(ind, f"{ret} {name}({decl_params}){const};")
+        self.via_getters = True                 # components: getters into the Fortran object
+        try:
+            self.emit_proc(cpp, p, 0)
+        finally:
+            self.via_getters = False
+        cpp.emit(0, "")
+        key = f"{t.name}%{bd.name}" if t is not None else p.name
+        self.report.add("translated", "wrapped-translated")
+        self.report.add("info", f"wrapped-translated:{key}")      # Fortran callers still use the Fortran version
 
     def not_wrapped(self, t, p, reason, hdecl, cpp, bname=None):
         tr = self.tr(p)
@@ -1076,7 +1022,7 @@ class WrapEmitter(ModuleEmitter):
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
             decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
                      (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
-        doc, dox = self.component_docs(t).get(v.name, []), self.cfg["doxygen"]
+        doc, dox = self.component_docs(t).get(v.name, []) or [f"component {v.cname}"], self.cfg["doxygen"]
         for k, (decl, body) in enumerate(decls):
             lines = list(doc)
             if lines and k == 1:
@@ -1111,13 +1057,22 @@ class WrapEmitter(ModuleEmitter):
     def brief(self, lines, prefix):
         return [re.sub(r"(@brief:?\s*)", lambda m: m.group(1) + prefix, line, count=1) for line in lines]
 
-    def cpp_file_header(self, ext, prefix=None):
+    def log_includes(self):
+        """header of the error logging in catch blocks (log_error) or <cstdio>"""
+        if not self.needs_cstdio:
+            return []
+        if not self.cfg["log_error"]:
+            return ["#include <cstdio>", ""]
+        inc = self.cfg["log_error_include"]
+        return ["#include <string>", ""] + ([f"#include {inc}", ""] if inc else [])
+
+    def cpp_file_header(self, ext, prefix=None, suffix=""):
         from .emit import plain_comment
         top = self.tr()
         top.block(self.header_comments(), 0)
         if not any("@file" in line for line in top.out):
             top.out = [plain_comment(line) for line in top.out]
-        lines = self.file_header(top, ext)
+        lines = self.file_header(top, ext, suffix)
         return self.brief(lines, prefix) if prefix else lines
 
     def fortran_file_header(self, name, prefix):
@@ -1138,8 +1093,13 @@ class WrapEmitter(ModuleEmitter):
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
-        self.cpp_global, self.bridges = [], []      # (unused), Fortran types of listeners
+        self.any_used, self.any_helpers = False, set()  # class(*) arguments: holders, f2cpp_any, used helpers
+        self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
+        self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
+        self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
+        self.cwc = {"hpp": self.tr(), "cpp": self.tr()}     # C++ CWrapper<Thing> (Fortran implementations)
+        self.cppany, self.any_typedefs = None, []          # C++ data (std::any) held by Fortran (cpp_any)
         stem_h = os.path.basename(stem) + ".h"
         values = self.value_types()
         vstructs = []
@@ -1155,11 +1115,14 @@ class WrapEmitter(ModuleEmitter):
                 self.emit_type(hpp, td, 0)
                 hpp.emit(0, "")
             self.report.add("translated", "wrapped-constant-type")
-        for t in [t for t in mod.types.values() if not self.excluded(t.name)]:
+        for t in self.wrapped_types():
             if t.name in cfg["unwrap_types"] or t.name in values:
                 continue
             if t.name in cfg["wrap_listeners"]:
                 self.listener(t, hpp, cpp, fb, typedefs)
+                continue
+            if t.name in self.reverse_types():
+                self.reverse_type(t, hpp, cpp, fb, typedefs)
                 continue
             name = self.prog.type_name(t.name)
             ht = self.c_type_name(t)
@@ -1198,15 +1161,15 @@ class WrapEmitter(ModuleEmitter):
             if not self.is_root(t):             # no added members: the parent's constructors
                 parent = prog.type_name(t.parent, mod)
                 hpp.emit(1, f"using {parent}::{parent.split('::')[-1]};")
-            hpp.emit(1, f"{name}(const {name}&) = delete;")
-            hpp.emit(1, f"{name}& operator=(const {name}&) = delete;")
+            hpp.emit(1, f"{name}(const {name}&) = delete;  //!< no copies (one C++ object per Fortran object)")
+            hpp.emit(1, f"{name}& operator=(const {name}&) = delete;  //!< no copies")
             if self.owned(t):                  # owns the Fortran object: the moved-from object releases nothing
                 hpp.emit(1, f"~{name}();  //!< frees the Fortran object")
-                hpp.emit(1, f"{name}({name}&& o) noexcept;")
-                hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;")
+                hpp.emit(1, f"{name}({name}&& o) noexcept;  //!< takes over the Fortran object of o")
+                hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;  //!< frees its own, takes over the one of o")
             else:
-                hpp.emit(1, f"{name}({name}&&) = default;")
-                hpp.emit(1, f"{name}& operator=({name}&&) = default;")
+                hpp.emit(1, f"{name}({name}&&) = default;  //!< takes over the handle")
+                hpp.emit(1, f"{name}& operator=({name}&&) = default;  //!< takes over the handle")
             hpp.emit(0, "")
             inherited = self.overrides_wrapped(t)
             for bd in [b for b in t.bindings.values() if not self.excluded(f"{t.name}%{b.name}")]:
@@ -1222,6 +1185,9 @@ class WrapEmitter(ModuleEmitter):
                     hpp.emit(1, f"// {bd.name}: object created / destroyed in Fortran")
                     continue
                 if bd.access == "private" and not bd.generic:
+                    continue
+                if self.translated_here(t, bd, p):
+                    self.translated_method(t, bd, p, hpp, cpp)
                     continue
                 args, reason = self.wrappable(p, t)
                 if reason:
@@ -1278,6 +1244,10 @@ class WrapEmitter(ModuleEmitter):
                     hpp.emit(1, f"{prog.type_name(td.name)} {v.cname}_;  //!< C++ copy of the constant {v.cname}")
             hpp.emit(0, "};")
             hpp.emit(0, "")
+        for m in sorted(self.c_includes):              # C headers of other modules (reverse types)
+            rstem = prog.modules[m].spelling if m in cfg["module_headers"] else os.path.basename(prog.file_stem(m))
+            if f'!#include "{rstem}.h"' not in typedefs:
+                typedefs.insert(0, f'!#include "{rstem}.h"')
         from .prepass import CPP_MARK
         for p in mod.procs.values():
             for c in p.doc:                             # #ifdef ... around procedures: in all three files
@@ -1288,6 +1258,9 @@ class WrapEmitter(ModuleEmitter):
             if self.excluded_proc(p):
                 continue
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
+                continue
+            if self.translated_here(None, None, p):
+                self.translated_method(None, None, p, hpp, cpp)
                 continue
             args, reason = self.wrappable(p, None)
             if reason:
@@ -1311,14 +1284,18 @@ class WrapEmitter(ModuleEmitter):
         inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
         h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
         # the C interface stays out of the C++ header: only the handle types (same typedef as in the .h)
-        handles = sorted({self.c_type_name(t) for t in mod.types.values()
-                          if t.name not in cfg["unwrap_types"] and not self.excluded(t.name) and t.name not in values})
+        handles = sorted({self.c_type_name(t) for t in self.wrapped_types()
+                          if t.name not in cfg["unwrap_types"] and t.name not in values})
         if handles:
             h += [""] + [f"struct {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
-        h += ["", self.open_ns(), ""]
+        if self.any_used:                           # opaque handle of Fortran data (class(*))
+            h += [f"struct {self.any_handle()};  //!< Fortran data (class(*)), see {os.path.basename(stem)}.h"]
+        if self.cppany:                             # C++ data held by Fortran
+            h += [f"struct {self.cppany['ht']};  //!< class(*) / std::any data, see {os.path.basename(stem)}.h"]
+        h += ["", self.open_ns(), ""] + ([self.any_cpp(), ""] if self.any_used else [])
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
-        classes = [t for t in mod.types.values() if t.name not in cfg["unwrap_types"] and not self.excluded(t.name)]
+        classes = [t for t in self.wrapped_types() if t.name not in cfg["unwrap_types"]]
         deferred = {b.iface for m in prog.modules.values() for t in m.types.values()
                     for b in t.bindings.values() if b.deferred}
         aliases = self.tr()
@@ -1336,11 +1313,9 @@ class WrapEmitter(ModuleEmitter):
         c = self.cpp_file_header(cfg["source_ext"], "C++ wrapper: ") + \
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
-             f'#include "{os.path.basename(stem)}.h"', ""] + (["#include <cstdio>", ""] if self.needs_cstdio else []) + \
+             f'#include "{os.path.basename(stem)}.h"', ""] + self.log_includes() + \
             [self.open_ns(), ""]
-        c += strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
-        if self.cpp_global:                         # Fortran -> C++ (declared extern "C" in the .h)
-            c += ["#include <cstdio>", "#include <exception>", ""] + self.cpp_global
+        c += (self.cpp_any_helpers() if self.cppany else []) + strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
 
         # binding module
         single, real = cfg["c_single_precision"], cfg["c_real"]
@@ -1356,7 +1331,7 @@ class WrapEmitter(ModuleEmitter):
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
-        b += typedefs + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
+        b += c_prologue(typedefs + self.any_typedefs) + ["!", "!@end_c_declaration", ""] + vstructs + self.bridges
         for t in structs:                           # the handle points to this struct
             b += [f"  !> C struct {self.c_type_name(t)}: handle of {t.spelling or t.name}",
                   f"  type, bind(C), public :: {self.struct_type(t)}",
@@ -1369,18 +1344,312 @@ class WrapEmitter(ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
+        if self.any_used:
+            spec, procs = self.any_fortran()
+            b += spec
+            fb += procs
         b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
-        inside = False                              # !@c_declaration blocks in the first column
-        for k, line in enumerate(b):
+        self.finish_module(b)
+        cw = None                                   # c_wrapper module: Fortran types implemented in C++
+        if self.cw["spec"] or self.cw["procs"]:
+            name = self.cwrapper_module(mod)
+            what = ", ".join(t.spelling or t.name for t in self.wrapped_types() if t.name in self.reverse_types())
+            cw = (self.fortran_file_header(f"{name}.F90", "Fortran types implemented in C++: ") or
+                  [f"!> {what} implemented by C++ objects (through the C binding)"]) + [
+                  f"! Generated by f2cpp from {os.path.basename(self.src)}", f"module {name}",
+                  "  use, intrinsic :: iso_c_binding", f"  use {mod.spelling}",
+                  use_line(f"  use {mod.spelling}_c_binding, only:", list(dict.fromkeys(self.cw["binding_names"])))] + \
+                sorted(self.cw["uses"]) + \
+                ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
+                 "#endif", ""] + self.cw["spec"] + ["contains"] + short_names(self.cw["procs"]) + \
+                ["", f"end module {name}", ""]
+            self.finish_module(cw)
+            cw = "\n".join(cw)
+        files = {}                                  # C++ CWrapper<Thing>: <stem>_c_wrapper.hpp / .cpp
+        if self.cwc["hpp"].out:
+            base, hx, cx = os.path.basename(stem), cfg["header_ext"], cfg["source_ext"]
+            macro = re.sub(r"\W", "_", f"{base}_c_wrapper{hx}").upper()
+            guard = ([f"#ifndef {macro}", f"#define {macro}"], [f"#endif // {macro}", ""]) \
+                if cfg["include_guard"] == "ifndef" else (["#pragma once"], [])
+            banner = BANNER.format(src=os.path.basename(self.src)) + " (C++ classes calling C structs)"
+            brief = "C++ wrapper of C structs: "
+            ch = self.cpp_file_header(hx, brief, "_c_wrapper") + [banner] + guard[0] + ["", f'#include "{base}{hx}"', "", self.open_ns(), ""] + \
+                strip_blank(self.cwc["hpp"].out) + ["", f"}}  // namespace {self.ns}", ""] + guard[1]
+            cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "", "#include <stdexcept>", "",
+                  f'#include "{base}.h"', ""] + \
+                (["#include <any>", "#include <memory>", "#include <typeinfo>", ""] if self.cwc.get("any") else []) + \
+                [self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
+                ["", f"}}  // namespace {self.ns}", ""]
+            files = {f"_c_wrapper{hx}": "\n".join(self.braces(squeeze(ch))),
+                     f"_c_wrapper{cx}": "\n".join(self.braces(squeeze(cc)))}
+        return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b), cw, files)
+
+    def finish_module(self, b):
+        """C declarations in the first column, only-lists, private with one public statement per name"""
+        mod = self.mod
+        inside, out = False, []
+        for line in b:
             if line.strip() == "!@c_declaration":
                 inside = True
-            if inside:
-                b[k] = line.lstrip()
+            out += split_params(line.lstrip(), self.cfg["c_decl_width"]) if inside else [line]
             if line.strip() == "!@end_c_declaration":
                 inside = False
+        b[:] = [x for text in out for line in text.split("\n") for x in fortran_continue(line)]
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
-        return ("\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c))), "\n".join(b))
+        types = []                                  # public: one statement per name (types included)
+        for j, line in enumerate(b):
+            m = re.match(r"(\s*type,\s*(?:[\w()]+,\s*)*)public\s*::\s*(\w+)", line)
+            if m and not line.lstrip().startswith("!"):
+                b[j] = line.replace(", public ::", " ::")
+                types.append(m.group(2))
+        k = b.index("  implicit none")
+        own = [x for x in public_list(b) if x.split("::")[1].strip() not in self.wrap_routines]   # wrap_*: pointers only
+        public = [f"  public :: {t}" for t in types] + own + \
+            [f"  public :: {n}" for n in self.public_extra if n in "\n".join(b) and f"  public :: {n}" not in b]
+        b[k + 1:k + 1] = ["  private"] + ([""] + section("public declarations") + public if public else [])
+        p = b.index(f"#ifdef {self.cfg['c_single_precision']}")    # the precision macros: before the module
+        macros = b[p:p + 5]
+        del b[p:p + 5 + (b[p + 5:p + 6] == [""])]
+        m = next(j for j, line in enumerate(b) if re.match(r"module \w+$", line))
+        includes = []
+        for chk in (self.cfg["wrap_chk_argument"], self.cfg["wrap_chk_ierr"]):      # definitions of used macros
+            if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b) and \
+                    f'#include "{chk[1]}"' not in includes:
+                includes.append(f'#include "{chk[1]}"')
+        macros = includes + macros
+        b[m:m] = macros + [""]
+        start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
+        b[:] = declaration_separators(procedure_separators(spec_sections(b, start)))
+
+
+SEPARATOR = "  !" + "=" * 80
+
+
+def fortran_continue(line, width=132):
+    """Fortran code lines longer than width (free form limit): continued (&) at a blank outside strings"""
+    if len(line) <= width or line.lstrip().startswith(("!", "#")) or re.match(r"\s*[A-Z][A-Z0-9_]*\(", line):
+        return [line]                           # comments, directives, macro invocations (one line for cpp)
+    ind = " " * (len(line) - len(line.lstrip()) + 4)
+    res, rest = [], line
+    while len(rest) > width:
+        quote, cut, good = None, None, None     # good: after a comma or before result( / bind(
+        for k, ch in enumerate(rest[:width - 2]):
+            if ch in "\"'" and quote in (None, ch):
+                quote = None if quote else ch
+            elif ch == " " and quote is None and k > len(ind):
+                cut = k
+                if rest[k - 1] == "," and not rest[:k].rstrip(",").endswith("bind(C") or \
+                        rest.startswith(("result(", "bind("), k + 1):
+                    good = k
+        cut = good or cut
+        if cut is None:
+            break
+        res.append(rest[:cut] + " &")
+        rest = ind + rest[cut + 1:].lstrip()
+    return res + [rest]
+
+
+def c_prologue(lines):
+    """first C declaration block: includes, then one forward typedef per struct (typedef struct X X;), then the
+    definitions as struct X { ... }; (no struct keyword needed elsewhere)"""
+    includes = [x for x in lines if x.startswith("!#include")]
+    rest = [x for x in lines if not x.startswith("!#include")]
+    forward, body, k = [], [], 0
+    while k < len(rest):
+        x = rest[k]
+        m = re.match(r"!typedef struct (\w+) (\w+);$", x)
+        d = re.match(r"!typedef struct (\w+)$", x)
+        if m:
+            if x not in forward:
+                forward.append(x)
+        elif d:                                 # typedef struct X { ... } X;  ->  struct X { ... };
+            name = d.group(1)
+            if f"!typedef struct {name} {name};" not in forward:
+                forward.append(f"!typedef struct {name} {name};")
+            body.append(f"!struct {name}")
+            k += 1
+            while not re.match(rf"!}}\s*{name};$", rest[k]):
+                body.append(rest[k])
+                k += 1
+            body.append("!};")
+        else:
+            body.append(x)
+        k += 1
+    while body and body[0] == "!":
+        body.pop(0)
+    return includes + (["!"] if includes else []) + forward + (["!"] if forward and body else []) + body
+
+
+def split_params(line, width):
+    """a C declaration (comment line) longer than width: one parameter per line, aligned after the parenthesis"""
+    if len(line) <= width or not line.rstrip().endswith(");"):
+        return [line]
+    text = line.rstrip()
+    depth, open_ = 0, None
+    for k in range(len(text) - 2, -1, -1):          # the parenthesis of the (last) parameter list
+        depth += {")": 1, "(": -1}.get(text[k], 0)
+        if depth == 0 and text[k] == "(":
+            open_ = k
+            break
+    if open_ is None:
+        return [line]
+    params, depth, cur = [], 0, ""
+    for ch in text[open_ + 1:-2]:
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if ch == "," and depth == 0:
+            params.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    params.append(cur.strip())
+    if len(params) < 2:                         # one parameter: on its own line only beyond the Fortran limit
+        ind = len(text[1:]) - len(text[1:].lstrip())
+        return [line] if len(text) <= 132 else [text[:open_ + 1], "!" + " " * (ind + 4) + params[0] + ");"]
+    pad = "!" + " " * open_
+    return [text[:open_ + 1] + params[0] + ","] + [pad + p + "," for p in params[1:-1]] + [pad + params[-1] + ");"]
+
+
+def procedure_separators(b):
+    """a separator line before each module procedure (above its comments / C declarations / directives)"""
+    out, after = [], False
+    for line in b:
+        if line == "contains":
+            after = True
+        if after and re.match(r"  (?:\w+ )*(?:subroutine|function) \w+\s*\(", line) and \
+                not line.startswith("  end "):
+            k = len(out)
+            while k > 0 and out[k - 1].strip() and out[k - 1].lstrip().startswith(("!", "#")) and \
+                    out[k - 1] != SEPARATOR:
+                k -= 1
+            out.insert(k, SEPARATOR)
+        out.append(line)
+    return out
+
+
+DECL_SEPARATOR = "    !" + "-" * 70
+DECL = re.compile(r"\s+(?:type|class|real|integer|logical|character|complex|double\s+precision|procedure)\b[^!]*::\s*(.*)",
+                  re.I)
+
+
+def declaration_separators(b):
+    """module procedures: a separator line after the declarations of the dummy arguments (and the result) and
+    after the local declarations (instead of the blank line before the executable statements)"""
+    out, k, after = [], 0, False
+    while k < len(b):
+        line = b[k]
+        out.append(line)
+        k += 1
+        after = after or line == "contains"
+        m = re.match(r"  (?:\w+ )*(subroutine|function) (\w+)\s*\(", line) if after else None
+        if not m or line.startswith("  end "):
+            continue
+        head = line
+        while head.rstrip().endswith("&") and k < len(b):     # continued header
+            head += b[k]
+            out.append(b[k])
+            k += 1
+        dummies = {d.strip().lower() for d in head[head.index("(") + 1:].split(")")[0].replace("&", " ").split(",")}
+        r = re.search(r"result\s*\(\s*(\w+)", head, re.I)
+        if r:
+            dummies.add(r.group(1).lower())
+        while k < len(b) and b[k].lstrip().startswith("#"):    # #ifdef DLLEXPORT ...
+            out.append(b[k])
+            k += 1
+        groups = {"dummy": [], "local": []}
+        while k < len(b) and DECL.match(b[k]):
+            names = re.split(r",(?![^(]*\))", DECL.match(b[k]).group(1))
+            kind = "dummy" if any(re.match(r"\s*(\w+)", n).group(1).lower() in dummies for n in names if n.strip()) \
+                else "local"
+            groups[kind].append(b[k])
+            k += 1
+        if not groups["dummy"] and not groups["local"]:
+            continue
+        out += groups["dummy"] + [DECL_SEPARATOR]
+        if groups["local"]:
+            out += groups["local"] + [DECL_SEPARATOR]
+        if k < len(b) and not b[k].strip():                   # the blank line before the statements
+            k += 1
+    return out
+
+
+def section(title):
+    return [SEPARATOR, f"  ! {title}"]
+
+
+def spec_sections(b, start):
+    """the specification part after the public statements: the abstract interfaces and the types, each under a
+    section comment (C declarations and comments stay with their item); the leading C declarations (includes,
+    macros, forward declarations) go between implicit none and private"""
+    end = b.index("contains")
+    seg, head = b[start:end], []
+    while seg and not seg[0].strip():
+        seg.pop(0)
+    if seg and seg[0] == "!@c_declaration":     # the C prologue (includes, macros, forward declarations)
+        j = seg.index("!@end_c_declaration")
+        head, seg = seg[:j + 1], seg[j + 1:]
+    chunks, pending, depth, kind = {"interface": [], "type": []}, [], 0, None
+    for line in seg:
+        t = line.split("!")[0].strip().lower()
+        if depth == 0 and not t and not line.strip():
+            if pending and pending[-1].strip():
+                pending.append(line)
+            continue
+        pending.append(line)
+        if re.match(r"(abstract\s+)?interface\b", t):
+            depth, kind = depth + 1, kind or "interface"
+        elif re.match(r"type\b(?!\s*\()", t):
+            depth, kind = depth + 1, kind or "type"
+        elif re.match(r"end\s+(interface|type)\b", t):
+            depth -= 1
+            if depth == 0:
+                while pending and not pending[0].strip():
+                    pending.pop(0)
+                chunks[kind].append(pending)
+                pending, kind = [], None
+    out = b[:start]
+    if head:                                    # like a use statement: between implicit none and private
+        k = out.index("  implicit none")
+        out[k + 1:k + 1] = [""] + head + [""]
+    abstract = [c for c in chunks["interface"] if "  abstract interface" in c and c[-1] == "  end interface"]
+    if abstract:                                # one abstract interface block with all interface bodies
+        merged = ["  abstract interface"]
+        for i, c in enumerate(abstract):
+            merged += ([""] if i else []) + [x for j, x in enumerate(c)
+                                             if x != "  abstract interface" and j != len(c) - 1]
+        chunks["interface"] = [merged + ["  end interface"]] + [c for c in chunks["interface"] if c not in abstract]
+    for kind, title in (("interface", "interface declarations"), ("type", "type declarations")):
+        if chunks[kind]:
+            out += [""] + section(title)
+            for i, c in enumerate(chunks[kind]):
+                out += ([""] if i else []) + c
+    while pending and not pending[-1].strip():
+        pending.pop()
+    return out + ([""] + pending if any(x.strip() for x in pending) else []) + [""] + b[end:]
+
+
+
+def public_list(lines):
+    """public statement of the binding module: bind(C) procedures, setup / destroy / wrap (used from Fortran)
+    and the abstract interfaces (types are declared public themselves)"""
+    names, in_abstract, after_contains = [], False, False
+    for line in lines:
+        t = line.split("!")[0].strip().lower()
+        if t == "contains" and not line.startswith("    "):
+            after_contains = True
+        if t.startswith("abstract interface"):
+            in_abstract = True
+        elif t.startswith("end interface"):
+            in_abstract = False
+        m = re.match(r"(?:\w+\s+)*(subroutine|function)\s+(\w+)\s*\(", line.split("!")[0].strip(), re.I)
+        if not m:
+            continue
+        name = m.group(2)
+        if in_abstract or (after_contains and line.startswith("  ") and not line.startswith("   ") and
+                           ("bind(c" in t or re.search(r"_(setup|destroy|wrap)$", name.lower()))):
+            if name not in names:
+                names.append(name)
+    return [f"  public :: {n}" for n in names]
 
 
 def short_names(fb):
@@ -1404,7 +1673,7 @@ def short_names(fb):
 
 
 ISO_C = ["C_PTR", "C_NULL_PTR", "C_FUNPTR", "C_NULL_FUNPTR", "C_INT", "C_BOOL", "C_CHAR", "C_NULL_CHAR", "C_FLOAT",
-         "C_DOUBLE", "c_f_procpointer", "c_loc",
+         "C_DOUBLE", "c_f_procpointer", "c_funloc", "c_loc",
          "c_f_pointer", "c_associated"]
 
 
@@ -1417,8 +1686,21 @@ def iso_c_only(lines):
     if "c_real" in words:
         words |= {"c_float", "c_double"}
     names = [n for n in ISO_C if n.lower() in words]
-    return "  use, intrinsic :: iso_c_binding, only: " + ", ".join(names) if names else \
-        "  use, intrinsic :: iso_c_binding, only:"
+    return use_line("  use, intrinsic :: iso_c_binding, only:", names)
+
+
+def use_line(head, names):
+    """use statement with an only-list, continued after about 100 characters"""
+    if not names:
+        return head
+    out, cur = [], head + " "
+    for k, n in enumerate(names):
+        piece = n + (", " if k < len(names) - 1 else "")
+        if len(cur) + len(piece) > 100:
+            out.append(cur.rstrip() + " &")
+            cur = "    "
+        cur += piece
+    return "\n".join(out + [cur])
 
 
 def c_header(binding, guard):
@@ -1451,9 +1733,15 @@ def comp_public(t, v):
 
 def register_accessors(prog, wrapped):
     """components of wrapped classes are getters in C++: obj%n -> obj.n()"""
+    cfg = prog.cfg
+    reverse = set(cfg["wrap_reverse"]) | set(cfg["wrap_reverse_factories"])
     for m in wrapped:
         for t in m.types.values():
-            acc = prog.cfg["accessors"].setdefault(t.name, {})
+            acc = cfg["accessors"].setdefault(t.name, {})
+            if t.name in reverse:               # implemented in C++: only the constants (also inherited ones)
+                for n in cfg["wrap_constants"].get(t.name, []):
+                    acc.setdefault(n, None)
+                continue
             for v in t.comps.values():
                 if comp_public(t, v):
                     acc.setdefault(v.name, None)
