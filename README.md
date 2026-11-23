@@ -286,7 +286,7 @@ procedures, `setup` / `destroy` / `wrap` and the abstract interfaces (for tests 
 binding and c_wrapper modules: precision macros (`C_REAL`) before `module`; the C prologue (`stdbool.h`,
 macros, forward declarations) between `implicit none` and `private`; sections `public declarations`,
 `interface declarations` (one `abstract interface` block; bodies with explicit `import` list and `implicit none`),
-a `!====...` line before each module procedure; the C pointer argument of the binding is `this`; Fortran-side
+a `!====...` line before each module procedure, a `!----...` line after the dummy and after the local declarations; the C pointer argument of the binding is `this`; Fortran-side
 locals have the Fortran kind (`real`): only `bind(C)` arguments use `C_REAL` / `C_INT` (a kind mismatch is a
 compile error), `type declarations` (comment line `!====...`).
 C declarations longer than `c_decl_width` (100): one parameter per line; code lines over 132 characters are

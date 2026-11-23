@@ -24,6 +24,11 @@ from .model import lname, items_of
 from .translate import TODO
 
 
+def fspell(v):
+    """Fortran spelling of a variable (cname without the escape of C++ keywords)"""
+    return v.cname if v.cname.lower() == v.name else v.name
+
+
 class ReverseMixin:
 
     # ------------------------------------------------------------------ one deferred binding
@@ -52,7 +57,7 @@ class ReverseMixin:
                 decl_nodes.append(v.node)
             if a == this or (has_err and a == err) or a == iface.result:
                 continue
-            a = v.cname                         # the declared spelling (C / C++ parameter names)
+            a = fspell(v)                       # the declared spelling (also the C / C++ parameter names)
             intent = v.intent or "inout"
             rev = v.tname if v.base == "type" else None
             if v.base == "type" and v.tname == "*":   # C++ data (std::any) in a Fortran class(*)
@@ -213,7 +218,7 @@ class ReverseMixin:
             self.report.add("todo", f"wrap-reverse:{bd.name}")
             out.append(f"  ! {TODO}: {todo}")
         kw = "function" if res_v is not None else "subroutine"
-        args = [a for a in iface.args if a != iface.result]
+        args = [fspell(iface.vars[a]) if a in iface.vars else a for a in iface.args if a != iface.result]
         out.append(f"  {kw} {proc}({', '.join(args)})" + (f" result({iface.result})" if res_v is not None else ""))
         for node in decl_nodes:                 # the interface of the deferred binding, the bridge as object
             text = str(node)
@@ -900,7 +905,7 @@ inline {ah}* to_fortran(const std::any& v)
             v = iface.vars[a]
             if a == this or (has_err and a == err) or a == iface.result:
                 continue
-            key, a = a, v.cname                 # key: order of the actual arguments; a: declared spelling
+            key, a = a, fspell(v)               # key: order of the actual arguments; a: declared spelling
             intent, cn = v.intent or "inout", v.cname
             if v.base in ("real", "integer") and not v.rank:
                 dummies.append(a)

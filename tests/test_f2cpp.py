@@ -2340,6 +2340,10 @@ def test_reverse_type_constants(tmp_path):
     assert "  !" + "=" * 80 + "\n  !> check_convergence of a Fortran implementation" in b
     assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer :: state_f(:)\n" in b
     assert "    state_f => state(1:this_c%stateSize)\n" in b
+    sep = "    !" + "-" * 70 + "\n"                 # after the dummies and after the locals
+    assert "    integer(C_INT), intent(out) :: ierr\n" + sep + "    type(Thing_c), pointer :: this_c\n" in b
+    assert "    logical :: needAnotherIteration_f\n" + sep + "    call c_f_pointer(this, this_c)\n" in b
+    assert "    INTEGER, INTENT(OUT) :: ierr\n" + sep + "    procedure(project_Thing_check_convergence), pointer :: f\n" in cw
     assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
            "needAnotherIteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
     assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \

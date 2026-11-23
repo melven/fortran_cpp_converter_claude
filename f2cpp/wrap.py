@@ -1420,7 +1420,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         macros = includes + macros
         b[m:m] = macros + [""]
         start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
-        b[:] = procedure_separators(spec_sections(b, start))
+        b[:] = declaration_separators(procedure_separators(spec_sections(b, start)))
 
 
 SEPARATOR = "  !" + "=" * 80
@@ -1493,6 +1493,52 @@ def procedure_separators(b):
                 k -= 1
             out.insert(k, SEPARATOR)
         out.append(line)
+    return out
+
+
+DECL_SEPARATOR = "    !" + "-" * 70
+DECL = re.compile(r"\s+(?:type|class|real|integer|logical|character|complex|double\s+precision|procedure)\b[^!]*::\s*(.*)",
+                  re.I)
+
+
+def declaration_separators(b):
+    """module procedures: a separator line after the declarations of the dummy arguments (and the result) and
+    after the local declarations (instead of the blank line before the executable statements)"""
+    out, k, after = [], 0, False
+    while k < len(b):
+        line = b[k]
+        out.append(line)
+        k += 1
+        after = after or line == "contains"
+        m = re.match(r"  (?:\w+ )*(subroutine|function) (\w+)\s*\(", line) if after else None
+        if not m or line.startswith("  end "):
+            continue
+        head = line
+        while head.rstrip().endswith("&") and k < len(b):     # continued header
+            head += b[k]
+            out.append(b[k])
+            k += 1
+        dummies = {d.strip().lower() for d in head[head.index("(") + 1:].split(")")[0].replace("&", " ").split(",")}
+        r = re.search(r"result\s*\(\s*(\w+)", head, re.I)
+        if r:
+            dummies.add(r.group(1).lower())
+        while k < len(b) and b[k].lstrip().startswith("#"):    # #ifdef DLLEXPORT ...
+            out.append(b[k])
+            k += 1
+        groups = {"dummy": [], "local": []}
+        while k < len(b) and DECL.match(b[k]):
+            names = re.split(r",(?![^(]*\))", DECL.match(b[k]).group(1))
+            kind = "dummy" if any(re.match(r"\s*(\w+)", n).group(1).lower() in dummies for n in names if n.strip()) \
+                else "local"
+            groups[kind].append(b[k])
+            k += 1
+        if not groups["dummy"] and not groups["local"]:
+            continue
+        out += groups["dummy"] + [DECL_SEPARATOR]
+        if groups["local"]:
+            out += groups["local"] + [DECL_SEPARATOR]
+        if k < len(b) and not b[k].strip():                   # the blank line before the statements
+            k += 1
     return out
 
 
