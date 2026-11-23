@@ -269,12 +269,12 @@ class ModuleEmitter:
                 if p.is_ctor:
                     sig = ("explicit " if sig.count(",") == 0 and not sig.endswith("()") else "") + sig
                 elif p.is_dtor:
-                    sig = sig + " override" if t.parent else "virtual " + sig if base_class else sig
+                    sig = "virtual " + sig + " override" if t.parent else "virtual " + sig if base_class else sig
                 elif bd.nopass:
                     sig = "static " + sig
                 elif poly:
-                    if prog.overrides(t, bd.name):
-                        sig += " override"
+                    if prog.overrides(t, bd.name):        # style: virtual ... override
+                        sig = "virtual " + sig + " override"
                     elif not closed or prog.overridden(t, bd.name):
                         sig = "virtual " + sig
                 tr.emit(ind + 1, sig + ";")
@@ -1098,7 +1098,7 @@ class ModuleEmitter:
                 role = pf_role(p)
                 if role in ("before", "after"):
                     fn = "SetUp" if role == "before" else "TearDown"
-                    c.append(f"  void {fn}() override {{ {p.cname}(); }}")
+                    c.append(f"  virtual void {fn}() override {{ {p.cname}(); }}")
             c += ["};", ""]
         c += strip_blank(cpp.out) + [""]
         return "\n".join(self.braces(squeeze(c)))

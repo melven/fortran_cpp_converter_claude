@@ -937,11 +937,11 @@ inline {ah}* to_fortran(const std::any& v)
                               f"  explicit {wcls}({ht}& c);  //!< calls the function pointers of c"])
         for bd, iface in [(e[0], e[1]) for e in entries]:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
-            self.emit_lines(hpp, ["", f"  {over}", f"  {ret} {bd.spelling}({params}){const} override;"])
+            self.emit_lines(hpp, ["", f"  {over}", f"  virtual {ret} {bd.spelling}({params}){const} override;"])
         for bd, iface, todo in todos:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             self.emit_lines(hpp, ["", f"  //! override base class implementation -> throws ({TODO}: not wrapped)",
-                                  f"  {ret} {bd.spelling}({params}){const} override;"])
+                                  f"  virtual {ret} {bd.spelling}({params}){const} override;"])
         self.emit_lines(hpp, ["", "private:", f"  {ht}* other_ = nullptr;  //!< the struct of the implementation", "};",
                               "", f"}}  // namespace {ns}", ""])
         if any(part["any_data"] for _, _, _, part in entries) and not self.cwc.get("any"):

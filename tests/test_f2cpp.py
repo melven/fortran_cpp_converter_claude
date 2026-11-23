@@ -623,7 +623,7 @@ def test_generic_bindings(out):
 def test_member_access(out, tmp_path):
     shape, feat, poly = read(out, "shape_mod.hpp"), read(out, "features_mod.hpp"), read(out, "poly_mod.hpp")
     # used only by the own methods: private; used by free functions / other classes / tests: public
-    assert "  void scale(scalar factor) override;\n\nprivate:\n  scalar width = 1.0;\n  scalar height = 1.0;\n};" in shape
+    assert "  virtual void scale(scalar factor) override;\n\nprivate:\n  scalar width = 1.0;\n  scalar height = 1.0;\n};" in shape
     assert '\n\n  std::string name = "shape";\n};' in shape                  # set in make_shape
     assert "  ~stats();\n\n  scalar total = 0.0;\n  vec samples;\n\nprivate:\n  int n = 0;\n" in feat
     assert "  vec coeff;  //!< coefficients 0..degree\n\nprivate:\n  int degree = -1;\n};" in poly    # coeff: unit test
@@ -2144,7 +2144,7 @@ end module rs_mod
     fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod_c_wrapper.hpp",
                                                          "rs_mod_c_wrapper.cpp"))
     assert "    ! TODO(f2cpp): save_state not wrapped (argument state: class(*)): C++ CWrapperS::save_state throws\n" in fb
-    assert "  void save_state(std::any& state) const override;" in hpp
+    assert "  virtual void save_state(std::any& state) const override;" in hpp
     assert "void CWrapperS::save_state(std::any& state) const\n{\n  // TODO(f2cpp): argument state: class(*)\n" \
            '  throw std::logic_error("CWrapperS::save_state: not wrapped (argument state: class(*))");' in cpp
 
@@ -2208,7 +2208,7 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert "  explicit CWrapperThing(project_AbstractThing& c);  //!< calls the function pointers of c" in hpp
     assert "CWrapperThing::CWrapperThing(project_AbstractThing& c) : other_(&c)\n{\n}" in cpp
     assert "  //! override base class implementation -> call corresponding C function pointer\n" \
-           "  void evaluate(const vec& x, vec& y) override;" in hpp
+           "  virtual void evaluate(const vec& x, vec& y) override;" in hpp
     assert '#include "thing_mod_c_wrapper.hpp"' in cpp and '#include "thing_mod.h"' in cpp
     assert "namespace AbstractThing_private\n{\n\nCWrapperThing::CWrapperThing(" in cpp and "\nvoid CWrapperThing::evaluate(" in cpp
     assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
