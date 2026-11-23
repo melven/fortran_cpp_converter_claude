@@ -29,6 +29,12 @@ def fill(stmt, obj):
     return stmt[7:].replace("@", obj) if stmt.startswith("#ALLOC#") else f"{obj}%{stmt.replace('@', obj)}"
 
 
+FORTRAN_INTRINSICS = set("""abs all allocated any associated ceiling count cpu_time dble dot_product epsilon exp
+floor huge index int kind lbound len len_trim log log10 matmul max maxloc maxval merge min minloc minval mod modulo
+move_alloc nint norm2 null pack present product random_number real reshape scan shape sign sin size sqrt sum
+system_clock tiny transfer transpose trim ubound""".split())
+
+
 def cpp_const(v, k):
     """C++: constant of the struct c (C strings: std::string, NULL: empty)"""
     return f'std::string(c.{v.cname} != nullptr ? c.{v.cname} : "")' if k == "string" else f"c.{v.cname}"
@@ -704,6 +710,16 @@ inline {ah}* to_fortran(const std::any& v)
         cache[lt.name] = res, todo
         return res, todo
 
+    def cw_proc_name(self, bridge, bd):
+        """procedure of the c_wrapper module for binding bd: the binding name (procedure :: name); prefixed with
+        the type if another type of the module has it already or it is the name of an intrinsic"""
+        used = self.cw.setdefault("proc_names", set())
+        name = bd.spelling
+        if name.lower() in used or name.lower() in FORTRAN_INTRINSICS:
+            name = f"{bridge[:-5].lower()}_{bd.name}"
+        used.add(name.lower())
+        return name
+
     def reverse_types(self):
         return set(self.cfg["wrap_reverse"]) | set(self.cfg["wrap_reverse_factories"])
 
@@ -724,7 +740,7 @@ inline {ah}* to_fortran(const std::any& v)
                 cpp_only.append((bd, iface, None))
                 continue
             this = iface.pass_arg
-            proc = f"{bridge[:-5].lower()}_{bd.name}"
+            proc = self.cw_proc_name(bridge, bd)
             m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.name}", funptr=f"{this}%c%{bd.name}",
                              self_c=f"{ht}* self", self_dummy="this", self_actual=f"c_loc({this}%c)",
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
@@ -844,7 +860,8 @@ inline {ah}* to_fortran(const std::any& v)
         cw["spec"] += [f"  !> {ft} implemented in C++" + (" (owns the C++ object)" if factory is None else ""),
                        f"  type, extends({ft}), public :: {bridge}", f"    type({st}), pointer :: c => null()",
                        "  contains"] + \
-            [f"    procedure :: {bd.spelling} => {m['proc']}" for bd, _, m in methods] + \
+            [f"    procedure :: {bd.spelling}" if m["proc"] == bd.spelling else
+             f"    procedure :: {bd.spelling} => {m['proc']}" for bd, _, m in methods] + \
             ([f"    final :: {bridge[:-5].lower()}_final"] if factory is None else []) + [f"  end type {bridge}", ""]
         for _, _, m in methods:
             cw["procs"] += m["fortran"]

@@ -1964,7 +1964,7 @@ def test_reverse_wrapped_types(tmp_path):
     # bindings with a default implementation: virtual, the translated default, forwarded as well
     assert "  virtual void reset();" in th and "  virtual scalar offset() const;" in th
     assert "void AbstractThing::reset()\n{\n}" in tc and "scalar AbstractThing::offset() const\n{\n  scalar o = 0.0;\n  return o;\n}" in tc
-    assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tw
+    assert "    procedure :: reset\n    procedure :: offset\n" in tw and "  subroutine reset(this)\n" in tw   # binding names
     assert "  static void evaluate_wrapper(project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
            "int y_n, int* ierr) noexcept;" in th
     assert "  //! internal wrapper for evaluate\n  static void evaluate_wrapper(" in th
@@ -1992,7 +1992,7 @@ def test_reverse_wrapped_types(tmp_path):
     assert "#define C_REAL C_DOUBLE\n#endif\n\nmodule thing_mod_c_binding\n" in tb
     assert tb.index("  ! interface declarations\n  abstract interface\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
         tb.index("  ! type declarations\n!@c_declaration\n!struct project_AbstractThing\n") < tb.index("\ncontains\n")
-    assert "public :: cwrapperthing_evaluate" not in tw
+    assert "public :: evaluate" not in tw
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x, int(size(x), C_INT), y, " \
            "int(size(y), C_INT), ierr)\n" in tw and "_c(:)" not in tw      # same kinds: passed directly
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fw
@@ -2147,7 +2147,7 @@ end module rs_mod
     translate([], cfg(wrap_reverse=["abstracts_type"]), str(tmp_path), wrap=[str(tmp_path / "rs_mod.F90")])
     b = (tmp_path / "project_c_wrapper_rs_mod.F90").read_text()
     assert "! TODO(f2cpp): argument state: class(*) (C++ data: allocatable intent(out) / intent(in) scalars)" in b
-    assert 'error stop "cwrappers_save_state:' in b
+    assert 'error stop "save_state:' in b
     # the other direction (Fortran implementation behind the struct): TODO in the binding, the C++ wrapper throws
     fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod_c_wrapper.hpp",
                                                          "rs_mod_c_wrapper.cpp"))
@@ -2740,4 +2740,46 @@ def test_wrapped_calls_with_error_macro(tmp_path):
               "-Wno-unused-dummy-argument", "-I" + CORPUS]
         for f in (os.path.join(w, "body_mod.F90"), "body_mod_c_binding.F90", os.path.join(w, "sphere_mod.F90"),
                   "sphere_mod_c_binding.F90"):
+            run(ff + [f], d)
+
+
+def test_cwrapper_procedure_names(tmp_path):
+    """c_wrapper module: procedures named like the bindings; prefixed for a second type with the same binding
+    name and for names of intrinsics"""
+    (tmp_path / "two_mod.F90").write_text("""module two_mod
+  implicit none
+  type, abstract :: A_type
+  contains
+    procedure(run_a), deferred :: run
+    procedure(size_a), deferred :: size
+  end type A_type
+  type, abstract :: B_type
+  contains
+    procedure(run_b), deferred :: run
+  end type B_type
+  abstract interface
+    subroutine run_a(this)
+      import :: A_type
+      class(A_type), intent(inout) :: this
+    end subroutine run_a
+    function size_a(this) result(n)
+      import :: A_type
+      class(A_type), intent(in) :: this
+      integer :: n
+    end function size_a
+    subroutine run_b(this)
+      import :: B_type
+      class(B_type), intent(inout) :: this
+    end subroutine run_b
+  end interface
+end module two_mod
+""")
+    d = str(tmp_path)
+    translate([], cfg(wrap_reverse=["a_type", "b_type"]), d, wrap=[str(tmp_path / "two_mod.F90")])
+    cw = (tmp_path / "project_c_wrapper_two_mod.F90").read_text()
+    assert "    procedure :: run\n    procedure :: size => cwrappera_size\n" in cw
+    assert "    procedure :: run => cwrapperb_run\n" in cw
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-Wall", "-Werror", "-Wno-unused-dummy-argument"]
+        for f in ("two_mod.F90", "two_mod_c_binding.F90", "project_c_wrapper_two_mod.F90"):
             run(ff + [f], d)

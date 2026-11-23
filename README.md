@@ -272,7 +272,9 @@ LinearThingFactory_type = "linear"
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
 - the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions, each with a C
   function pointer typedef of the same name, e.g. `project_AbstractThing_evaluate`, used by the struct); the
-  module `project_c_wrapper_<module>` (file of the same name) has `CWrapperThing_type`: extends the abstract
+  module `project_c_wrapper_<module>` (file of the same name; procedures named like the bindings,
+  `procedure :: evaluate`, prefixed for a second type with the same name or names of intrinsics) has
+  `CWrapperThing_type`: extends the abstract
   type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
   makes one; factories: `CWrapperThingFactory_type` and register / unregister
 - factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
