@@ -965,7 +965,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     # logical arrays: bool copies; optional: NULL = absent (unallocated)
     assert "PROJECT_REAL project_MySolver_masked_sum(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "const bool* modelmask, int modelmask_n1);" in flat(h)
-    assert "    logical(C_BOOL), pointer :: modelmask_c(:)\n    logical, allocatable :: modelmask_f(:)\n" in binding
+    assert "    logical(C_BOOL), pointer, contiguous :: modelmask_c(:)\n    logical, allocatable :: modelmask_f(:)\n" in binding
     assert "    if (c_associated(modelmask)) then\n      call c_f_pointer(modelmask, modelmask_c, [modelmask_n1])\n" \
            "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
     assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
@@ -975,7 +975,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in flat(h)
-    assert "    type(C_PTR), value :: r\n    real, pointer :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
+    assert "    type(C_PTR), value :: r\n    real, pointer, contiguous :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
     assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
     assert "  if (r) r->get().resize(n());\n" in cpp
@@ -2348,7 +2348,7 @@ def test_reverse_type_constants(tmp_path):
         '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in b         # both macros used
     # wrap_<method>: pointer views (sizes: constants of the struct), positional arguments, PROJECT_CHK_IERR
     assert "  !" + "=" * 80 + "\n  !> check_convergence of a Fortran implementation" in b
-    assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer :: state_f(:)\n" in b
+    assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer, contiguous :: state_f(:)\n" in b
     assert "    state_f => state(1:this_c%stateSize)\n" in b
     sep = "    !" + "-" * 70 + "\n"                 # after the dummies and after the locals
     assert "    integer(C_INT), intent(out) :: ierr\n" + sep + "    type(Thing_c), pointer :: this_c\n" in b

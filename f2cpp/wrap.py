@@ -540,7 +540,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 body += [f"{n} = C_NULL_PTR", f"{n}_size = 0", f"if ({test}({whole})) then"]
                 if v.base == "logical" or v.companion_of:   # not C bool / not contiguous: a copy
                     buf = f"buf{len(decls) + 1}"
-                    decls.append(f"{self.f_type(v)}, pointer :: {buf}(:)")
+                    decls.append(f"{self.f_type(v)}, pointer, contiguous :: {buf}(:)")
                     conv = f"logical({m}, C_BOOL)" if v.base == "logical" else m
                     body += [f"  allocate({buf}(size({whole})))", f"  {buf} = {conv}",
                              f"  if (size({buf}) > 0) {n} = c_loc({buf}(1))"]
@@ -750,7 +750,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                         glue.append(f"{present} ? static_cast<int>({h}) : 0" if present else f"static_cast<int>({h})")
                 if v.base == "logical":         # C bool -> Fortran logical: a copy (unallocated = absent)
                     shape, colons = ", ".join(dims), ", ".join([":"] * v.rank)
-                    decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer :: {a}_c({colons})",
+                    decls += [f"type(C_PTR), value :: {a}", f"logical(C_BOOL), pointer, contiguous :: {a}_c({colons})",
                               f"logical, allocatable :: {a}_f({colons})"]
                     pre += [f"if (c_associated({a})) then", f"  call c_f_pointer({a}, {a}_c, [{shape}])",
                             f"  allocate({a}_f({shape}))"] + \
@@ -762,7 +762,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
                     # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
-                    decls.append(f"{self.fortran_decl(v)}, pointer :: {a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
                     pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
                 elif v.rank == 1:

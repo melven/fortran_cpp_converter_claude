@@ -407,7 +407,7 @@ class ReverseMixin:
                "    cStr(len(fStr) + 1) = C_NULL_CHAR", "  end function f2cpp_copy_string", "",
                "  !> deletes a C string of f2cpp_copy_string (NULL: nothing)",
                "  subroutine f2cpp_delete_string(cStr_ptr)", "    type(C_PTR), intent(inout) :: cStr_ptr",
-               "    character(kind=C_CHAR), pointer :: buf(:)", "    integer :: n", "",
+               "    character(kind=C_CHAR), pointer, contiguous :: buf(:)", "    integer :: n", "",
                "    if (.not. c_associated(cStr_ptr)) return", "    call c_f_pointer(cStr_ptr, buf, [huge(n)])",
                "    n = 1", "    do while (buf(n) /= C_NULL_CHAR)", "      n = n + 1", "    end do",
                "    call c_f_pointer(cStr_ptr, buf, [n])      ! the allocated array", "    deallocate(buf)",
@@ -1014,7 +1014,7 @@ inline {ah}* to_fortran(const std::any& v)
                     n = known[1].replace("{OBJ}", "")
                     dummies.append(a)
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
-                    locals_.append(f"{self.fortran_decl(v)}, pointer :: {a}_f(:)")   # Fortran kind (= C kind)
+                    locals_.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f(:)")   # Fortran kind (= C kind)
                     pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'this_c%')})")   # constants in the struct
                     call[key] = f"{a}_f"
                     cpp_pre.append(f"{cn}.resize({n});" if intent == "out" else
