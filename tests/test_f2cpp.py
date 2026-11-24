@@ -1,4 +1,5 @@
 """End-to-end tests: translate the synthetic corpus, compile it and compare with gfortran."""
+import glob
 import os
 import re
 import shutil
@@ -2861,3 +2862,39 @@ end module two_mod
         ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-Wall", "-Werror", "-Wno-unused-dummy-argument"]
         for f in ("two_mod.F90", "two_mod_c_binding.F90", "project_c_wrapper_two_mod.F90"):
             run(ff + [f], d)
+
+
+def class_rule_violations(texts):
+    """C++ coding rules of generated classes: final or a virtual destructor; rule of five (none or all of the
+    special members declared)"""
+    bad = []
+    for fname, txt in texts:
+        for m in re.finditer(r"^(\s*)class (\w+)( final)?\s*(:[^\n{]*)?\s*\{(.*?)\n\1\};", txt, re.M | re.S):
+            name, final, body = m.group(2), m.group(3), m.group(5)
+            n = re.escape(name)
+            k = sum(bool(re.search(p, body)) for p in (
+                rf"~{n}\s*\(", rf"\b{n}\s*\(\s*const {n}\s*&", rf"operator=\s*\(\s*const {n}\s*&",
+                rf"\b{n}\s*\(\s*{n}\s*&&", rf"operator=\s*\(\s*{n}\s*&&"))
+            if not final and not re.search(rf"virtual ~{n}", body):
+                bad.append(f"{fname}: {name}: neither final nor a virtual destructor")
+            if 0 < k < 5:
+                bad.append(f"{fname}: {name}: {k} of the 5 special members")
+    return bad
+
+
+def test_generated_classes_follow_the_coding_rules(out, tmp_path):
+    """every generated class (translated, wrapped, reverse, wrappers, tests) is final or has a virtual destructor
+    and declares none or all special members"""
+    w, r = os.path.join(CORPUS, "wrapped"), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\nwrap_reverse = ["AbstractThing_type", '
+                                     '"StateModel_type", "Thing_type"]\n[wrap_owned]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path), wrap=[os.path.join(w, f) for f in ("mysolver_mod.F90", "body_mod.F90",
+                                                                         "sphere_mod.F90", "listen_mod.F90",
+                                                                         "fstate_mod.F90")] +
+              [os.path.join(r, f) for f in ("thing_mod.F90", "state_model_mod.F90", "convergence_mod.F90")],
+              interface_only=[os.path.join(r, "model_base_mod.F90")])
+    files = glob.glob(os.path.join(out[0], "*.[ch]pp")) + glob.glob(str(tmp_path / "*.[ch]pp"))
+    assert len(files) > 20
+    assert not class_rule_violations([(os.path.basename(f), open(f).read()) for f in files])
+    assert len(class_rule_violations([("x.hpp", "class A\n{\npublic:\n  A(const A&) = delete;\n};")])) == 2  # the check
