@@ -2906,3 +2906,28 @@ def test_generated_classes_follow_the_coding_rules(out, tmp_path):
     assert len(files) > 20
     assert not class_rule_violations([(os.path.basename(f), open(f).read()) for f in files])
     assert len(class_rule_violations([("x.hpp", "class A\n{\npublic:\n  A(const A&) = delete;\n};")])) == 2  # the check
+
+
+def test_member_accessors(tmp_path):
+    """member_accessors: listed members become protected <name>_ with public accessors (get: const getter, scalars
+    by value; set: + setter overload; ref: + non-const reference); own methods and derived classes use n_; other
+    code the accessors; writes to get-only members are TODOs; unlisted members and types stay as they are"""
+    d = str(tmp_path)
+    (tmp_path / "x.toml").write_text('[member_accessors]\nsolver_type = ["n", "tol:set", "x:ref"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    report, _ = translate([os.path.join(CORPUS, "accessors_mod.F90")], c, d)
+    hpp, cpp = read((d,), "accessors_mod.hpp"), read((d,), "accessors_mod.cpp")
+    assert "  //! problem size\n  int n() const { return n_; }\n" in hpp
+    assert "  scalar tol() const { return tol_; }\n  //! tolerance (setter)\n  void tol(scalar value) { tol_ = value; }" in hpp
+    assert "  vec& x() { return x_; }\n  //! state (const version)\n  const vec& x() const { return x_; }" in hpp
+    assert "protected:\n  int n_ = 0;  //!< problem size\n  scalar tol_ = 1.0e-6;  //!< tolerance\n  vec x_;" in hpp
+    assert "  int count = 0;  //!< not listed: plain member" in hpp
+    assert "  n_ = n;\n  x_.resize(n);" in cpp and "  x_ = f * x_;" in cpp          # own class, derived class
+    assert "  s.tol(0.5);" in cpp and "  s.x()(0) = 2.0;" in cpp and "s.count = s.count + s.n();" in cpp
+    assert "// TODO(f2cpp): not translated (member-read-only)" in cpp
+    assert report.files[os.path.join(CORPUS, "accessors_mod.F90")]["untranslated"]["member-read-only"] == 1
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "accessors_mod")
+    # not configured: unchanged
+    translate([os.path.join(CORPUS, "accessors_mod.F90")], cfg(), str(tmp_path / "plain"))
+    assert "  int n = 0;" in (tmp_path / "plain" / "accessors_mod.hpp").read_text()

@@ -298,6 +298,8 @@ class ModuleEmitter:
             # component name (None: whole statement), comments behind
             # a plain data type (no methods) keeps public members: nothing else could use them
             methods = [b for b in t.bindings if f"{t.name}%{b}" not in self.excluded_names]
+            modes = self.accessor_modes(t)
+            self.emit_accessors(tr, t, modes, ind + 1)
             auto = self.cfg["member_access"] == "auto" and bool(methods or callbacks or t.parent)
             fixed = (1 if t.children else 0) if t.private_comps else 2
             sections, lead, last = {2: [], 1: [], 0: []}, [], None
@@ -319,6 +321,8 @@ class ModuleEmitter:
                 last = []
                 for k, n in enumerate(names):
                     level = (t.comps[n].access_need if auto else fixed) if n is not None else 2
+                    if n in modes:                 # member_accessors: protected (private if final)
+                        level = 0 if final else 1
                     entry = (lead if k == 0 else [], d, n, [])
                     sections[level].append(entry)
                     last.append(entry)
@@ -344,7 +348,10 @@ class ModuleEmitter:
                             not before and not behind:  # unwrapped type: documentation of its component
                         for line in self.member_docs(t, v):
                             tr.emit(ind + 1, f"{self.cfg['doxygen']} {line}".rstrip())
-                    if cls(d) == "Data_Component_Def_Stmt":
+                    if cls(d) == "Data_Component_Def_Stmt" and n in modes:      # renamed: n_
+                        ct, cd = self.var_decl(tr, v, True).split("\0")
+                        tr.emit(ind + 1, f"{ct} {v.cname}{self.cfg['member_suffix']}{cd[len(v.cname):]};")
+                    elif cls(d) == "Data_Component_Def_Stmt":
                         one = type("S", (), {"items": (d.items[0], d.items[1], _One(d, n))})()
                         self.decl_stmt(tr, one, t.comps, ind + 1, member=True, companions=False)
                     elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
@@ -360,6 +367,37 @@ class ModuleEmitter:
                         ct, cd = self.var_decl(tr, cv, True).split("\0")
                         tr.emit(ind + 1, f"{ct} {cd};")
         tr.emit(ind, "};")
+
+    def accessor_modes(self, t):
+        """{component: get | set | ref} of member_accessors (own components of t)"""
+        m = self.cfg["member_accessors"].get(t.name, {})
+        return {n: m.get(n) or m.get("*") for n, v in t.comps.items()
+                if (m.get(n) or m.get("*")) and v.base != "procedure" and not v.companions and not v.unwrapped}
+
+    def emit_accessors(self, tr, t, modes, ind):
+        """public accessors of the members renamed to <name>_ (member_accessors)"""
+        dox, sfx, docs = self.cfg["doxygen"], self.cfg["member_suffix"], self.component_docs(t)
+        for n, mode in modes.items():
+            v = t.comps[n]
+            ty, m = tr.cpp_type(v), f"{v.cname}{sfx}"
+            plain = v.rank == 0 and v.base in ("real", "integer", "logical") and not v.ptr_like and not v.has("pointer")
+            doc = docs.get(n, []) or [f"component {v.cname}"]
+
+            def emit(decl, suffix="", doc=doc):
+                lines = list(doc)
+                lines[-1] += suffix
+                for line in lines:
+                    tr.emit(ind, f"{dox} {line}".rstrip())
+                tr.emit(ind, decl)
+            if mode == "ref":
+                emit(f"{ty}& {v.cname}() {{ return {m}; }}")
+            emit(f"{ty} {v.cname}() const {{ return {m}; }}" if plain else
+                 f"const {ty}& {v.cname}() const {{ return {m}; }}", " (const version)" if mode == "ref" else "")
+            if mode == "set":
+                emit(f"void {v.cname}({ty} value) {{ {m} = value; }}" if plain else
+                     f"void {v.cname}(const {ty}& value) {{ {m} = value; }}", " (setter)")
+        if modes:
+            tr.emit(0, "")
 
     def component_docs(self, t):
         """{component: [comment text]}: comments before the statement and behind it on the same line"""
