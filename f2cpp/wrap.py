@@ -114,15 +114,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             names = sorted(found.get(m.name, {}).values(), key=str.lower)
             if not names and m is not mod:
                 continue
-            line = f"  use {m.spelling or m.name}, only:" + (" " if names else "")
-            out = []
-            for k, n in enumerate(names):
-                piece = n + (", " if k < len(names) - 1 else "")
-                if len(line) + len(piece) > 100:
-                    out.append(line.rstrip() + " &")
-                    line = "    "
-                line += piece
-            res.append("\n".join(out + [line]))
+            res.append(use_line(f"  use {m.spelling or m.name}, only:", names))
         return "\n".join(res)
 
     def wrapped_types(self):
@@ -1407,7 +1399,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             out += split_params(line.lstrip(), self.cfg["c_decl_width"]) if inside else [line]
             if line.strip() == "!@end_c_declaration":
                 inside = False
-        b[:] = [x for text in out for line in text.split("\n") for x in fortran_continue(line)]
+        b[:] = [x for text in out for line in text.split("\n") for u in use_lines(line) for x in fortran_continue(u)]
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         types = []                                  # public: one statement per name (types included)
@@ -1467,7 +1459,7 @@ def fortran_continue(line, width=132):
         for k, ch in enumerate(rest[:width - 2]):
             if ch in "\"'" and quote in (None, ch):
                 quote = None if quote else ch
-            elif ch == " " and quote is None and k > len(ind):
+            elif ch == " " and quote is None and k > len(ind) + 2:    # not right after the leading "& "
                 cut = k
                 if rest[k - 1] == "," and not rest[:k].rstrip(",").endswith("bind(C") or \
                         rest.startswith(("result(", "bind("), k + 1):
@@ -1476,7 +1468,7 @@ def fortran_continue(line, width=132):
         if cut is None:
             break
         res.append(rest[:cut] + " &")
-        rest = ind + rest[cut + 1:].lstrip()
+        rest = ind + "& " + rest[cut + 1:].lstrip()          # continuation mark also on the continued line
     return res + [rest]
 
 
@@ -1725,17 +1717,26 @@ def iso_c_only(lines):
 
 
 def use_line(head, names):
-    """use statement with an only-list, continued after about 100 characters"""
+    """use statement with an only-list, continued after about 100 characters; continued lines start with "&"
+    and are aligned after the "only:" """
     if not names:
         return head
-    out, cur = [], head + " "
+    out, cur, cont = [], head + " ", "  &".ljust(len(head) + 1)
     for k, n in enumerate(names):
         piece = n + (", " if k < len(names) - 1 else "")
-        if len(cur) + len(piece) > 100:
+        if len(cur) + len(piece) > 100 and cur.strip() not in ("&", head.strip()):
             out.append(cur.rstrip() + " &")
-            cur = "    "
+            cur = cont
         cur += piece
     return "\n".join(out + [cur])
+
+
+def use_lines(line):
+    """a long use statement with an only-list (one line) -> use_line"""
+    m = re.match(r"(\s*use\b[^!]*?only\s*:)\s*(.*\S)\s*$", line, re.I)
+    if not m or len(line) <= 100 or "&" in line:
+        return [line]
+    return use_line(m.group(1), [n.strip() for n in m.group(2).split(",")]).split("\n")
 
 
 def c_header(binding, guard):

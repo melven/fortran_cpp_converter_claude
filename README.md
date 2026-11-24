@@ -298,7 +298,8 @@ C header: one forward declaration per struct (`typedef struct X X;`) at the top,
 locals have the Fortran kind (`real`): only `bind(C)` arguments use `C_REAL` / `C_INT` (a kind mismatch is a
 compile error), `type declarations` (comment line `!====...`).
 C declarations longer than `c_decl_width` (100): one parameter per line; code lines over 132 characters are
-continued (`&`). C++ declarations without Fortran
+continued (`&` at the end and at the start of the continued line); long `use ..., only:` lists are continued
+after about 100 characters, aligned after the `only:`. C++ declarations without Fortran
 documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).
 
 Mixing: `wrap_translate = ["mysolver_type%norm", "residual_norm"]` (glob patterns) implements listed

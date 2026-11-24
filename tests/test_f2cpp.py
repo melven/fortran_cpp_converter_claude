@@ -1826,6 +1826,7 @@ end module lng_mod
     assert names and max(len(n) for n in names) <= 63
     # free form line limit (comments included): long code lines continued, C declarations one parameter per line
     assert max(len(line) for line in b.split("\n")) <= 132
+    assert ' &\n      & bind(C, name="project_VeryLongClassNameForTesting_compute_something_with_a_rather_long_name")' in b
     if shutil.which("gfortran"):                # default line length (132)
         run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-I" + CORPUS,
              str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))
@@ -1932,6 +1933,9 @@ def test_reverse_wrapped_types(tmp_path):
                                                          "thing_factory_mod_c_binding.F90"))
     tw = (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()          # the Fortran types implemented in C++
     fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
+    # long use statements: "&" also on the continued line, aligned after "only: "
+    assert "  use thing_factory_mod, only: AbstractThingFactory_type, register_thing_factory, &\n" \
+           "  &                            unregister_thing_factory\n" in fw
     h, lh, lc = ((tmp_path / f).read_text() for f in ("thing_mod.h", "linear_thing_mod.hpp", "linear_thing_mod.cpp"))
     # C struct per C++ object: function pointers (typedefs named like the abstract interfaces), destroy, userData
     assert "typedef struct project_AbstractThing project_AbstractThing;" in flat(h)
