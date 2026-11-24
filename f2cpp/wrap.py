@@ -114,15 +114,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             names = sorted(found.get(m.name, {}).values(), key=str.lower)
             if not names and m is not mod:
                 continue
-            line = f"  use {m.spelling or m.name}, only:" + (" " if names else "")
-            out = []
-            for k, n in enumerate(names):
-                piece = n + (", " if k < len(names) - 1 else "")
-                if len(line) + len(piece) > 100:
-                    out.append(line.rstrip() + " &")
-                    line = "    "
-                line += piece
-            res.append("\n".join(out + [line]))
+            res.append(use_line(f"  use {m.spelling or m.name}, only:", names))
         return "\n".join(res)
 
     def wrapped_types(self):
@@ -178,7 +170,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             cpp.emit(0, "")
             cpp.emit(0, f"{name}& {name}::operator=({cls}&& o) noexcept")
             cpp.emit(0, "{")
-            cpp.emit(1, "if (this != &o)")
+            cpp.emit(1, "if( this != &o )")
             cpp.emit(1, "{")
             cpp.emit(2, f"{free}({hm});")
             cpp.emit(2, f"{hm} = o.{hm};")
@@ -204,9 +196,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         if t.name == rname:                     # methods of the root: dynamic dispatch in Fortran
             decl.append(f"    class({t.spelling or t.name}), pointer :: obj")
             return decl, stmts + ["    obj => wrapper%ptr"] + [f"    {x}" for x in body]
-        fail = "ierr = -1" if has_err else f'error stop "{cname}: object of another type"'
+        fail = self.fail_lines("ierr") if has_err else [f'error stop "{cname}: object of another type"']
         return decl, stmts + ["    select type (obj => wrapper%ptr)", f"    class is ({t.spelling or t.name})"] + \
-            [f"      {x}" for x in body] + ["    class default", f"      {fail}", "    end select"]
+            [f"      {x}" for x in body] + ["    class default"] + [f"      {x}" for x in fail] + ["    end select"]
 
     def c_name(self, t, what):
         return f"{self.cfg['c_prefix']}_{self.c_class(t)}_{what}"
@@ -466,7 +458,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         for t in self.mod.types.values():
             if t.name in self.reverse_types():  # their constants: reverse_constants
                 continue
-            for v, kind, td in self.constants(t)[0]:
+            for _, kind, td in self.constants(t)[0]:
                 if kind == "struct":
                     res[td.name] = td
         return res
@@ -743,7 +735,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 glue.append(f"{present} ? {obj}.data() : nullptr" if present else f"{v.cname}.data()")
                 if dims[0] == f"{a}_n1":         # size unknown in Fortran: passed from C++
                     have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
-                    for d, h in zip(dims, have):
+                    for d, h in zip(dims, have, strict=True):
                         f_args.append(d)
                         c_args.append(f"int {d}")
                         decls.append(f"integer(C_INT), value :: {d}")
@@ -762,12 +754,15 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     shape = ", ".join(dims)
                     decls.append(f"type(C_PTR), value :: {a}")
                     # no `=> null()` in the declaration: that would imply SAVE (stale association next call)
-                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: "
+                                 f"{a}_f({', '.join([':'] * v.rank)})")   # Fortran kind
                     pre += [f"nullify({a}_f)", f"if (c_associated({a})) call c_f_pointer({a}, {a}_f, [{shape}])"]
                     call.append(f"{a}={a}_f")
-                elif v.rank == 1:
-                    decls.append(f"{self.f_type(v)}, intent({intent}) :: {a}(*)")
-                    call.append(f"{a}={a}(1:{dims[0]})")
+                elif v.rank == 1:                 # a pointer view of the Fortran kind (= C kind) and size
+                    decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
+                    decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_f(:)")
+                    pre.append(f"{a}_f => {a}(1:{dims[0]})")
+                    call.append(f"{a}={a}_f")
                 else:
                     decls.append(f"{self.f_type(v)}, intent({intent}), target :: {a}(*)")
                     decls.append(f"{self.fortran_decl(v)}, pointer, contiguous :: {a}_2d(:, :)")   # Fortran kind
@@ -783,7 +778,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 except Untranslatable:
                     codes = None
                 if intent == "out" and codes is not None and "Ref<" not in tr.param_type(v):
-                    glue.append(("pre", (f"if ({present}) " if present else "") + f"{obj}.resize({', '.join(codes)});"))
+                    glue += ([("pre", f"if( {present} )")] if present else []) + \
+                        [("pre", ("  " if present else "") + f"{obj}.resize({', '.join(codes)});")]
                 elif intent == "out" and "Ref<" not in tr.param_type(v):    # known in Fortran only
                     self.report.add("todo", "wrap-out-size")
                     glue.append(("pre", f"// {TODO}: size of {v.cname} ({', '.join(dims)} in Fortran) not "
@@ -795,10 +791,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     glue.append(("pre", f"// {TODO}: size of {v.cname} is not checked"))
                 else:
                     have = [f"{obj}.size()"] if v.rank == 1 else [f"{obj}.rows()", f"{obj}.cols()"]
-                    cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes))
+                    cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes, strict=True))
                     if present:
                         cond = f"{present} && ({cond})"
-                    glue.append(("pre", f'if ({cond}) throw std::invalid_argument("{cname}: size of {v.cname}");'))
+                    glue += [("pre", f"if( {cond} )"),       # {WHERE}: the C++ method (known below)
+                             ("pre", f'  throw std::invalid_argument("{{WHERE}}: wrong dimension of parameter {v.cname}!");')]
         if has_err:
             f_args.append("ierr")
             decls.append("integer(C_INT), intent(out) :: ierr")
@@ -825,8 +822,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             target = f"obj%{bd.generic or bd.name}" if bd.access == "private" else f"obj%{bd.name}"
         else:                       # private specific of a public generic interface: through the generic
             target = p.cname if self.mod.is_public(p.name) or not p.generic else p.generic
-        body = list(pre) + [f"res = {target}({', '.join(call)})" if r is not None else
-                            f"call {target}({', '.join(call)})"] + list(post)
+        actuals = ", ".join(positional(call, [a for a in p.args if t is None or a != p.pass_arg]))
+        stmt = f"res = {target}({actuals})" if r is not None else f"call {target}({actuals})"
+        chk = self.cfg["wrap_chk_ierr"]
+        if has_err and chk and not any("f2cpp_any_back" in x for x in post):     # (data moved back also on errors)
+            stmt = f"{chk[0]}({stmt}, ierr)"
+        body = list(pre) + [stmt] + list(post)
         if t is not None:
             odecl, ostmts = self.object_access(t, cname, handle, has_err, body)
             fb.extend(odecl)
@@ -844,8 +845,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         cpp.emit(0, "{")
         for g in glue:
             if isinstance(g, tuple) and g[0] == "pre":
-                cpp.emit(1, g[1])
-        cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] + (["&ierr"] if has_err else []))
+                cpp.emit(1, g[1].replace("{WHERE}", f"{qual}{name}"))
+        cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] +
+                          (["&ierr"] if has_err else []))
         if has_err:
             cpp.emit(1, "int ierr = 0;")
         posts = [g[1] for g in glue if isinstance(g, tuple) and g[0] == "post"]
@@ -860,7 +862,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         if r is not None and posts and not has_err:
             cpp.emit(1, "return res;")
         if has_err:
-            cpp.emit(1, f'if (ierr != 0) throw std::runtime_error("ierr!=0 returned from {cname}");')
+            cpp.emit(1, "if( ierr != 0 )")
+            cpp.emit(2, f'throw std::runtime_error("Error: calling C function {cname} in {qual}{name}!");')
             if r is not None:
                 cpp.emit(1, "return res;")
         cpp.emit(0, "}")
@@ -1373,10 +1376,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 if cfg["include_guard"] == "ifndef" else (["#pragma once"], [])
             banner = BANNER.format(src=os.path.basename(self.src)) + " (C++ classes calling C structs)"
             brief = "C++ wrapper of C structs: "
-            ch = self.cpp_file_header(hx, brief, "_c_wrapper") + [banner] + guard[0] + ["", f'#include "{base}{hx}"', "", self.open_ns(), ""] + \
+            ch = self.cpp_file_header(hx, brief, "_c_wrapper") + [banner] + guard[0] + \
+                ["", f'#include "{base}{hx}"', "", f'#include "{base}.h"  // the C struct (internal header)', "",
+                 self.open_ns(), ""] + \
                 strip_blank(self.cwc["hpp"].out) + ["", f"}}  // namespace {self.ns}", ""] + guard[1]
-            cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "", "#include <stdexcept>", "",
-                  f'#include "{base}.h"', ""] + \
+            cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "",
+                                                                  "#include <stdexcept>", ""] + \
                 (["#include <any>", "#include <memory>", "#include <typeinfo>", ""] if self.cwc.get("any") else []) + \
                 [self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
                 ["", f"}}  // namespace {self.ns}", ""]
@@ -1394,7 +1399,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             out += split_params(line.lstrip(), self.cfg["c_decl_width"]) if inside else [line]
             if line.strip() == "!@end_c_declaration":
                 inside = False
-        b[:] = [x for text in out for line in text.split("\n") for x in fortran_continue(line)]
+        b[:] = [x for text in out for line in text.split("\n") for u in use_lines(line) for x in fortran_continue(u)]
         b[b.index(f"  use {mod.spelling}")] = self.use_only(b)
         b[b.index("  use, intrinsic :: iso_c_binding")] = iso_c_only(b)
         types = []                                  # public: one statement per name (types included)
@@ -1413,7 +1418,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         del b[p:p + 5 + (b[p + 5:p + 6] == [""])]
         m = next(j for j, line in enumerate(b) if re.match(r"module \w+$", line))
         includes = []
-        for chk in (self.cfg["wrap_chk_argument"], self.cfg["wrap_chk_ierr"]):      # definitions of used macros
+        fail = self.cfg["wrap_fail"]
+        fail = [fail[0].split("(")[0], fail[1]] if isinstance(fail, list) and len(fail) > 1 else None
+        for chk in (self.cfg["wrap_chk_argument"], self.cfg["wrap_chk_ierr"], fail):      # definitions of used macros
             if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b) and \
                     f'#include "{chk[1]}"' not in includes:
                 includes.append(f'#include "{chk[1]}"')
@@ -1424,6 +1431,21 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
 
 
 SEPARATOR = "  !" + "=" * 80
+
+
+def positional(call, dummies):
+    """actual arguments "name=expr" in the order of the dummies; positional up to the first omitted dummy"""
+    given = {}
+    for c in call:
+        m = re.match(r"(\w+)=(?!=)(.*)$", c)
+        given[m.group(1).lower() if m else None] = m.group(2) if m else c
+    out, gap = [], False
+    for d in dummies:
+        if d in given:
+            out.append(f"{d}={given.pop(d)}" if gap else given.pop(d))
+        else:
+            gap = True
+    return out + [f"{k}={v}" if k else v for k, v in given.items()]
 
 
 def fortran_continue(line, width=132):
@@ -1437,7 +1459,7 @@ def fortran_continue(line, width=132):
         for k, ch in enumerate(rest[:width - 2]):
             if ch in "\"'" and quote in (None, ch):
                 quote = None if quote else ch
-            elif ch == " " and quote is None and k > len(ind):
+            elif ch == " " and quote is None and k > len(ind) + 2:    # not right after the leading "& "
                 cut = k
                 if rest[k - 1] == "," and not rest[:k].rstrip(",").endswith("bind(C") or \
                         rest.startswith(("result(", "bind("), k + 1):
@@ -1446,7 +1468,7 @@ def fortran_continue(line, width=132):
         if cut is None:
             break
         res.append(rest[:cut] + " &")
-        rest = ind + rest[cut + 1:].lstrip()
+        rest = ind + "& " + rest[cut + 1:].lstrip()          # continuation mark also on the continued line
     return res + [rest]
 
 
@@ -1553,9 +1575,14 @@ def declaration_separators(b):
         r = re.search(r"result\s*\(\s*(\w+)", head, re.I)
         if r:
             dummies.add(r.group(1).lower())
-        while k < len(b) and b[k].lstrip().startswith("#"):    # #ifdef DLLEXPORT ...
+        while k < len(b) and b[k].lstrip().startswith("#"):    # #ifdef DLLEXPORT ... #endif
+            depth = 1 if b[k].lstrip().startswith("#if") else 0
             out.append(b[k])
             k += 1
+            while depth and k < len(b):
+                depth += 1 if b[k].lstrip().startswith("#if") else -1 if b[k].lstrip().startswith("#endif") else 0
+                out.append(b[k])
+                k += 1
         groups = {"dummy": [], "local": []}
         while k < len(b) and DECL.match(b[k]):
             names = re.split(r",(?![^(]*\))", DECL.match(b[k]).group(1))
@@ -1690,17 +1717,26 @@ def iso_c_only(lines):
 
 
 def use_line(head, names):
-    """use statement with an only-list, continued after about 100 characters"""
+    """use statement with an only-list, continued after about 100 characters; continued lines start with "&"
+    and are aligned after the "only:" """
     if not names:
         return head
-    out, cur = [], head + " "
+    out, cur, cont = [], head + " ", "  &".ljust(len(head) + 1)
     for k, n in enumerate(names):
         piece = n + (", " if k < len(names) - 1 else "")
-        if len(cur) + len(piece) > 100:
+        if len(cur) + len(piece) > 100 and cur.strip() not in ("&", head.strip()):
             out.append(cur.rstrip() + " &")
-            cur = "    "
+            cur = cont
         cur += piece
     return "\n".join(out + [cur])
+
+
+def use_lines(line):
+    """a long use statement with an only-list (one line) -> use_line"""
+    m = re.match(r"(\s*use\b[^!]*?only\s*:)\s*(.*\S)\s*$", line, re.I)
+    if not m or len(line) <= 100 or "&" in line:
+        return [line]
+    return use_line(m.group(1), [n.strip() for n in m.group(2).split(",")]).split("\n")
 
 
 def c_header(binding, guard):

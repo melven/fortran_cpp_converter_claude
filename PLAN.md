@@ -47,7 +47,7 @@ Assessment (with the user, 2026-11-23): status in brackets.
 
 Small defects (from the review): fixed: internal errors, keyword config overrides normalised, prepass dump into
 the output directory, declared spelling of reverse wrapper arguments, notes counted once per procedure, Python 3.11
-syntax (f-strings). Not fixed (uncritical for the user, CMake build): output subdirectory for `_c_binding.F90`,
+syntax (f-strings). Fixed later: output subdirectory for `_c_binding.F90`. Not fixed (uncritical for the user, CMake build):
 `!` inside a string before a macro, same object file name for `x_mod.F90` / `x_mod.cpp` in simple builds.
 
 ## Plan
@@ -58,8 +58,9 @@ Priorities: tests first (they protect every later step), then correctness, then 
 - [done] CI (`.github/workflows/ci.yml`): ruff (pyflakes, syntax), pytest with coverage on Python 3.11 / 3.13,
   full tool chain, `F2CPP_REQUIRE_TOOLCHAIN` fails when compile tools are missing. Line coverage 93%.
 - [done] Internal errors fail the tests (`strict = true` in `tests/support/f2cpp.toml`).
-- Ruff: extend the rules (bugbear `B`, line length 132) after cleaning the findings (~20 `B007` / `B905`).
-- Valgrind in the run tests (`valgrind --error-exitcode=1` when available) for all wrap / reverse executables.
+- [done] Ruff bugbear (`B`): unused loop variables, `zip(..., strict=True)` where the lengths must match (a
+  mismatch is now an internal error instead of silent truncation). [done] line length 132 (E501; not for the test file: long assertions of generated code).
+- [done] Valgrind in the run tests (`run_exe`: memory errors and definite leaks fail) for all compiled programs.
 - Split `test_f2cpp.py` by area (`test_translate_*.py`, `test_wrap_*.py`, `test_reverse_*.py`, `conftest.py`
   with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test).
 - Golden files for a few representative outputs (reviewed diffs instead of many substring assertions), keep
@@ -74,12 +75,12 @@ Priorities: tests first (they protect every later step), then correctness, then 
 ### 2. Correctness (short / middle term)
 - [done] internal errors visible, `--strict`; keyword overrides normalised; prepass dump; parameter spelling;
   report noise.
-- `wrap_constants` with character components for forward-wrapped types (reverse types: done, with
-  `destroy_<Thing>_C_from_Fortran`).
+- [dropped] `wrap_constants` with character components for forward-wrapped types (not needed; reverse types: done,
+  with `destroy_<Thing>_C_from_Fortran`).
 - Runtime checks in generated C++ behind a macro (`F2CPP_CHECKS`): index bounds of shifted indices, sizes of
   intent(out) arrays, optional presence.
-- Document and test the assumptions of the C binding (kinds, `integer(C_INT)` vs. default `integer`) with a
-  compile-time check in the generated Fortran (`static_assert`-like `c_sizeof` comparison at setup).
+- [dropped] Explicit kind check in the generated Fortran: a kind mismatch already gives compiler errors at the C
+  interface (real / integer passed directly to the `bind(C)` dummies).
 
 ### 3. Structure and extensibility (middle term)
 - One `class(*)` mechanism: the `project_<module>_Any` struct (destroy + userData) for forward wrapping too;

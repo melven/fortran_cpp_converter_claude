@@ -260,7 +260,9 @@ LinearThingFactory_type = "linear"
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
   pointers to the private `bind(C, name="")` routines `wrap_<method>` (arrays of known size: pointer views
   `x_f => x(1:this_c%n)`; positional actual arguments; `wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]`:
-  `PROJECT_CHK_IERR(call wrapper%ptr%f(..., ierr), ierr)`; no global symbol; plain `bind(C)`
+  `PROJECT_CHK_IERR(call wrapper%ptr%f(..., ierr), ierr)`, also for the calls of forward-wrapped methods;
+  `wrap_fail = ["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"]`: the error statement of generated Fortran
+  (wrong object type, wrong `class(*)` data, size checks without `wrap_chk_argument`; default `ierr = -1` + `return`); no global symbol; plain `bind(C)`
   would give clashing global symbols `wrap_<method>` across modules); C++
   `AbstractThing_private::CWrapperThing(project_AbstractThing&)` (own files `<stem>_c_wrapper.hpp/.cpp`) derives
   from `AbstractThing` and calls them (the struct outlives it; the default constructor gives an empty object);
@@ -272,7 +274,9 @@ LinearThingFactory_type = "linear"
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
 - the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions, each with a C
   function pointer typedef of the same name, e.g. `project_AbstractThing_evaluate`, used by the struct); the
-  module `project_c_wrapper_<module>` (file of the same name) has `CWrapperThing_type`: extends the abstract
+  module `project_c_wrapper_<module>` (file of the same name; procedures named like the bindings,
+  `procedure :: evaluate`, prefixed for a second type with the same name or names of intrinsics) has
+  `CWrapperThing_type`: extends the abstract
   type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
   makes one; factories: `CWrapperThingFactory_type` and register / unregister
 - factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
@@ -294,7 +298,8 @@ C header: one forward declaration per struct (`typedef struct X X;`) at the top,
 locals have the Fortran kind (`real`): only `bind(C)` arguments use `C_REAL` / `C_INT` (a kind mismatch is a
 compile error), `type declarations` (comment line `!====...`).
 C declarations longer than `c_decl_width` (100): one parameter per line; code lines over 132 characters are
-continued (`&`). C++ declarations without Fortran
+continued (`&` at the end and at the start of the continued line); long `use ..., only:` lists are continued
+after about 100 characters, aligned after the `only:`. C++ declarations without Fortran
 documentation get a generated doxygen comment (`//! Fortran <name> (undocumented)`, `//! component <name>`).
 
 Mixing: `wrap_translate = ["mysolver_type%norm", "residual_norm"]` (glob patterns) implements listed

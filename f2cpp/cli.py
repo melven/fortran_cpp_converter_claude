@@ -92,6 +92,7 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
                     f.write(text)
                 written.append(out)
             out = os.path.join(outdir, prog.file_stem(m.name) + "_c_binding.F90")
+            os.makedirs(os.path.dirname(out), exist_ok=True)    # module_headers may contain a directory
             with open(out, "w") as f:
                 f.write(binding)
             written.append(out)

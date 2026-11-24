@@ -26,6 +26,14 @@ def run(cmd, cwd):
     return r.stdout
 
 
+VALGRIND = ["valgrind", "-q", "--error-exitcode=99", "--leak-check=full", "--errors-for-leak-kinds=definite"]
+
+
+def run_exe(cmd, cwd):
+    """run a compiled test program; under valgrind if available (memory errors and definite leaks fail)"""
+    return run((VALGRIND if shutil.which("valgrind") else []) + cmd, cwd)
+
+
 def cfg(**kw):
     return config.load(os.path.join(SUPPORT, "f2cpp.toml"), **kw)
 
@@ -315,9 +323,9 @@ def test_same_results_as_fortran(out, tmp_path):
     ref = run([str(tmp_path / "fdriver")], d).split()
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, os.path.join(SUPPORT, "driver.cpp"),
          "expm_mod.cpp", "block_lu_mod.cpp", "shape_mod.cpp", "poly_mod.cpp", "solver_mod.cpp", "problem_mod.cpp", "-llapack", "-o", "cdriver"], d)
-    res = run(["./cdriver"], d).split()
+    res = run_exe(["./cdriver"], d).split()
     assert len(res) == len(ref) == 69
-    for a, b in zip(res, ref):
+    for a, b in zip(res, ref, strict=True):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
 
 
@@ -327,7 +335,7 @@ def test_translated_unit_tests_pass(out):
     d = out[0]
     run(["g++", "-std=c++17", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "test_expm_mod.cpp", "expm_mod.cpp",
          "test_poly_mod.cpp", "poly_mod.cpp", "test_helpers_mod.cpp", "test_poly_shared_mod.cpp", "-lgtest", "-lgtest_main", "-llapack", "-lpthread", "-o", "gt"], d)
-    assert "[  PASSED  ] 7 tests." in run(["./gt"], d)
+    assert "[  PASSED  ] 7 tests." in run_exe(["./gt"], d)
 
 
 def test_custom_macro_names(tmp_path):
@@ -615,7 +623,7 @@ def test_generic_bindings(out):
 def test_member_access(out, tmp_path):
     shape, feat, poly = read(out, "shape_mod.hpp"), read(out, "features_mod.hpp"), read(out, "poly_mod.hpp")
     # used only by the own methods: private; used by free functions / other classes / tests: public
-    assert "  void scale(scalar factor) override;\n\nprivate:\n  scalar width = 1.0;\n  scalar height = 1.0;\n};" in shape
+    assert "  virtual void scale(scalar factor) override;\n\nprivate:\n  scalar width = 1.0;\n  scalar height = 1.0;\n};" in shape
     assert '\n\n  std::string name = "shape";\n};' in shape                  # set in make_shape
     assert "  ~stats();\n\n  scalar total = 0.0;\n  vec samples;\n\nprivate:\n  int n = 0;\n" in feat
     assert "  vec coeff;  //!< coefficients 0..degree\n\nprivate:\n  int degree = -1;\n};" in poly    # coeff: unit test
@@ -901,9 +909,10 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert '#include "mysolver_mod.h"' not in hpp and '#include "mysolver_mod.h"' in cpp
     assert "struct project_MySolver;  //!< C handle, see mysolver_mod.h" in hpp
     assert "  subroutine project_MySolver_apply(mySolver, x, y, ierr) bind(C, name=\"project_MySolver_apply\")" in binding
-    assert "    call obj%apply(x=x(1:obj%n), y=y(1:(obj%n)), ierr=ierr)" in binding
+    assert "    real(C_REAL), intent(in), target :: x(*)\n" in binding and "    real, pointer, contiguous :: x_f(:)\n" in binding
+    assert "    x_f => x(1:obj%n)\n    y_f => y(1:(obj%n))\n    call obj%apply(x_f, y_f, ierr)" in binding
     assert "    a_2d(1:obj%n, 1:2) => a(1:(obj%n) * (2))" in binding
-    assert "    call obj%set_label(label=str_array_ptr_to_str(label), ierr=ierr)" in binding
+    assert "    call obj%set_label(str_array_ptr_to_str(label), ierr)" in binding
     assert "  void apply(const vec& x, vec& y) const;" in hpp and "  //! spectral shift\n  scalar& shift();" in hpp
     assert "  //! spectral shift\n  scalar& shift();\n  //! spectral shift (const version)\n" in hpp
     assert "  //! component verbose\n  bool verbose() const;\n  //! component verbose (setter)\n  void verbose(bool value);\n" \
@@ -913,9 +922,10 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "void MySolver::verbose(bool value)\n{\n  project_MySolver_verbose_set(handle_, value);\n}" in cpp
     assert "  Eigen::Map<mat> coupling();\n  //! component coupling (const version)\n  Eigen::Map<const mat> coupling() const;" in hpp and "void stats(scalar& mn, scalar& mx, " \
            "std::optional<scalar> tol = std::nullopt) const;" in hpp
-    assert '  if (x.size() != n()) throw std::invalid_argument("project_MySolver_apply: size of x");\n' \
-           "  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n" \
-           '  if (ierr != 0) throw std::runtime_error("ierr!=0 returned from project_MySolver_apply");' in cpp
+    assert '  if( x.size() != n() )\n    throw std::invalid_argument("MySolver::apply: wrong dimension of parameter x!");\n' \
+           '  y.resize(x.size());\n  int ierr = 0;\n  project_MySolver_apply(handle_, x.data(), y.data(), &ierr);\n' \
+           '  if( ierr != 0 )\n    throw std::runtime_error("Error: calling C function project_MySolver_apply in ' \
+           'MySolver::apply!");' in cpp
     # module procedures
     assert "scalar residual_norm(const vec& r, const vec& b, int n);" in hpp
     if translated:                      # C++ implementations, no binding
@@ -924,7 +934,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
         assert "scalar MySolver::norm(const vec& x) const\n{\n" in cpp and "diag()" in cpp
     else:
         assert "PROJECT_REAL project_residual_norm(const PROJECT_REAL* r, const PROJECT_REAL* b, int n);" in flat(h)
-        assert "    res = residual_norm(r=r(1:n), b=b(1:n), n=n)" in binding
+        assert "    r_f => r(1:n)\n    b_f => b(1:n)\n    res = residual_norm(r_f, b_f, n)" in binding
     # size unknown in Fortran (x(:) without check): passed from C++
     assert "void project_scale_vector(PROJECT_REAL* x, int x_n1, PROJECT_REAL factor, int* ierr);" in flat(h)
     assert "  project_scale_vector(x.data(), static_cast<int>(x.size()), factor, &ierr);" in cpp
@@ -934,7 +944,7 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "int tagged_length(const std::string& msg, const std::optional<std::string>& tag = std::nullopt);" in hpp
     assert "  return project_tagged_length(msg.c_str(), tag ? tag->c_str() : nullptr);" in cpp
     assert "    if (c_associated(tag)) allocate(tag_f, source=str_array_ptr_to_str(tag))\n" \
-           "    res = tagged_length(msg=str_array_ptr_to_str(msg), tag=tag_f)" in binding
+           "    res = tagged_length(str_array_ptr_to_str(msg), tag_f)" in binding
     user = read((d,), "solver_user_mod.cpp")
     assert "s.shift() = 0.25;" in user and "s.diag()(0)" in user and "r = r + residual_norm(y, x, x.size());" in user
     os.makedirs(os.path.join(d, "f"))
@@ -950,18 +960,18 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
         run(gxx + [src, "-o", obj], d)
     run(["g++", "glue.o", "user.o", "drv.o", "f/str.o", "f/mysolver.o", "f/binding.o", "f/factory.o",
          "-lgfortran", "-o", "cdrv"], d)
-    res = run(["./cdrv"], d).split("\n")
+    res = run_exe(["./cdrv"], d).split("\n")
     run(ff + [os.path.join(w, "solver_user_mod.F90"), "-o", "ref_user.o"], d)
     run(["gfortran", "-fdefault-real-8", "-If", os.path.join(w, "ref_driver.F90"), "f/str.o", "f/mysolver.o",
          "ref_user.o", "-o", "fdrv"], d)
-    ref = run(["./fdrv"], d).split()
+    ref = run_exe(["./fdrv"], d).split()
     vals = " ".join(res[:9]).split()
     ref, ref_flag = ref[:-1], ref[-1]
     assert len(vals) == len(ref) == 20
-    for a, b in zip(vals, ref):
+    for a, b in zip(vals, ref, strict=True):
         assert float(a) == pytest.approx(float(b), rel=1e-12, abs=1e-12)
     assert res[9] == "1" and ref_flag == "1"                         # logical setter
-    assert res[10] == "project_MySolver_apply: size of x"
+    assert res[10] == "MySolver::apply: wrong dimension of parameter x!"
     # logical arrays: bool copies; optional: NULL = absent (unallocated)
     assert "PROJECT_REAL project_MySolver_masked_sum(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "const bool* modelmask, int modelmask_n1);" in flat(h)
@@ -970,15 +980,16 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
            "      allocate(modelmask_f(modelmask_n1))\n      modelmask_f(:) = modelmask_c\n    end if\n" in binding
     assert "modelMask.size() > 0 ? modelMask.data() : nullptr, modelMask.size() > 0 ? " \
            "static_cast<int>(modelMask.size()) : 0);" in cpp
-    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x=x(1:obj%n), pos=pos_f)\n" \
+    assert "      allocate(pos_f(obj%n))\n    end if\n    call obj%positive(x_f, pos_f)\n" \
            "    if (allocated(pos_f)) pos_c = logical(pos_f, C_BOOL)" in binding
     # optional arrays: NULL = absent
     assert "PROJECT_REAL project_MySolver_weighted(const project_MySolver* mySolver, const PROJECT_REAL* x, " \
            "PROJECT_REAL* r, const PROJECT_REAL* w);" in flat(h)
-    assert "    type(C_PTR), value :: r\n    real, pointer, contiguous :: r_f(:)\n" in binding and "=> null()\n    real" not in binding
+    assert "    type(C_PTR), value :: r\n" in binding and "    real, pointer, contiguous :: r_f(:)\n" in binding \
+        and "=> null()\n    real" not in binding
     assert "    nullify(r_f)\n    if (c_associated(r)) call c_f_pointer(r, r_f, [obj%n])\n" in binding
-    assert "res = obj%weighted(x=x(1:obj%n), r=r_f, w=w_f)" in binding
-    assert "  if (r) r->get().resize(n());\n" in cpp
+    assert "res = obj%weighted(x_f, r_f, w_f)" in binding
+    assert "  if( r )\n    r->get().resize(n());\n" in cpp
     assert "project_MySolver_weighted(handle_, x.data(), r ? r->get().data() : nullptr, " \
            "w.size() > 0 ? w.data() : nullptr);" in cpp
 
@@ -1082,8 +1093,8 @@ def test_wrapped_class_hierarchy(tmp_path):
         read((d,), "body_mod_c_binding.F90")
     assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in sb
     assert "    call c_f_pointer(sphere, this_c)\n    call c_f_pointer(this_c%p_impl, wrapper)\n" in sb and '#include "body_mod.h"' in read((d,), "sphere_mod.h")
-    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr=dr, ierr=ierr)\n" \
-           "    class default\n      ierr = -1\n    end select" in sb
+    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n      call obj%grow(dr, ierr)\n" \
+           "    class default\n      ierr = -1\n      return\n    end select" in sb
     # file headers: original header, @file renamed, @brief prefixed
     assert read((d,), "body_mod_c_binding.F90").startswith(
         "!> @file body_mod_c_binding.F90\n!> @brief C binding: Abstract bodies")
@@ -1101,13 +1112,13 @@ def test_wrapped_class_hierarchy(tmp_path):
         objs.append(os.path.basename(src) + ".o")
         run(gxx + [src, "-o", objs[-1]], d)
     run(["g++"] + objs + ["-lgfortran", "-o", "drv"], d)
-    lines = run(["./drv"], d).split("\n")
+    lines = run_exe(["./drv"], d).split("\n")
     vol = 4.0 / 3.0 * math.pi * 8.0
     got = [float(x) for x in (lines[0] + " " + lines[1]).split()]
     vol2 = 4.0 / 3.0 * math.pi * 2.5 ** 3
-    for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2]):
+    for a, b in zip(got, [vol, 3.0 / vol, 4.0 * math.pi * 4.0, 2.5, 6.0, 6.0 / vol2], strict=True):
         assert a == pytest.approx(b, rel=1e-12)
-    assert lines[2] == "ierr!=0 returned from project_sphere_grow"
+    assert lines[2] == "Error: calling C function project_sphere_grow in sphere::grow!"
 
 
 def test_wrapped_class_with_hand_wrapped_base(tmp_path):
@@ -1405,7 +1416,7 @@ def test_wrapped_hierarchy_below_an_independent_base(tmp_path):
     assert "  // TODO(f2cpp): binding version not wrapped: nopass" in bh
     assert "// TODO(f2cpp): module variable b_count not wrapped" in bh
     assert "type :: BWrapper_type\n    class(B_type), pointer :: ptr => null()" in bb
-    assert "    obj => wrapper%ptr\n    call obj%write_state(ierr=ierr)" in bb
+    assert "    obj => wrapper%ptr\n    call obj%write_state(ierr)" in bb
 
 
 def test_method_template_declaring_the_object(tmp_path):
@@ -1467,7 +1478,7 @@ def test_unwrapped_type_with_companions(tmp_path):
                                        '  project::Blocks b;\n  b.init(3);\n  std::printf("%g\\n", b.total());\n}\n')
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "blocks_mod.cpp", "main.cpp",
          "-o", "m"], str(tmp_path))
-    assert run(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
+    assert run_exe(["./m"], str(tmp_path)).strip() == "126"      # 2 * (11 + 21 + 31)
 
 
 def test_wrapped_constant_of_a_translated_type(tmp_path):
@@ -1561,7 +1572,7 @@ end program drv
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "blocks_mod.o", "blocks_mod_c_binding.o", "drv.o", "glue.o", "print.o", "user.o", "-lstdc++",
          "-o", "m"], d)
-    assert run(["./m"], d).split() == ["10", "11", "20", "21", "30", "31", "60"]
+    assert run_exe(["./m"], d).split() == ["10", "11", "20", "21", "30", "31", "60"]
 
 
 def test_unwrapped_companions_of_an_existing_class(tmp_path):
@@ -1595,7 +1606,7 @@ end module q_mod
 """)
     translate([], cfg(wrap_sizes={"q_type%fill": {"y": "this%m"}}), str(tmp_path), wrap=[str(tmp_path / "q_mod.F90")])
     cpp, b = (tmp_path / "q_mod.cpp").read_text(), (tmp_path / "q_mod_c_binding.F90").read_text()
-    assert "call obj%fill(y=y(1:obj%m))" in b
+    assert "y_f => y(1:obj%m)\n    call obj%fill(y_f)" in b
     assert "  // TODO(f2cpp): size of y (obj%m in Fortran) not translatable: resize y before the call" in cpp
 
 
@@ -1658,7 +1669,7 @@ end program drv
     for f, o in (("state_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "state_mod.o", "state_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["2", "3.00"]
+    assert run_exe(["./m"], d).split() == ["2", "3.00"]
 
 
 def test_wrapped_listener(tmp_path):
@@ -1773,7 +1784,7 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
     undefined = run(["nm", "-u", "listen_mod_c_binding.o"], d)
     assert "AbstractListener" not in undefined.replace("project_AbstractListener", "")
     run(["gfortran", "listen_mod.o", "listen_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:5] == ["2 0 2 1", "4 2 4 1", "caught", "other", "F"]
+    assert run_exe(["./m"], d).split("\n")[:5] == ["2 0 2 1", "4 2 4 1", "caught", "other", "F"]
 
 def test_wrapped_handle_member_name(tmp_path):
     """name of the handle member per root type (hand-written base classes); derived classes use it"""
@@ -1815,6 +1826,7 @@ end module lng_mod
     assert names and max(len(n) for n in names) <= 63
     # free form line limit (comments included): long code lines continued, C declarations one parameter per line
     assert max(len(line) for line in b.split("\n")) <= 132
+    assert ' &\n      & bind(C, name="project_VeryLongClassNameForTesting_compute_something_with_a_rather_long_name")' in b
     if shutil.which("gfortran"):                # default line length (132)
         run(["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-I" + CORPUS,
              str(tmp_path / "lng_mod.F90"), "lng_mod_c_binding.F90"], str(tmp_path))
@@ -1921,12 +1933,21 @@ def test_reverse_wrapped_types(tmp_path):
                                                          "thing_factory_mod_c_binding.F90"))
     tw = (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()          # the Fortran types implemented in C++
     fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
+    # long use statements: "&" also on the continued line, aligned after "only: "
+    assert "  use thing_factory_mod, only: AbstractThingFactory_type, register_thing_factory, &\n" \
+           "  &                            unregister_thing_factory\n" in fw
     h, lh, lc = ((tmp_path / f).read_text() for f in ("thing_mod.h", "linear_thing_mod.hpp", "linear_thing_mod.cpp"))
     # C struct per C++ object: function pointers (typedefs named like the abstract interfaces), destroy, userData
     assert "typedef struct project_AbstractThing project_AbstractThing;" in flat(h)
     assert "typedef void (*project_AbstractThing_evaluate)(project_AbstractThing*,\n" + \
            "".join(" " * 47 + p + "\n" for p in ("const PROJECT_REAL*,", "int,", "PROJECT_REAL*,", "int,", "int*);")) in h
-    assert "typedef void (*project_AbstractThing_weight)(project_AbstractThing*, PROJECT_REAL*);" in h   # short
+    assert "typedef void (*project_AbstractThing_weight)(const project_AbstractThing*, PROJECT_REAL*);" in h  # intent(in)
+    assert "typedef void (*project_AbstractThing_reset)(project_AbstractThing*);" in h                    # intent(inout)
+    assert "  static void weight_wrapper(const project_AbstractThing* self, scalar* w) noexcept;" in th
+    assert "  const AbstractThing* thing = static_cast<const AbstractThing*>(self->userData);\n  try\n  {\n" \
+           "    *w = thing->weight();" in tc                                      # the object before the try
+    assert '    if( y_v.size() != y_n )\n      throw std::length_error("AbstractThing::evaluate: dimension of ' \
+           'parameter y changed!");' in tc
     assert "struct project_AbstractThing\n{\n  project_AbstractThing_evaluate evaluate = nullptr;\n" \
            "  project_AbstractThing_weight weight = nullptr;\n  project_AbstractThing_reset reset = nullptr;\n" in flat(h)
     assert "  project_AbstractThing_destroy destroy = nullptr;\n  void* userData = nullptr;\n};" in h and "p_impl" not in h
@@ -1948,7 +1969,7 @@ def test_reverse_wrapped_types(tmp_path):
     # bindings with a default implementation: virtual, the translated default, forwarded as well
     assert "  virtual void reset();" in th and "  virtual scalar offset() const;" in th
     assert "void AbstractThing::reset()\n{\n}" in tc and "scalar AbstractThing::offset() const\n{\n  scalar o = 0.0;\n  return o;\n}" in tc
-    assert "    procedure :: reset => cwrapperthing_reset\n    procedure :: offset => cwrapperthing_offset" in tw
+    assert "    procedure :: reset\n    procedure :: offset\n" in tw and "  subroutine reset(this)\n" in tw   # binding names
     assert "  static void evaluate_wrapper(project_AbstractThing* self, const scalar* x, int x_n, scalar* y, " \
            "int y_n, int* ierr) noexcept;" in th
     assert "  //! internal wrapper for evaluate\n  static void evaluate_wrapper(" in th
@@ -1976,7 +1997,7 @@ def test_reverse_wrapped_types(tmp_path):
     assert "#define C_REAL C_DOUBLE\n#endif\n\nmodule thing_mod_c_binding\n" in tb
     assert tb.index("  ! interface declarations\n  abstract interface\n!@c_declaration\n!typedef void (*project_AbstractThing_evaluate)") < \
         tb.index("  ! type declarations\n!@c_declaration\n!struct project_AbstractThing\n") < tb.index("\ncontains\n")
-    assert "public :: cwrapperthing_evaluate" not in tw
+    assert "public :: evaluate" not in tw
     assert "    call c_f_procpointer(this%c%evaluate, f)\n    call f(c_loc(this%c), x, int(size(x), C_INT), y, " \
            "int(size(y), C_INT), ierr)\n" in tw and "_c(:)" not in tw      # same kinds: passed directly
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)" in fw
@@ -1996,7 +2017,7 @@ def test_reverse_wrapped_types(tmp_path):
         run(ff + [os.path.join(r, f)], os.path.join(d, "ref"))
     run(["gfortran", "config_mod.o", "thing_mod.o", "thing_factory_mod.o", "linear_thing_mod.o", "thing_user_mod.o",
          "ref_main.o", "-o", "ref"], os.path.join(d, "ref"))
-    ref = run(["./ref"], os.path.join(d, "ref"))
+    ref = run_exe(["./ref"], os.path.join(d, "ref"))
     fsrc = [os.path.join(SUPPORT, "project_str.F90")] + wrapped + [os.path.join(r, "thing_user_mod.F90"), "config_mod_c_binding.F90",
             "thing_mod_c_binding.F90", "project_c_wrapper_thing_mod.F90", "thing_factory_mod_c_binding.F90",
             "project_c_wrapper_thing_factory_mod.F90", os.path.join(r, "mixed_main.F90")]
@@ -2012,13 +2033,13 @@ def test_reverse_wrapped_types(tmp_path):
     objs = [os.path.splitext(os.path.basename(f))[0] + ".o" for f in fsrc] + \
         [f + "_cpp.o" for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod")]
     run(["gfortran"] + objs + ["-lstdc++", "-o", "mixed"], d)
-    assert run(["./mixed"], d) == ref
+    assert run_exe(["./mixed"], d) == ref
     # the translated pFUnit test of the implementation (gtest, linked with the Fortran parts)
     if os.path.exists("/usr/include/gtest/gtest.h"):
         run(gxx + ["test_linear_thing_mod.cpp", "-o", "test_cpp.o"], d)
         run(["g++"] + [o for o in objs if o != "mixed_main.o"] + ["test_cpp.o", "-lgtest", "-lgtest_main", "-lpthread",
                                                                   "-lgfortran", "-o", "gt"], d)
-        assert "[  PASSED  ] 1 test" in run(["./gt"], d)
+        assert "[  PASSED  ] 1 test" in run_exe(["./gt"], d)
 
 
 def test_unlimited_polymorphic_as_any(tmp_path):
@@ -2103,7 +2124,7 @@ extern "C" void run(project_Counter* h)
     for f, o in (("fstate_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "fstate_mod.o", "fstate_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["5", "caught", "5"]
+    assert run_exe(["./m"], d).split() == ["5", "caught", "5"]
     if shutil.which("valgrind"):
         out = subprocess.run(["valgrind", "--error-exitcode=3", "--leak-check=full", "./m"], cwd=d,
                              capture_output=True, text=True)
@@ -2131,12 +2152,12 @@ end module rs_mod
     translate([], cfg(wrap_reverse=["abstracts_type"]), str(tmp_path), wrap=[str(tmp_path / "rs_mod.F90")])
     b = (tmp_path / "project_c_wrapper_rs_mod.F90").read_text()
     assert "! TODO(f2cpp): argument state: class(*) (C++ data: allocatable intent(out) / intent(in) scalars)" in b
-    assert 'error stop "cwrappers_save_state:' in b
+    assert 'error stop "save_state:' in b
     # the other direction (Fortran implementation behind the struct): TODO in the binding, the C++ wrapper throws
     fb, hpp, cpp = ((tmp_path / f).read_text() for f in ("rs_mod_c_binding.F90", "rs_mod_c_wrapper.hpp",
                                                          "rs_mod_c_wrapper.cpp"))
     assert "    ! TODO(f2cpp): save_state not wrapped (argument state: class(*)): C++ CWrapperS::save_state throws\n" in fb
-    assert "  void save_state(std::any& state) const override;" in hpp
+    assert "  virtual void save_state(std::any& state) const override;" in hpp
     assert "void CWrapperS::save_state(std::any& state) const\n{\n  // TODO(f2cpp): argument state: class(*)\n" \
            '  throw std::logic_error("CWrapperS::save_state: not wrapped (argument state: class(*))");' in cpp
 
@@ -2189,7 +2210,9 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     translate([], c, d, wrap=[os.path.join(r, "thing_mod.F90")])
     hpp, cpp = (tmp_path / "thing_mod_c_wrapper.hpp").read_text(), (tmp_path / "thing_mod_c_wrapper.cpp").read_text()
     assert "Wrapper" not in (tmp_path / "thing_mod.hpp").read_text().replace("_wrapper", "")
-    assert '#include "thing_mod.hpp"\n\nnamespace project\n{\n\nnamespace AbstractThing_private\n{\n' in hpp
+    assert '#include "thing_mod.hpp"\n\n#include "thing_mod.h"  // the C struct (internal header)\n\nnamespace project\n{\n\n' \
+           'namespace AbstractThing_private\n{\n' in hpp
+    assert "  project_AbstractThing other_{};  //!< the struct of the implementation (copy)" in hpp
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
     # file headers: original header, @file renamed, @brief prefixed
     assert hpp.startswith("//! @file thing_mod_c_wrapper.hpp\n//! @brief C++ wrapper of C structs: things evaluated")
@@ -2197,13 +2220,13 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     assert (tmp_path / "project_c_wrapper_thing_mod.F90").read_text().startswith(
         "!> @file project_c_wrapper_thing_mod.F90\n!> @brief Fortran types implemented in C++: things evaluated")
     assert "class CWrapperThing final : public AbstractThing\n{\npublic:\n  CWrapperThing() = default;" in hpp
-    assert "  explicit CWrapperThing(project_AbstractThing& c);  //!< calls the function pointers of c" in hpp
-    assert "CWrapperThing::CWrapperThing(project_AbstractThing& c) : other_(&c)\n{\n}" in cpp
+    assert "  explicit CWrapperThing(const project_AbstractThing& c);  //!< calls the function pointers of c" in hpp
+    assert "CWrapperThing::CWrapperThing(const project_AbstractThing& c) : other_(c)\n{\n}" in cpp
     assert "  //! override base class implementation -> call corresponding C function pointer\n" \
-           "  void evaluate(const vec& x, vec& y) override;" in hpp
-    assert '#include "thing_mod_c_wrapper.hpp"' in cpp and '#include "thing_mod.h"' in cpp
+           "  virtual void evaluate(const vec& x, vec& y) override;" in hpp
+    assert '#include "thing_mod_c_wrapper.hpp"' in cpp and '#include "thing_mod.h"' in hpp     # internal header
     assert "namespace AbstractThing_private\n{\n\nCWrapperThing::CWrapperThing(" in cpp and "\nvoid CWrapperThing::evaluate(" in cpp
-    assert "  other_->evaluate(other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
+    assert "  other_.evaluate(&other_, x.data(), static_cast<int>(x.size()), y.data(), static_cast<int>(y.size()), &ierr);" in cpp
     # no binding label (no global symbol): only the target of a function pointer
     assert "  subroutine wrap_evaluate(this, x, x_n, y, y_n, ierr) bind(C, name=\"\")\n" in b and "wrap_evaluate" not in h
     assert "    call c_f_pointer(this_c%userData, wrapper)\n    call wrapper%ptr%evaluate(x, y, ierr_f)" in b
@@ -2281,7 +2304,7 @@ extern "C" void run(project_AbstractThing* c)
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "thing_mod.o", "thing_mod_c_binding.o", "const_thing_mod.o", "drv.o", "glue.o", "cw.o", "run.o",
          "-lstdc++", "-o", "m"], d)
-    assert run(["./m"], d).split() == ["25", "caught", "empty"]
+    assert run_exe(["./m"], d).split() == ["25", "caught", "empty"]
 
 
 def test_wrap_sizes_from_documentation(tmp_path):
@@ -2292,7 +2315,7 @@ def test_wrap_sizes_from_documentation(tmp_path):
     cpp, b = read((d,), "shape_mod.cpp"), read((d,), "shape_mod_c_binding.F90")
     assert "void shape::areas(vec& a) const\n{\n  a.resize(nSurface());\n" in cpp
     assert "void shape::normals(mat& nrm) const\n{\n  nrm.resize(3, nSurface());\n" in cpp
-    assert "    call obj%areas(a=a(1:obj%nSurface), ierr=ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
+    assert "    a_f => a(1:obj%nSurface)\n    call obj%areas(a_f, ierr)" in b and "a_n1" not in b and "TODO(f2cpp):" not in b + cpp
     info = report.files[os.path.join(CORPUS, "wrapped", "shape_mod.F90")]["info"]
     assert info["wrap-size-from-doc:shape_type%areas:a"] == 1 and info["wrap-size-from-doc:shape_type%normals:nrm"] == 1
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
@@ -2337,11 +2360,11 @@ def test_reverse_type_constants(tmp_path):
     assert "    integer(C_INT) :: stateSize = 0\n" in b and "    cthing%stateSize = fthing%ptr%stateSize" in b
     assert "      call c_f_pointer(c, x%c)\n      x%stateSize = x%c%stateSize\n      x%inputSize = x%c%inputSize" in cw
     cwc = read((d,), "convergence_mod_c_wrapper.cpp")
-    assert 'CWrapperThing::CWrapperThing(project_Thing& c) : Thing(c.stateSize, c.inputSize, ' \
-           'std::string(c.label != nullptr ? c.label : "")), other_(&c)' in cwc
+    assert 'CWrapperThing::CWrapperThing(const project_Thing& c) : Thing(c.stateSize, c.inputSize, ' \
+           'std::string(c.label != nullptr ? c.label : "")), other_(c)' in cwc
     # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
-    assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
+    assert "  Thing* thing = static_cast<Thing*>(self->userData);\n  const int state_n = thing->stateSize();" in cpp
     assert "bool* needAnotherIteration, int* ierr) noexcept" in cpp       # declared spelling
     assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
     assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and \
@@ -2353,11 +2376,14 @@ def test_reverse_type_constants(tmp_path):
     sep = "    !" + "-" * 70 + "\n"                 # after the dummies and after the locals
     assert "    integer(C_INT), intent(out) :: ierr\n" + sep + "    type(Thing_c), pointer :: this_c\n" in b
     assert "    logical :: needAnotherIteration_f\n" + sep + "    call c_f_pointer(this, this_c)\n" in b
-    assert "    INTEGER, INTENT(OUT) :: ierr\n" + sep + "    procedure(project_Thing_check_convergence), pointer :: f\n" in cw
+    assert "    real, contiguous, target, intent(in) :: state(:)  !< new state, dimension (this\\%stateSize)\n" in cw
+    assert "    PROJECT_CHK_IERR(call f(c_loc(this%c), state, input, time, reset_c, needAnotherIteration_c, ierr), " \
+           "ierr)\n" in cw
+    assert "    integer, intent(out) :: ierr  !< error flag\n" + sep + "    procedure(project_Thing_check_convergence), pointer :: f\n" in cw
     assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
            "needAnotherIteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
-    assert '  if (state.size() != stateSize()) throw std::invalid_argument("CWrapperThing::check_convergence: ' \
-           'size of state");' in cwc
+    assert '  if( state.size() != stateSize() )\n    throw std::invalid_argument("CWrapperThing::check_convergence: ' \
+           'wrong dimension of parameter state!");' in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
@@ -2451,7 +2477,7 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)       # convergence_mod.o: the Fortran module
     run(["g++", "project_str.o", "model_base_mod.o", "convergence_mod.o", "convergence_mod_c_binding.o", "project_c_wrapper_convergence_mod.o", "drv.o",
          "convergence_mod_cxx.o", "convergence_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:4] == ["  2  1 cpp", "  0 F", " -2", " 1311"]     # -2: PROJECT_CHK_ARGUMENT
+    assert run_exe(["./m"], d).split("\n")[:4] == ["  2  1 cpp", "  0 F", " -2", " 1311"]     # -2: PROJECT_CHK_ARGUMENT
 
 
 def test_reverse_class_star_cpp_data(tmp_path):
@@ -2476,8 +2502,9 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "    state = f2cpp_any_new(state_f)" in b
     assert "    call move_alloc(state_h%p, state_f)\n    call wrapper%ptr%set_internal_state(state_f, ierr_f)\n" \
            "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
-    assert "  state = any_from_fortran(state_c);\n  if (ierr != 0)" in cwc
-    assert "  other_->set_internal_state(other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
+    assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
+           "project_StateModel::get_internal_state function pointer in CWrapperStateModel::get_internal_state!\");" in cwc
+    assert "  other_.set_internal_state(&other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
@@ -2618,7 +2645,7 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
     run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
          "state_model_mod_cxx.o", "state_model_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
+    assert run_exe(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
 
 
 def test_reverse_any_name_of_a_prefixed_module(tmp_path):
@@ -2692,4 +2719,77 @@ def test_reverse_string_constants_with_project_helpers(tmp_path):
               "-Wno-unused-dummy-argument", "-I" + CORPUS]
         for f in (os.path.join(SUPPORT, "project_str.F90"), base, os.path.join(r, "convergence_mod.F90"),
                   "convergence_mod_c_binding.F90"):
+            run(ff + [f], d)
+
+
+
+def test_wrapped_module_in_a_subdirectory(tmp_path):
+    """module_headers with a directory: all outputs of a wrapped module go there (created)"""
+    (tmp_path / "x.toml").write_text('[module_headers]\nmysolver_mod = "solvers/MySolver.hpp"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path / "out"), wrap=[os.path.join(CORPUS, "wrapped", "mysolver_mod.F90")])
+    for f in ("MySolver.hpp", "MySolver.cpp", "MySolver.h", "MySolver_c_binding.F90"):
+        assert (tmp_path / "out" / "solvers" / f).exists(), f
+
+
+
+def test_wrapped_calls_with_error_macro(tmp_path):
+    """wrap_chk_ierr: binding calls of wrapped methods inside PROJECT_CHK_IERR (also in the select type of a derived
+    class); positional actual arguments"""
+    d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
+    translate([], cfg(wrap_chk_ierr=["PROJECT_CHK_IERR", "project_macros.h"],
+                      wrap_fail=["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"]), d,
+              wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
+    sb = read((d,), "sphere_mod_c_binding.F90")
+    assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n" \
+           "      PROJECT_CHK_IERR(call obj%grow(dr, ierr), ierr)\n    class default\n" \
+           "      PROJECT_ASSERT(.false., ierr)\n    end select" in sb        # wrap_fail
+    assert '#include "project_macros.h"\n' in sb
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+              "-Wno-unused-dummy-argument", "-I" + CORPUS]
+        for f in (os.path.join(w, "body_mod.F90"), "body_mod_c_binding.F90", os.path.join(w, "sphere_mod.F90"),
+                  "sphere_mod_c_binding.F90"):
+            run(ff + [f], d)
+
+
+def test_cwrapper_procedure_names(tmp_path):
+    """c_wrapper module: procedures named like the bindings; prefixed for a second type with the same binding
+    name and for names of intrinsics"""
+    (tmp_path / "two_mod.F90").write_text("""module two_mod
+  implicit none
+  type, abstract :: A_type
+  contains
+    procedure(run_a), deferred :: run
+    procedure(size_a), deferred :: size
+  end type A_type
+  type, abstract :: B_type
+  contains
+    procedure(run_b), deferred :: run
+  end type B_type
+  abstract interface
+    subroutine run_a(this)
+      import :: A_type
+      class(A_type), intent(inout) :: this
+    end subroutine run_a
+    function size_a(this) result(n)
+      import :: A_type
+      class(A_type), intent(in) :: this
+      integer :: n
+    end function size_a
+    subroutine run_b(this)
+      import :: B_type
+      class(B_type), intent(inout) :: this
+    end subroutine run_b
+  end interface
+end module two_mod
+""")
+    d = str(tmp_path)
+    translate([], cfg(wrap_reverse=["a_type", "b_type"]), d, wrap=[str(tmp_path / "two_mod.F90")])
+    cw = (tmp_path / "project_c_wrapper_two_mod.F90").read_text()
+    assert "    procedure :: run\n    procedure :: size => cwrappera_size\n" in cw
+    assert "    procedure :: run => cwrapperb_run\n" in cw
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-Wall", "-Werror", "-Wno-unused-dummy-argument"]
+        for f in ("two_mod.F90", "two_mod_c_binding.F90", "project_c_wrapper_two_mod.F90"):
             run(ff + [f], d)

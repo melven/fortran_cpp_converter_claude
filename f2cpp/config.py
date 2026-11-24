@@ -122,7 +122,7 @@ DEFAULTS = {
     # NS_SINGLE_PRECISION, module ns_str
     "c_prefix": None,                         # <ns>_<Class>_<method>
     "c_class_names": {},
-    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)                      # Fortran type -> class name in C names (shorter names)
+    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)
     "c_real": None,                           # C type macro of real: <NS>_REAL
     "c_single_precision": None,               # <NS>_SINGLE_PRECISION
     "c_decl_width": 100,                      # longer C declarations (binding comments): one parameter per line
@@ -133,6 +133,10 @@ DEFAULTS = {
     # error flag check of calls in generated Fortran (wrap_<method>): [macro, Fortran include file],
     # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
     "wrap_chk_ierr": None,
+    # error statement of generated Fortran with error flag (wrong object type, wrong class(*) data, size checks
+    # without wrap_chk_argument), {ierr}: the flag; must return; [statement, Fortran include file], e.g.
+    # ["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"] (or the statement alone); None: ierr = -1 and return
+    "wrap_fail": None,
     "wrap_string_in": None,
     # Fortran string -> new C string and its deletion (character constants of reverse types): [module, copy, delete]
     # copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:);
@@ -248,7 +252,8 @@ def load(path=None, **overrides):
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
     cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
     cfg["c_procedure_names"] = {k.lower(): v for k, v in cfg["c_procedure_names"].items()}
-    for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map", "module_headers", "kind_map"):    # Fortran names
+    for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map",
+                "module_headers", "kind_map"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
