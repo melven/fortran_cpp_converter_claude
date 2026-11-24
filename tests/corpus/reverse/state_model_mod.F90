@@ -10,6 +10,7 @@ module state_model_mod
     procedure(set_iface), deferred :: set_internal_state
     procedure(step_iface), deferred :: step
     procedure(value_iface), deferred :: value
+    procedure(has_iface), deferred :: has_state
   end type StateModel_type
 
   abstract interface
@@ -34,6 +35,14 @@ module state_model_mod
       import :: StateModel_type
       class(StateModel_type), intent(inout) :: this
     end subroutine step_iface
+
+    !> whether a state is given (allocatable: may be unallocated)
+    subroutine has_iface(this, state, given)
+      import :: StateModel_type
+      class(StateModel_type), intent(in) :: this
+      class(*), allocatable, intent(in) :: state   !< internal state or nothing
+      logical, intent(out) :: given                !< state allocated
+    end subroutine has_iface
 
     !> the current value
     function value_iface(this) result(v)

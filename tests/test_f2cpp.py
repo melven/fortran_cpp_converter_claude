@@ -2524,8 +2524,10 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "  void* userData = nullptr;\n};" in h
     assert "    *state = any_to_c(std::move(state_v));" in cpp and "set_internal_state(any_from_c(state));" in cpp
     assert "  c->userData = new std::any(std::move(a));  // owned by c (destroy_any)" in cpp
-    assert "    allocate(CWrapperAny_type :: state)\n    select type (state)\n    type is (CWrapperAny_type)\n" \
-           "      call c_f_pointer(state_p, state%c)\n    end select" in cw
+    assert "    if (c_associated(state_p)) then      ! NULL: unallocated\n      allocate(CWrapperAny_type :: state)\n" \
+           "      select type (state)\n      type is (CWrapperAny_type)\n        call c_f_pointer(state_p, state%c)\n" \
+           "      end select\n    end if" in cw
+    assert "  if( !a.has_value() )\n    return nullptr;  // unallocated in Fortran" in cpp
     assert "    type is (CWrapperAny_type)\n      if (associated(state%c)) state_p = c_loc(state%c)\n" \
            "    class default\n      ierr = -1\n      return\n    end select" in cw
     assert "public :: CWrapperAny_type" not in cw and "    final :: cwrapperany_final" in cw
@@ -2552,6 +2554,7 @@ def test_reverse_class_star_cpp_data(tmp_path):
     procedure :: set_internal_state => fc_set
     procedure :: step => fstep
     procedure :: value => fvalue
+    procedure :: has_state => fhas
   end type FCounter_type
   interface
     function run_cpp(c) result(code) bind(C, name="run_cpp")
@@ -2565,7 +2568,7 @@ contains
     class(FCounter_type), intent(in) :: this
     class(*), allocatable, intent(out) :: state
     integer, intent(out) :: ierr
-    allocate(state, source=this%n)
+    if (this%n /= 0) allocate(state, source=this%n)     ! n == 0: no state (unallocated)
     ierr = 0
   end subroutine fc_get
   subroutine fc_set(this, state, ierr)
@@ -2583,6 +2586,12 @@ contains
     class(FCounter_type), intent(inout) :: this
     this%n = this%n + 1
   end subroutine fstep
+  subroutine fhas(this, state, given)
+    class(FCounter_type), intent(in) :: this
+    class(*), allocatable, intent(in) :: state
+    logical, intent(out) :: given
+    given = allocated(state)
+  end subroutine fhas
   function fvalue(this) result(v)
     class(FCounter_type), intent(in) :: this
     integer :: v
@@ -2595,14 +2604,19 @@ contains
     integer :: ierr
     fw%ptr => fc
     call create_StateModel_C_from_Fortran(fw, ct, ierr)
-    print '(i4)', run_cpp(c_loc(ct))
+    print '(i6)', run_cpp(c_loc(ct))
   end subroutine fortran_side
   subroutine use_model(c) bind(C, name="use_model")
     type(C_PTR), value :: c
     class(StateModel_type), allocatable :: m
     class(*), allocatable :: s, s2
     integer :: ierr
+    class(*), allocatable :: s0
+    logical :: given
     call project_StateModel_wrap(c, m)
+    call m%get_internal_state(s0, ierr)        ! C++: empty std::any -> unallocated
+    call m%has_state(s0, given)                ! unallocated -> empty std::any
+    print '(2l2)', allocated(s0), given
     call m%step()
     call m%get_internal_state(s, ierr)        ! C++ data (value 1)
     call m%step()
@@ -2616,6 +2630,8 @@ contains
     print '(2i3)', ierr, m%value()
     call m%set_internal_state(42, ierr)        ! Fortran data: rejected
     print '(i3)', ierr
+    call m%has_state(s2, given)                ! C++ data -> a non-empty std::any
+    print '(l2)', given
     deallocate(s2)                             ! deletes the C++ data
   end subroutine use_model
 end module drv_mod
@@ -2630,6 +2646,19 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
 {
   project::StateModel_private::CWrapperStateModel w(*c);
   std::any s;
+  bool given = true;
+  w.get_internal_state(s);                       // Fortran: unallocated -> empty std::any
+  int empty = s.has_value() ? 0 : 1;
+  w.has_state(std::any(), given);                // empty -> unallocated (allocatable dummy)
+  empty += given ? 0 : 1;
+  try
+  {
+    w.set_internal_state(std::any());            // empty for a non-allocatable dummy: error
+  }
+  catch (const std::runtime_error&)
+  {
+    empty += 1;
+  }
   w.step();
   w.get_internal_state(s);                       // Fortran data (value 1)
   std::any shared = s;                           // copies share it
@@ -2638,6 +2667,8 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
   int code = 100 * w.value();
   w.set_internal_state(shared);
   code += 10 * w.value();
+  w.has_state(shared, given);                    // Fortran data -> allocated
+  code += given ? 10000 * empty : 0;
   try
   {
     w.set_internal_state(std::any(5));           // C++ data: rejected
@@ -2651,7 +2682,12 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
 class Counter : public project::StateModel
 {
 public:
-  void get_internal_state(std::any& state) const override { state = n_; }
+  void get_internal_state(std::any& state) const override
+  {
+    if( n_ != 0 )                                // 0: no state (empty)
+      state = n_;
+  }
+  void has_state(const std::any& state, bool& given) const override { given = state.has_value(); }
   void set_internal_state(const std::any& state) override { n_ = std::any_cast<int>(state); }
   void step() override { ++n_; }
   int value() const override { return n_; }
@@ -2677,7 +2713,7 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
     run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
          "state_model_mod_cxx.o", "state_model_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run_exe(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
+    assert run_exe(["./m"], d).split("\n")[:7] == [" F F", "  0  3", "  0  1", "  0  1", " -1", " T", " 30311"]
 
 
 def test_reverse_any_name_of_a_prefixed_module(tmp_path):

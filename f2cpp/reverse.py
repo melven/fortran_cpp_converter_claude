@@ -108,8 +108,9 @@ class ReverseMixin:
                     locals_.append(f"type(C_PTR) :: {a}_p")
                     pre.append(f"{a}_p = C_NULL_PTR")
                     actuals.append(f"{a}_p")
-                    post += [f"allocate({ca['fw']} :: {a})", f"select type ({a})", f"type is ({ca['fw']})",
-                             f"  call c_f_pointer({a}_p, {a}%c)", "end select"]
+                    post += [f"if (c_associated({a}_p)) then      ! NULL: unallocated", f"  allocate({ca['fw']} :: {a})",
+                             f"  select type ({a})", f"  type is ({ca['fw']})", f"    call c_f_pointer({a}_p, {a}%c)",
+                             "  end select", "end if"]
                     cpp_init.append(f"*{a} = nullptr;")
                     cpp_pre.append(f"std::any {a}_v;")
                     cpp_args.append(f"{a}_v")
@@ -532,8 +533,9 @@ class ReverseMixin:
                 f"void destroy_any({ht}* c) noexcept", "{",
                 "  std::unique_ptr<std::any> data(static_cast<std::any*>(c->userData));",
                 f"  std::unique_ptr<{ht}> owner(c);", "}", "",
-                "//! C++ data for Fortran (class(*)): owned by the Fortran object",
-                f"{ht}* any_to_c(std::any a)", "{", f"  auto c = std::make_unique<{ht}>();",
+                "//! C++ data for Fortran (class(*)): owned by the Fortran object (empty: NULL)",
+                f"{ht}* any_to_c(std::any a)", "{", "  if( !a.has_value() )", "    return nullptr;  // unallocated in Fortran",
+                f"  auto c = std::make_unique<{ht}>();",
                 "  c->destroy = &destroy_any;",
                 "  c->userData = new std::any(std::move(a));  // owned by c (destroy_any)",
                 "  return c.release();", "}", "",
@@ -1035,9 +1037,14 @@ class ReverseMixin:
                     locals_.append(f"type(AnyHolder_type), pointer :: {a}_h")
                     stop = [f"  {x}" for x in self.fail_lines(err)] if has_err else \
                         [f'  error stop "{routine}: {cn} is not Fortran data"']
-                    pre += [f"if (.not. f2cpp_any_holder({a}, {a}_h)) then"] + stop + ["end if",
-                            f"call move_alloc({a}_h%p, {a}_f)"]
-                    post.insert(0, f"call move_alloc({a}_f, {a}_h%p)")
+                    if v.has("allocatable"):    # NULL: unallocated; other (C++) data: error
+                        pre += [f"if (f2cpp_any_holder({a}, {a}_h)) then", f"  call move_alloc({a}_h%p, {a}_f)",
+                                f"else if (c_associated({a})) then"] + stop + ["end if"]
+                        post.insert(0, f"if (associated({a}_h)) call move_alloc({a}_f, {a}_h%p)")
+                    else:                       # must be present: NULL (empty std::any) is an error as well
+                        pre += [f"if (.not. f2cpp_any_holder({a}, {a}_h)) then"] + stop + ["end if",
+                                f"call move_alloc({a}_h%p, {a}_f)"]
+                        post.insert(0, f"call move_alloc({a}_f, {a}_h%p)")
                     keep_ierr = True            # the data goes back to its holder also on errors
                     cpp_args.append(f"{self.any_ns()}::any_to_fortran({cn})")
                 any_data = True
