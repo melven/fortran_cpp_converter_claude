@@ -2114,6 +2114,32 @@ extern "C" void run(project_Counter* h)
   {
     std::printf("caught\n");
   }
+  std::any none;
+  c->empty_state(none);               // unallocated -> empty std::any
+  std::printf("%s\n", none.has_value() ? "value" : "empty");
+  try
+  {
+    c->set_state(none);               // empty -> unallocated in Fortran -> ierr -> exception
+  }
+  catch (const std::runtime_error&)
+  {
+    std::printf("caught empty\n");
+  }
+  std::any r;
+  c->real_state(r);
+  for (int k = 0; k < 2; ++k)         // rejected by Fortran (ierr): the data goes back to its holder each time
+  {
+    try
+    {
+      c->set_state(r);
+    }
+    catch (const std::runtime_error&)
+    {
+      std::printf("caught real\n");
+    }
+  }
+  c->set_state(copy);                 // the first state is still intact
+  std::printf("%d\n", c->n());
 }
 """)
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-Wall", "-Werror",
@@ -2124,7 +2150,8 @@ extern "C" void run(project_Counter* h)
     for f, o in (("fstate_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "fstate_mod.o", "fstate_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run_exe(["./m"], d).split() == ["5", "caught", "5"]
+    assert run_exe(["./m"], d).split("\n")[:8] == ["5", "caught", "empty", "caught empty", "caught real", "caught real",
+                                                  "5", "5"]
     if shutil.which("valgrind"):
         out = subprocess.run(["valgrind", "--error-exitcode=3", "--leak-check=full", "./m"], cwd=d,
                              capture_output=True, text=True)
