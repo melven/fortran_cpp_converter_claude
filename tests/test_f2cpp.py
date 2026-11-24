@@ -1944,7 +1944,8 @@ def test_reverse_wrapped_types(tmp_path):
     assert "typedef void (*project_AbstractThing_weight)(const project_AbstractThing*, PROJECT_REAL*);" in h  # intent(in)
     assert "typedef void (*project_AbstractThing_reset)(project_AbstractThing*);" in h                    # intent(inout)
     assert "  static void weight_wrapper(const project_AbstractThing* self, scalar* w) noexcept;" in th
-    assert "static_cast<const AbstractThing*>(self->userData)->weight()" in tc
+    assert "  const AbstractThing* thing = static_cast<const AbstractThing*>(self->userData);\n  try\n  {\n" \
+           "    *w = thing->weight();" in tc                                      # the object before the try
     assert '    if( y_v.size() != y_n )\n      throw std::length_error("AbstractThing::evaluate: dimension of ' \
            'parameter y changed!");' in tc
     assert "struct project_AbstractThing\n{\n  project_AbstractThing_evaluate evaluate = nullptr;\n" \
@@ -2363,7 +2364,7 @@ def test_reverse_type_constants(tmp_path):
            'std::string(c.label != nullptr ? c.label : "")), other_(c)' in cwc
     # sizes known on both sides (constants): no size argument, checked in Fortran and in C++
     assert "typedef void (*project_Thing_check_convergence)(project_Thing*,\n" in h and "_n" not in flat(h)
-    assert "  const int state_n = static_cast<Thing*>(self->userData)->stateSize();" in cpp
+    assert "  Thing* thing = static_cast<Thing*>(self->userData);\n  const int state_n = thing->stateSize();" in cpp
     assert "bool* needAnotherIteration, int* ierr) noexcept" in cpp       # declared spelling
     assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
     assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and \
@@ -2375,10 +2376,10 @@ def test_reverse_type_constants(tmp_path):
     sep = "    !" + "-" * 70 + "\n"                 # after the dummies and after the locals
     assert "    integer(C_INT), intent(out) :: ierr\n" + sep + "    type(Thing_c), pointer :: this_c\n" in b
     assert "    logical :: needAnotherIteration_f\n" + sep + "    call c_f_pointer(this, this_c)\n" in b
-    assert "    real, contiguous, target, intent(in) :: state(:)\n" in cw      # lower case keywords
+    assert "    real, contiguous, target, intent(in) :: state(:)  !< new state, dimension (this\\%stateSize)\n" in cw
     assert "    PROJECT_CHK_IERR(call f(c_loc(this%c), state, input, time, reset_c, needAnotherIteration_c, ierr), " \
            "ierr)\n" in cw
-    assert "    integer, intent(out) :: ierr\n" + sep + "    procedure(project_Thing_check_convergence), pointer :: f\n" in cw
+    assert "    integer, intent(out) :: ierr  !< error flag\n" + sep + "    procedure(project_Thing_check_convergence), pointer :: f\n" in cw
     assert "    PROJECT_CHK_IERR(call wrapper%ptr%check_convergence(state_f, input_f, time, reset_f, " \
            "needAnotherIteration_f, ierr), ierr)\n" in b and "ierr_f" not in b
     assert '  if( state.size() != stateSize() )\n    throw std::invalid_argument("CWrapperThing::check_convergence: ' \

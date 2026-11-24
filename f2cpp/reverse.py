@@ -80,6 +80,14 @@ class ReverseMixin:
         c_params, f_dummies, f_decls = [self_c], [self_dummy], [f"type(C_PTR), value :: {self_dummy}"]
         locals_, checks, pre, post, actuals = [], [], [], [], [self_actual]
         cpp_init, cpp_pre, cpp_args, cpp_post = [], [], [], []
+        # the C++ object as a named variable before the try block (debugging): AbstractThing* thing = ...
+        obj_var = re.sub(r"^Abstract", "", cls)
+        obj_var = obj_var[:1].lower() + obj_var[1:]
+        if obj_var in {v.cname for v in iface.vars.values()}:
+            obj_var += "_obj"
+        const_obj = "const " if f"static_cast<const {cls}*>" in cpp_obj else ""
+        cpp_init.append(f"{const_obj}{cls}* {obj_var} = {cpp_obj};")
+        cpp_obj = obj_var
         todo = None
         fail = self.fail_lines(err) if has_err else [f'error stop "{proc}: called for another object than its owner"']
         for a in iface.args:
@@ -254,9 +262,12 @@ class ReverseMixin:
         out.append(f"  {kw} {proc}({', '.join(args)})" + (f" result({iface.result})" if res_v is not None else ""))
         for node in decl_nodes:                 # the interface of the deferred binding, the bridge as object
             text = lower_keywords(str(node))
-            if this in [lname(e.items[0]) for e in items_of(node.items[2])]:
+            names = [lname(e.items[0]) for e in items_of(node.items[2])]
+            if this in names:
                 text = re.sub(rf"(?i)class\s*\(\s*{re.escape(lt.name)}\s*\)", f"class({self.bridge_name(lt)})", text)
-            out.append(f"    {text}")
+            docs = [line for ns, lines in iface.param_docs if set(ns) & set(names) for line in lines]
+            out.append(f"    {text}" + (f"  !< {docs[0]}" if docs else ""))     # the original comments
+            out += [f"    !< {line}" for line in docs[1:]]
         if res_v is not None and res_v.node is None:        # result declared by the function prefix
             out.append(f"    {self.fortran_decl(res_v)} :: {iface.result}")
         elif res_v is not None and res_v.node not in decl_nodes:
