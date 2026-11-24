@@ -506,6 +506,7 @@ class ModuleEmitter:
                 if tpl and tr.declares_self(tpl) and not v.is_dummy:
                     self.template_declared.add(v.name)
         moved, loop_local = {}, set()
+        tr.body_decl = {}               # id(assignment) -> variable declared there (inside a loop body)
         for n, v in p.vars.items():
             if n in self.template_declared:
                 continue
@@ -520,9 +521,32 @@ class ModuleEmitter:
             if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]) \
                     and moved_ok:
                 loop_local.add(n)
+            elif moved_ok and v.rank == 0 and not v.companions and self.loop_body_decl(tr, n, v, top, uses[n]):
+                pass                            # declared at its first assignment inside a loop body
             elif moved_ok:
                 moved[n] = min(k for k, _ in uses[n])
         return moved, loop_local
+
+    def loop_body_decl(self, tr, n, v, top, uses):
+        """scalar n used only inside one loop (the innermost containing all uses) whose first statement using it
+        assigns it (n = expr without n): declared there, in the loop body (tr.body_decl)"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        if any(nm is None for _, nm in uses) or len({k for k, _ in uses}) != 1:
+            return False
+        ids = {id(nm) for _, nm in uses}
+        loops = [d for d in walk(top[uses[0][0]], F.Block_Nonlabel_Do_Construct)
+                 if ids <= {id(x) for x in walk(d, F.Name)} and loop_var(d) != n]
+        if not loops:
+            return False
+        loop = min(loops, key=lambda d: len(walk(d, F.Name)))        # the innermost
+        body = [c for c in loop.content[1:-1] if cls(c) != "Comment"]
+        first = next((c for c in body if ids & {id(x) for x in walk(c, F.Name)}), None)
+        if first is None or cls(first) != "Assignment_Stmt" or cls(first.items[0]) != "Name" or \
+                lname(first.items[0]) != n or ids & {id(x) for x in walk(first.items[2], F.Name)}:
+            return False
+        tr.body_decl[id(first)] = v
+        return True
 
     def emit_statement(self, tr, st, ind, prev, declare, comments):
         """top-level statement with the declarations of the locals first used there; a declaration
@@ -628,9 +652,9 @@ class ModuleEmitter:
         tr.loop_local = loop_local
         if self.cfg["declare_at_first_use"]:
             tr.loop_decl = loop_local
-            skip |= set(moved) | loop_local
+            skip |= set(moved) | loop_local | {v.name for v in tr.body_decl.values()}
         else:
-            moved = {}
+            moved, tr.body_decl = {}, {}
         at = {}
         for n, k in moved.items():
             at.setdefault(k, []).append(p.vars[n])

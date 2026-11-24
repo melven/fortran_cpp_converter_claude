@@ -697,7 +697,14 @@ def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
     # merged with the defining assignment / allocate; others right before the first top-level use
     assert "  int m = A.rows();\n" in expm and "  mat As(m, m);\n" in expm
     assert "  scalar nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;\n  int s = 0;\n" in expm
-    assert "  scalar c;\n  for (int k = 2; k <= pade_coeff.size(); ++k)\n" in expm
+    # assigned first in a loop body, not used outside: declared there
+    assert "  for (int k = 2; k <= pade_coeff.size(); ++k)\n  {\n    scalar c = pade_coeff(k - 1);\n" in expm
+    assert "  scalar c;\n" not in expm
+    feat = read(out, "features_mod.cpp")
+    assert "  for (int i = 1; i <= n; ++i)\n  {\n    int a = 2 * i;" in feat
+    assert "  int b = 0;\n" in feat and "    b = b + i;" in feat         # accumulated: outside
+    body = feat.split("int loop_locals(int n)\n{")[1].split("\n}\n")[0]
+    assert "  int c;\n  int d;\n  for" in body                                # conditional / used after: outside
     assert "  int bs = this->bs;\n" in lu                     # local hides the member: still mergeable
     # loop variable used mostly as index: 0-based loop, other uses get + 1
     assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly

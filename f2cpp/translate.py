@@ -82,6 +82,7 @@ class Translator:
         self.out = []
         self.loop_local = set()    # loop variables that are only used inside their loops
         self.loop_decl = set()     # ... declared in the for statement
+        self.body_decl = {}        # id(assignment) -> variable declared there (loop body, emit.loop_body_decl)
         self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
         self.notes = []            # soft TODOs of the current statement
         self.last_err_call = None  # (line index, code) of the last call with removed error arg
@@ -1258,6 +1259,16 @@ class Translator:
     def emit(self, ind, text):
         self.out.append("  " * ind + text if text else "")
 
+    def declare_here(self, v, n0, ind):
+        """the declaration of v merged into its assignment (output from n0 on), else in front of it"""
+        t = self.cpp_type(v)
+        code = [k for k in range(n0, len(self.out)) if self.out[k].strip() and not self.out[k].strip().startswith("//")]
+        m = re.match(rf"(\s*){re.escape(v.cname)} = (.*)$", self.out[code[0]]) if len(code) == 1 else None
+        if m:
+            self.out[code[0]] = f"{m.group(1)}{t} {v.cname} = {m.group(2)}"
+        else:
+            self.out.insert(n0, "  " * ind + f"{t} {v.cname}{{}};")
+
     def internal_error(self, e, node):
         """log an internal error (stderr): where in the Fortran source and in f2cpp"""
         import traceback
@@ -1422,6 +1433,8 @@ class Translator:
                 self.emit(ind, "// F: " + str(node).split("\n")[0])
             n0 = len(self.out)
             m(node, ind)
+            if id(node) in self.body_decl:          # declared at this assignment (loop body)
+                self.declare_here(self.body_decl[id(node)], n0, ind)
             if self.notes and k not in self.CONSTRUCTS and len(self.out) > n0:
                 self.out[n0] += f"  // {TODO}: " + "; ".join(self.notes)
             self.report.add("translated", k)
@@ -1907,6 +1920,7 @@ class Translator:
         sub.named, sub.via_getters = self.named, self.via_getters
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
             self.overrides, self.shift, self.loop_local, self.loop_decl
+        sub.body_decl = self.body_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):
             self.emit(ind, f"if ({cond.code}) {sub.out[0]}")
