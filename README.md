@@ -351,10 +351,10 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 such a type is a wrapped class instead (`wrap_owned` for arrays of it passed to / from C++).
 
 `class(*), allocatable` arguments (`intent(out)` / `intent(in)`) of wrapped methods: Fortran data held by
-C++ and passed back, moved and never copied. C: the opaque holder `project_FortranAny*` (NULL: unallocated);
-C++: `std::any` with a `std::shared_ptr<FortranState>` (copies share it, the last one releases the holder in
-Fortran: `project_<module>_any_release`). C++ data in a `std::any` cannot be passed to Fortran
-(`std::invalid_argument`).
+C++ and passed back, moved and never copied. C: the struct `project_<module>_Any` (`destroy`, `userData`: a
+Fortran holder, NULL: unallocated); C++: `std::any` with a shared `FortranData` (copies share it, the last one
+deletes the data in Fortran: `destroy`), helpers `<module>_private::any_from_fortran` / `any_to_fortran`. C++
+data in a `std::any` cannot be passed to Fortran (`std::invalid_argument`).
 `class(*)` arguments of reverse-wrapped methods (`allocatable, intent(out)` / `intent(in)`): data owned by
 the other side, per module in the C struct `project_<module>_Any` (binding: `Any_c`; `destroy`, `userData`); only
 its creator unpacks it. C++ implementations: `userData` is a `std::any`; in Fortran a private `CWrapperAny_type`

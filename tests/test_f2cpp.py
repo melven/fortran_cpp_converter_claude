@@ -2065,13 +2065,18 @@ def test_wrapped_unlimited_polymorphic_state(tmp_path):
     b = (tmp_path / "fstate_mod_c_binding.F90").read_text()
     assert "  void get_state(std::any& state) const;" in hpp and "  void set_state(const std::any& state);" in hpp
     h = (tmp_path / "fstate_mod.h").read_text()
-    assert "class FortranState" in hpp and "#include <any>" in hpp and "struct project_FortranAny;" in hpp
-    assert "void project_Counter_get_state(const project_Counter* counter, project_FortranAny** state, int* ierr);" in flat(h)
-    assert "void project_Counter_set_state(project_Counter* counter, project_FortranAny* state, int* ierr);" in flat(h)
-    assert "  state = f2cpp_any::from_fortran(state_h, &project_fstate_mod_any_release);" in cpp
-    assert "project_Counter_set_state(handle_, f2cpp_any::to_fortran(state), &ierr);" in cpp
-    assert "    call f2cpp_any_from_holder(state, state_f)\n" in b and "    call f2cpp_any_back(state, state_f)" in b
-    assert "CppAny" not in b + hpp and "kind" not in h
+    # one class(*) mechanism: the struct project_<module>_Any (Fortran data: AnyHolder_type, deleted in Fortran)
+    assert "struct project_fstate_mod_Any;" in hpp and "FortranState" not in hpp + cpp and "FortranAny" not in h + b
+    assert "std::any any_from_fortran(project_fstate_mod_Any* c);" in hpp
+    assert "void project_Counter_get_state(const project_Counter* counter, project_fstate_mod_Any** state, " \
+           "int* ierr);" in flat(h)
+    assert "void project_Counter_set_state(project_Counter* counter, const project_fstate_mod_Any* state, " \
+           "int* ierr);" in flat(h)
+    assert "  state = fstate_mod_private::any_from_fortran(state_h);" in cpp
+    assert "project_Counter_set_state(handle_, fstate_mod_private::any_to_fortran(state), &ierr);" in cpp
+    assert "    if (f2cpp_any_holder(state, state_h)) call move_alloc(state_h%p, state_f)\n" \
+           "    call obj%set_state(state_f, ierr)\n    if (associated(state_h)) call move_alloc(state_f, state_h%p)" in b
+    assert "    state = C_NULL_PTR\n" in b and "    state = f2cpp_any_new(state_f)\n" in b
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv
@@ -2529,9 +2534,9 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "    state = f2cpp_any_new(state_f)" in b
     assert "    call move_alloc(state_h%p, state_f)\n    call wrapper%ptr%set_internal_state(state_f, ierr_f)\n" \
            "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
-    assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
+    assert "  state = state_model_mod_private::any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
            "project_StateModel::get_internal_state function pointer in CWrapperStateModel::get_internal_state!\");" in cwc
-    assert "  other_.set_internal_state(&other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
+    assert "  other_.set_internal_state(&other_, state_model_mod_private::any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod

@@ -40,8 +40,7 @@ Assessment (with the user, 2026-11-23): status in brackets.
    rewrites the generated binding text (sections, public list, only-lists, short names, separators, line
    continuation). Each step parses Fortran lines with patterns; the order matters and a new generated construct
    can be misclassified. Covered by the compile tests of the generated Fortran. [medium; block IR below]
-6. **Maintainability**: long functions, emitter state in attributes, two `class(*)` mechanisms, listeners vs.
-   reverse types, one large test file with exact-text assertions. [room for improvement, section 3]
+6. **Maintainability**: long functions, emitter state in attributes, listeners vs. reverse types, one large test file with exact-text assertions. [room for improvement, section 3]
 7. **Tool chain**: fparser2 node shapes; compiler assumptions (`integer(C_INT)` = default `integer`, Fortran `real`
    = `C_REAL` by compiler flags: a mismatch is a compile error at the C interface). [CI added]
 
@@ -83,8 +82,9 @@ Priorities: tests first (they protect every later step), then correctness, then 
   interface (real / integer passed directly to the `bind(C)` dummies).
 
 ### 3. Structure and extensibility (middle term)
-- One `class(*)` mechanism: the `project_<module>_Any` struct (destroy + userData) for forward wrapping too;
-  remove `FortranState` / `project_FortranAny`.
+- [done] One `class(*)` mechanism: the `project_<module>_Any` struct (destroy + userData) for forward wrapping too;
+  `FortranState` / `project_FortranAny` removed.
+- [kept] Listeners stay separate from reverse types (intended differences: C++ owns the listener, owner arguments).
 - Listeners as reverse types with a non-owning bridge (one implementation of function-pointer types).
 - Argument kinds as small classes (scalar, logical, array, optional array, string, owned, any, created object)
   with `fortran()`, `c()`, `cpp()` parts, shared by `WrapEmitter.method`, `ReverseMixin.forward` and
