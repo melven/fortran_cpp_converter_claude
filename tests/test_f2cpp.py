@@ -705,6 +705,7 @@ def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
     assert "  int b = 0;\n" in feat and "    b = b + i;" in feat         # accumulated: outside
     body = feat.split("int loop_locals(int n)\n{")[1].split("\n}\n")[0]
     assert "  int c;\n  int d;\n  for" in body                                # conditional / used after: outside
+    assert "      int e = i / 2;" in body and "      int f = 3 * i;" in body      # in the if / else branch
     assert "  int bs = this->bs;\n" in lu                     # local hides the member: still mergeable
     # loop variable used mostly as index: 0-based loop, other uses get + 1
     assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly

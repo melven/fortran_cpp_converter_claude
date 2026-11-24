@@ -443,12 +443,19 @@ contains
   function loop_locals(n) result(s)
     integer, intent(in) :: n
     integer :: s
-    integer :: i, a, b, c, d
+    integer :: i, a, b, c, d, e, f
     s = 0
     b = 0
     do i = 1, n
       a = 2 * i               ! assigned first, only used here: declared in the loop
       s = s + a
+      if (mod(i, 2) == 0) then
+        e = i / 2             ! only used in this branch: declared there
+        s = s + e
+      else
+        f = 3 * i             ! the same in the other branch
+        s = s - f
+      end if
       b = b + i               ! accumulated over the iterations: outside
       if (i > 1) c = i        ! conditional: outside
       d = s                   ! used after the loop: outside

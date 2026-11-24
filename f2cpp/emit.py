@@ -528,20 +528,20 @@ class ModuleEmitter:
         return moved, loop_local
 
     def loop_body_decl(self, tr, n, v, top, uses):
-        """scalar n used only inside one loop (the innermost containing all uses) whose first statement using it
-        assigns it (n = expr without n): declared there, in the loop body (tr.body_decl)"""
+        """scalar n used only inside one block (loop body, branch of an if / select case: the innermost
+        containing all uses) whose first statement using it assigns it (n = expr without n): declared there
+        (tr.body_decl)"""
         from fparser.two.utils import walk
         from fparser.two import Fortran2003 as F
         if any(nm is None for _, nm in uses) or len({k for k, _ in uses}) != 1:
             return False
         ids = {id(nm) for _, nm in uses}
-        loops = [d for d in walk(top[uses[0][0]], F.Block_Nonlabel_Do_Construct)
-                 if ids <= {id(x) for x in walk(d, F.Name)} and loop_var(d) != n]
-        if not loops:
+        blocks = [b for b in inner_blocks(top[uses[0][0]])
+                  if ids <= {id(x) for st in b for x in walk(st, F.Name)}]
+        if not blocks:
             return False
-        loop = min(loops, key=lambda d: len(walk(d, F.Name)))        # the innermost
-        body = [c for c in loop.content[1:-1] if cls(c) != "Comment"]
-        first = next((c for c in body if ids & {id(x) for x in walk(c, F.Name)}), None)
+        block = min(blocks, key=lambda b: sum(len(walk(x, F.Name)) for x in b))      # the innermost
+        first = next((c for c in block if ids & {id(x) for x in walk(c, F.Name)}), None)
         if first is None or cls(first) != "Assignment_Stmt" or cls(first.items[0]) != "Name" or \
                 lname(first.items[0]) != n or ids & {id(x) for x in walk(first.items[2], F.Name)}:
             return False
@@ -1155,6 +1155,28 @@ class MappedNames:
     def __contains__(self, n):
         from .translate import match_name
         return n in self.names or match_name(n, self.cfg["call_templates"]) is not None
+
+
+BLOCK_SEPARATORS = {"If_Construct": ("If_Then_Stmt", "Else_If_Stmt", "Else_Stmt", "End_If_Stmt"),
+                    "Case_Construct": ("Select_Case_Stmt", "Case_Stmt", "End_Select_Stmt"),
+                    "Block_Nonlabel_Do_Construct": ("Nonlabel_Do_Stmt", "End_Do_Stmt")}
+
+
+def inner_blocks(node):
+    """statement lists of the loop bodies and if / select case branches in node (also nested; no comments)"""
+    from fparser.two.utils import walk
+    from fparser.two import Fortran2003 as F
+    res = []
+    for c in walk(node, tuple(getattr(F, k) for k in BLOCK_SEPARATORS)):
+        seps, cur = BLOCK_SEPARATORS[cls(c)], None
+        for x in c.content:
+            if cls(x) in seps:
+                if cur:
+                    res.append(cur)
+                cur = []
+            elif cur is not None and cls(x) != "Comment":
+                cur.append(x)
+    return res
 
 
 def loop_var(do):
