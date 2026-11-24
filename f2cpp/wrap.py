@@ -1167,8 +1167,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 hpp.emit(1, f"using {parent}::{parent.split('::')[-1]};")
             hpp.emit(1, f"{name}(const {name}&) = delete;  //!< no copies (one C++ object per Fortran object)")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;  //!< no copies")
+            if not self.owned(t):              # rule of five; not final: virtual (coding rule)
+                hpp.emit(1, f"~{name}() = default;  //!< the Fortran object is not owned" if final else
+                         f"virtual ~{name}() = default;  //!< base of other wrapped classes")
             if self.owned(t):                  # owns the Fortran object: the moved-from object releases nothing
-                hpp.emit(1, f"~{name}();  //!< frees the Fortran object")
+                hpp.emit(1, f"{'' if final else 'virtual '}~{name}();  //!< frees the Fortran object")
                 hpp.emit(1, f"{name}({name}&& o) noexcept;  //!< takes over the Fortran object of o")
                 hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;  //!< frees its own, takes over the one of o")
             else:

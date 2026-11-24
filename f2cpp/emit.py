@@ -209,9 +209,15 @@ class ModuleEmitter:
             tr.emit(ind + 1, f"{name}({name}&&) = default;")
             tr.emit(ind + 1, f"{name}& operator=(const {name}&) = default;")
             tr.emit(ind + 1, f"{name}& operator=({name}&&) = default;")
-        base_class = bool(t.children) or t.abstract if closed else poly     # others may derive from it
-        if base_class and not t.parent and not any(p.bind_name == "~" for p in mine):
+        if not final and not has_dtor:          # coding rule: final or a virtual destructor
+            if not any(p.is_ctor for p in mine):    # (declared copy / move suppress the default constructor)
+                tr.emit(ind + 1, f"{name}() = default;")
             tr.emit(ind + 1, f"virtual ~{name}() = default;")
+            # a user-declared destructor suppresses the implicit move operations
+            tr.emit(ind + 1, f"{name}(const {name}&) = default;")
+            tr.emit(ind + 1, f"{name}({name}&&) = default;")
+            tr.emit(ind + 1, f"{name}& operator=(const {name}&) = default;")
+            tr.emit(ind + 1, f"{name}& operator=({name}&&) = default;")
         # flatten: fparser spreads components / comments over several nodes
         comps, binds = [], []
         for part in t.node.content[1:-1]:
@@ -269,7 +275,7 @@ class ModuleEmitter:
                 if p.is_ctor:
                     sig = ("explicit " if sig.count(",") == 0 and not sig.endswith("()") else "") + sig
                 elif p.is_dtor:
-                    sig = "virtual " + sig + " override" if t.parent else "virtual " + sig if base_class else sig
+                    sig = sig if final else "virtual " + sig      # coding rule: final or a virtual destructor
                 elif bd.nopass:
                     sig = "static " + sig
                 elif poly:
@@ -1096,7 +1102,13 @@ class ModuleEmitter:
         if protos.out:
             c += protos.out + [""]
         if fixture:
-            c += [f"class {mod.spelling or mod.name} : public ::testing::Test {{", "protected:"]
+            c += [f"class {mod.spelling or mod.name} : public ::testing::Test {{", "protected:",
+                  f"  {mod.spelling or mod.name}() = default;",
+                  f"  virtual ~{mod.spelling or mod.name}() = default;  // derived by TEST_F: not final"] + \
+                [f"  {mod.spelling or mod.name}({q}) = delete;" for q in (f"const {mod.spelling or mod.name}&",
+                                                                        f"{mod.spelling or mod.name}&&")] + \
+                [f"  {mod.spelling or mod.name}& operator=({q}) = delete;" for q in (f"const {mod.spelling or mod.name}&",
+                                                                                   f"{mod.spelling or mod.name}&&")]
             for p in mod.procs.values():
                 role = pf_role(p)
                 if role in ("before", "after"):

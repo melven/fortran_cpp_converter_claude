@@ -510,11 +510,13 @@ class ReverseMixin:
         ht = self.cppany["ht"]
         return [f"namespace {self.any_ns()}", "{", "", "namespace", "{", "",
                 "//! Fortran data (class(*)) held by C++: deleted in Fortran (destroy of the struct)",
-                "class FortranData", "{", "public:",
+                "class FortranData final", "{", "public:",
                 f"  explicit FortranData({ht}* c) : c_(c) {{}}  //!< owns c", "  //! deletes the Fortran data",
                 "  ~FortranData()", "  {", "    if( c_ != nullptr && c_->destroy != nullptr )", "      c_->destroy(c_);",
                 "  }", "  FortranData(const FortranData&) = delete;  //!< no copies (shared through std::shared_ptr)",
                 "  FortranData& operator=(const FortranData&) = delete;  //!< no copies",
+                "  FortranData(FortranData&&) = delete;  //!< no moves",
+                "  FortranData& operator=(FortranData&&) = delete;  //!< no moves",
                 f"  {ht}* c_ = nullptr;  //!< the struct (userData: the Fortran holder)", "};", "",
                 "}  // namespace", "",
                 f"std::any any_from_fortran({ht}* c)", "{", "  if( c == nullptr )", "    return {};",
@@ -588,6 +590,8 @@ class ReverseMixin:
         hpp.emit(1, f"virtual ~{cls}();  //!< frees it: unset the listener before")
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to Fortran")
         hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
+        hpp.emit(1, f"{cls}({cls}&&) = delete;  //!< no moves (the address is known to C / Fortran)")
+        hpp.emit(1, f"{cls}& operator=({cls}&&) = delete;  //!< no moves")
         self.pure_virtuals(hpp, methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
@@ -749,6 +753,8 @@ class ReverseMixin:
         hpp.emit(1, f"virtual ~{cls}();" + ("  //!< frees its C struct" if factory is None else "  //!< unregisters it"))
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to C / Fortran")
         hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
+        hpp.emit(1, f"{cls}({cls}&&) = delete;  //!< no moves (the address is known to C / Fortran)")
+        hpp.emit(1, f"{cls}& operator=({cls}&&) = delete;  //!< no moves")
         all_methods = methods + cpp_only
         for line in const_todo:
             hpp.emit(1, f"// {TODO}: {line}")

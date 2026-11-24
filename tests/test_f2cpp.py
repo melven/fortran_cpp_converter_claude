@@ -2485,7 +2485,7 @@ extern "C" int run_cpp(project_Thing* c)       // the Fortran implementation in 
   }
   return code;
 }
-class MyThing : public project::Thing
+class MyThing final : public project::Thing
 {
 public:
   MyThing() : Thing(2, 1, "cpp") {}
@@ -2679,7 +2679,7 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
   }
   return code;
 }
-class Counter : public project::StateModel
+class Counter final : public project::StateModel
 {
 public:
   void get_internal_state(std::any& state) const override
