@@ -43,8 +43,8 @@ DEFAULTS = {
     #         sections, as vector subscripts or passed to procedures that need an Eigen vector
     # "eigen": always ivec
     "int_arrays": "auto",
-    # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen >= 3.5 / master,
-    # where Eigen::all is deprecated) or "Eigen" (Eigen 3.4, where the placeholders:: ones are deprecated)
+    # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen 5.0 / master: only there)
+    # or "Eigen" (Eigen 3.4: Eigen::all / Eigen::last; the placeholders:: ones are deprecated there)
     "eigen_placeholders": "Eigen::placeholders",
     "imat": "Eigen::MatrixXi",
     "int": "int",

@@ -100,8 +100,8 @@ with less precise output (calls are passed through unchanged).
 
 ## Eigen version
 
-Sections use `Eigen::seq` with `Eigen::placeholders::all` / `last` (Eigen ≥ 3.5 / master). For
-Eigen 3.4, where these are deprecated in favour of `Eigen::all` / `Eigen::last`, set
+Sections use `Eigen::seq` with `Eigen::placeholders::all` / `last` (Eigen 5.0 / master, where only these
+exist). For Eigen 3.4, where these are deprecated in favour of `Eigen::all` / `Eigen::last`, set
 `eigen_placeholders = "Eigen"`.
 
 ## Formatting
