@@ -38,8 +38,7 @@ DEFAULTS = {
     "module_headers": {},
     "exclude": [],                  # "module:name" (glob patterns)
     "type_map": {},
-    "accessors": {},
-    "member_accessors": {},
+    "accessors": {},                # type -> {component | "*": (C++ name or None, get | set | ref)}
     "method_templates": {},
     "unwrap_types": {},
     "expand_args": {},
@@ -103,8 +102,8 @@ SECTION_KEYS = {
             "calls": ("call_templates", "update"), "interfaces": ("procedure_map", "update")},
     "wrap": {"string_in": ("wrap_string_in", None), "string_out": ("wrap_string_out", None)},
 }
-TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors",
-             "member_accessors", "unwrap", "expand", "named_elements", "element_list", "handle_member", "c_name",
+TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors", "unwrap",
+             "expand", "named_elements", "element_list", "handle_member", "c_name",
              "translate", "bindings"}
 BINDING_KEYS = {"template", "translate", "sizes"}
 PROCEDURE_KEYS = {"c_name", "translate", "sizes"}
@@ -113,7 +112,7 @@ SECTIONS = set(SECTION_KEYS) | {"style", "macros", "modules", "types", "procedur
 # keys of the old (flat) format
 OLD_KEYS = (set(DEFAULTS) | {k for sec in STYLE_KEYS.values() for k in sec.values()} | {
     "closed_hierarchy", "declare_at_first_use", "zero_based_loops", "explicit_this", "wrap_handle",
-    "wrap_direct_handles", "wrap_dllexport", "member_suffix", "log_error", "log_error_include"}) - SECTIONS
+    "wrap_direct_handles", "wrap_dllexport", "member_suffix", "log_error", "log_error_include", "member_accessors"}) - SECTIONS
 
 
 def default_macros(prefix):
@@ -128,6 +127,14 @@ def default_macros(prefix):
         calls[f"{low}_{name.lower()}"] = f'if (!({{0}})) throw std::{exc}("{text}: {{0:str}}");'
         calls[f"{low}_{name.lower()}_msg"] = f"if (!({{0}})) throw std::{exc}({{1}});"
     return macros, calls
+
+
+def parse_accessor(entry):
+    """"component[=name][:mode]" -> (component (lower case) or "*", (C++ name or None, get | set | ref))"""
+    m = re.fullmatch(r"\s*(\*|\w+)\s*(?:=\s*(\w+)\s*)?(?::\s*(\w+)\s*)?", entry)
+    if not m or (m.group(3) or "get") not in ("get", "set", "ref"):
+        raise SystemExit(f"f2cpp: accessor {entry!r}: expected component[=name][:get|set|ref]")
+    return m.group(1).lower(), (m.group(2), m.group(3) or "get")
 
 
 def subst(template, **values):
@@ -228,8 +235,8 @@ def load_config(cfg, path, data):
                 load_type(cfg, path, name, ent)
 
 
-TYPE_SIMPLE = {"cpp": "type_map", "constants": "wrap_constants", "accessors": "accessors",
-               "member_accessors": "member_accessors", "unwrap": "unwrap_types", "expand": "expand_args",
+TYPE_SIMPLE = {"cpp": "type_map", "constants": "wrap_constants", "accessors": "accessors", "unwrap": "unwrap_types",
+               "expand": "expand_args",
                "element_list": "named_element_lists", "handle_member": "wrap_handle_member", "c_name": "c_class_names",
                "factory": "wrap_reverse_factories", "instance": "reverse_factory_instances"}
 
@@ -291,9 +298,8 @@ def normalise(cfg):
         cfg["wrap_chk_argument"] = cfg["wrap_chk_argument"] or [f"{prefix}_CHK_ARGUMENT", inc]
         cfg["wrap_fail"] = cfg["wrap_fail"] or [f"{prefix}_ASSERT(.false., {{ierr}})", inc]
         cfg["include_map"].setdefault(inc, "")
-    # accessors: type -> {component: C++ accessor name or None (same name)}
-    cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
-                                    for n in v} for k, v in cfg["accessors"].items()}
+    # accessors: type -> {component | "*": (C++ name or None: style getter_name / setter_name, mode)}
+    cfg["accessors"] = {k.lower(): dict(parse_accessor(e) for e in v) for k, v in cfg["accessors"].items()}
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
     # "component" or ["component", "metadata", ...]: the first replaces the variable, the others are companion
     # variables <variable>_<component>
@@ -314,9 +320,6 @@ def normalise(cfg):
     for key in ("exclude", "wrap_translate"):
         cfg[key] = [e.lower().replace(" ", "") for e in cfg[key]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
-    cfg["member_accessors"] = {k.lower(): {e.split(":")[0].strip().lower(): (e.split(":")[1].strip().lower()
-                                                                           if ":" in e else "get") for e in v}
-                               for k, v in cfg["member_accessors"].items()}
     cfg["wrap_reverse_factories"] = {k.lower(): {a.lower(): p for a, p in v.items()}
                                      for k, v in cfg["wrap_reverse_factories"].items()}
     cfg["c_prefix"] = cfg["c_prefix"] or ns.lower()

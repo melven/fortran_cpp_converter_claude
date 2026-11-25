@@ -478,8 +478,8 @@ def test_accessors(tmp_path):
         "system%models(2)%id = n\nobj%value = 2.0 * obj%value\nsystem%coupling_manager%step = n\nend subroutine\nend module\n")
     c = config.load()
     (tmp_path / "f2cpp.toml").write_text(
-        '[types]\nSystem_type.accessors = ["models", "offsets", "coupling_manager=couplingManager"]\n'
-        'legacy_type.accessors = ["*"]\n')
+        '[types]\nSystem_type.accessors = ["models:ref", "offsets:ref", "coupling_manager=couplingManager:ref"]\n'
+        'legacy_type.accessors = ["*:ref"]\n')
     c = config.load(str(tmp_path / "f2cpp.toml"))
     translate([str(tmp_path / "a_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "legacy_mod.F90")])
     assert "system.couplingManager().step = n;" in (tmp_path / "a_mod.cpp").read_text()
@@ -509,7 +509,7 @@ def test_accessors_of_base_class(tmp_path):
         "subroutine work(this, n)\nclass(derived_type), intent(inout) :: this\ninteger, intent(out) :: n\n"
         "n = this%system%count + this%own + this%other\nend subroutine\nend module\n")
     c = config.load()
-    c["accessors"] = {"base_type": {"system": None}}
+    c["accessors"] = {"base_type": {"system": (None, "ref")}}
     translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path))
     assert "n = system().count + own + other;" in (tmp_path / "d_mod.cpp").read_text()
 
@@ -525,7 +525,7 @@ def test_accessor_of_pointer_component(tmp_path):
         "subroutine work(this, n)\nclass(derived_type), intent(inout) :: this\ninteger, intent(out) :: n\n"
         "n = this%system%count + this%raw%count\nend subroutine\nend module\n")
     c = config.load()
-    c["accessors"] = {"base_type": {"system": None}}
+    c["accessors"] = {"base_type": {"system": (None, "ref")}}
     translate([str(tmp_path / "d_mod.F90")], c, str(tmp_path), [str(tmp_path / "base_mod.F90")])
     assert "n = system().count + raw->count;" in (tmp_path / "d_mod.cpp").read_text()
 
@@ -1283,7 +1283,7 @@ def test_accessors_of_unknown_types_index_from_zero(tmp_path):
         "do i = 1, system%n\n  system%x(i) = 2.0 * system%x(i)\nend do\nsystem%x(1) = system%m(2, i)\n"
         "end subroutine\nend module\n")
     c = config.load()
-    c["accessors"] = {"system_type": {"x": None, "n": None}}
+    c["accessors"] = {"system_type": {"x": (None, "ref"), "n": (None, "get")}}
     translate([str(tmp_path / "u_mod.F90")], c, str(tmp_path))
     cpp = (tmp_path / "u_mod.cpp").read_text()
     assert "system.x()(i - 1) = 2.0 * system.x()(i - 1);" in cpp   # accessor (array, lower bound 1)
@@ -1576,7 +1576,7 @@ end program drv
 def test_unwrapped_companions_of_an_existing_class(tmp_path):
     """the class with the array of the unwrapped type exists in C++ (-I): its getters from accessors"""
     (tmp_path / "x.toml").write_text('[types.Block_type]\nunwrap = ["p", "offset1", "offset2"]\n'
-                                     '[types.Blocks_type]\naccessors = ["arr", "arr_offset1"]\n')
+                                     '[types.Blocks_type]\naccessors = ["arr:ref", "arr_offset1"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, str(tmp_path),
               [os.path.join(CORPUS, "unwrap", "blocks_mod.F90")])
@@ -2766,6 +2766,35 @@ def test_config_overrides_are_normalised():
 
 
 
+def test_accessors_same_for_wrapped_and_translated(tmp_path):
+    """one accessors list: the callers of a class are the same whether it is wrapped or translated; get: const
+    getter only, set: + setter (wrapped scalars through the pointer getter), ref: + reference; wrapped classes
+    without a list: all public components (ref), noted in the report"""
+    w = os.path.join(CORPUS, "wrapped")
+    (tmp_path / "x.toml").write_text('[types.MySolver_type]\n'
+                                     'accessors = ["n", "diag:ref", "coupling:ref", "shift:set", "verbose:set"]\n')
+    c = lambda: config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")], strict=False)  # noqa: E731
+    t, wd = str(tmp_path / "t"), str(tmp_path / "w")
+    translate([os.path.join(w, "solver_user_mod.F90"), os.path.join(w, "mysolver_mod.F90")], c(), t)
+    report, _ = translate([os.path.join(w, "solver_user_mod.F90")], c(), wd, wrap=[os.path.join(w, "mysolver_mod.F90")])
+    user = read((wd,), "solver_user_mod.cpp")
+    assert user == read((t,), "solver_user_mod.cpp")
+    assert "s.n() + s.diag()(0)" in user and "  s.shift(0.25);" in user and "s.coupling()(i - 1, 1)" in user
+    th, wh = read((t,), "mysolver_mod.hpp"), read((wd,), "mysolver_mod.hpp")
+    assert "  int n() const { return n_; }" in th and "  void shift(scalar value) { shift_ = value; }" in th
+    assert "  int n() const;\n" in wh and "int& n()" not in wh and "  void shift(scalar value);" in wh
+    assert "  Eigen::Map<vec> diag();" in wh and "weights()" not in wh     # not listed
+    assert "void MySolver::shift(scalar value)\n{\n  *project_MySolver_shift(handle_) = value;\n}" in \
+        read((wd,), "mysolver_mod.cpp")
+    assert "accessors-implicit:mysolver_type" not in str(report.files)
+    report, _ = translate([], cfg(), str(tmp_path / "i"), wrap=[os.path.join(w, "mysolver_mod.F90")])
+    assert "accessors-implicit:mysolver_type" in str(report.files)
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        for d in (t, wd):
+            cxx((d,), "solver_user_mod")
+        cxx((wd,), "mysolver_mod")
+
+
 def test_config_file_format(tmp_path):
     """sections of the config file -> internal keys; derived macros (prefix, include); errors for unknown / old keys"""
     (tmp_path / "x.toml").write_text("""
@@ -2822,7 +2851,7 @@ getter = "{type} {name}() const { return {member}; }  // getter"
 [errors]
 call_message = "{where} failed ({cfunc})"
 """)
-    (tmp_path / "x.toml").write_text('style = "s.toml"\n[types.solver_type]\nmember_accessors = ["n", "tol:set"]\n')
+    (tmp_path / "x.toml").write_text('style = "s.toml"\n[types.solver_type]\naccessors = ["n", "tol:set"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     assert c["eigen_placeholders"] == "Eigen" and c["doxygen"] == "//!"           # tests style + defaults
     d = str(tmp_path)
@@ -2876,6 +2905,10 @@ Persistable_type = "Persistable::AbstractPersistable"
 Variable_type = ""
 [named_element_lists]
 Variable_type = "VariableVector"
+[accessors]
+System_type = ["models", "coupling_manager=couplingManager"]
+[member_accessors]
+System_type = ["tol:set"]
 """)
     tool = os.path.join(HERE, "..", "tools", "convert_config.py")
     r = subprocess.run([sys.executable, tool, str(tmp_path / "old.toml"), str(tmp_path / "new.toml")],
@@ -2892,7 +2925,8 @@ Variable_type = "VariableVector"
     t = new["types"]
     assert t["Persistable_type"] == {"cpp": "Persistable::AbstractPersistable", "independent": True}
     assert t["Model_type"] == {"interop": "bidirectional"} and t["Listener_type"] == {"interop": "listener"}
-    assert t["System_type"] == {"bindings": {"get_state": {"translate": True}}, "translate": True}
+    assert t["System_type"] == {"bindings": {"get_state": {"translate": True}}, "translate": True,
+                                "accessors": ["models:ref", "coupling_manager=couplingManager:ref", "tol:set"]}
     assert t["Solver_type"]["bindings"] == {"solve": {"template": "{1} = {self}.solve({0});"},
                                             "apply": {"sizes": {"x": "this%n"}}}
     assert t["Variable_type"] == {"named_elements": True, "element_list": "VariableVector"}
@@ -3041,7 +3075,7 @@ def test_member_accessors(tmp_path):
     by value; set: + setter overload; ref: + non-const reference); own methods and derived classes use n_; other
     code the accessors; writes to get-only members are TODOs; unlisted members and types stay as they are"""
     d = str(tmp_path)
-    (tmp_path / "x.toml").write_text('[types.solver_type]\nmember_accessors = ["n", "tol:set", "x:ref"]\n')
+    (tmp_path / "x.toml").write_text('[types.solver_type]\naccessors = ["n", "tol:set", "x:ref"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     report, _ = translate([os.path.join(CORPUS, "accessors_mod.F90")], c, d)
     hpp, cpp = read((d,), "accessors_mod.hpp"), read((d,), "accessors_mod.cpp")

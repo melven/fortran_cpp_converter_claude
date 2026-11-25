@@ -384,11 +384,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         return {"real": "real(C_REAL)", "integer": "integer(C_INT)", "logical": "logical(C_BOOL)"}[v.base]
 
     def getters(self, t):
-        """public components with a getter: [(var, kind)] kind scalar | array | logical"""
+        """public components with accessors (register_accessors): [(var, kind)] kind scalar | array | logical"""
         res = []
         consts = self.cfg["wrap_constants"].get(self.root(t)[1], [])
+        acc = self.cfg["accessors"].get(t.name, {})
         for v in t.comps.values():
-            if not comp_public(t, v) or v.name in consts or self.excluded(f"{t.name}%{v.name}"):
+            if v.name not in acc or v.name in consts or self.excluded(f"{t.name}%{v.name}"):
                 continue
             if v.companion_of:                  # unwrap_types: obj%arr(:)%comp is not contiguous
                 self.report.add("todo", f"wrap-component:{v.name}")
@@ -961,7 +962,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         cpp.emit(0, "")
 
     def getter(self, t, v, kind, fb, hdecl, cpp):
+        """accessors of component v (mode of register_accessors): get: const getter; ref: + reference;
+        set: + setter (logical: always, Fortran logical has no C reference)"""
         hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
+        name, mode = self.cfg["accessors"][t.name][v.name]
+        get, put = (name or subst(self.cfg[k], name=v.cname) for k in ("member_getter_name", "member_setter_name"))
         tr = self.tr()
         cname = self.c_name(t, v.name)
         handle = lower_camel(self.c_class(t))
@@ -977,8 +982,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
             ty = tr.cpp_type(v)
-            decls = [(f"{ty}& {v.cname}()", f"return *{cname}({hm});"),
-                     (f"const {ty}& {v.cname}() const", f"return *{cname}({hm});")]
+            decls = [(get, f"{ty}& {get}()", f"return *{cname}({hm});", ""),
+                     (get, f"const {ty}& {get}() const", f"return *{cname}({hm});", " (const version)")] \
+                if mode == "ref" else [(get, f"{ty} {get}() const", f"return *{cname}({hm});", "")]
+            if mode == "set":
+                decls.append((put, f"void {put}({ty} value)", f"*{cname}({hm}) = value;", " (setter)"))
         elif kind == "logical":
             fb.append(f"  !  bool {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
@@ -986,16 +994,17 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decls = [(f"bool {v.cname}() const", f"return {cname}({hm});")]  # Fortran logical: no reference
-            setter = self.c_name(t, f"{v.name}_set")       # ... so a setter (overload of the getter name)
+            decls = [(get, f"bool {get}() const", f"return {cname}({hm});", "")]  # Fortran logical: no reference
+        if kind == "logical" and mode != "get":             # ... so a setter (overload of the getter name)
+            setter = self.c_name(t, f"{v.name}_set")
             fb += ["", "  !@c_declaration", f"  !  void {setter}({self.c_type_name(t)}* {handle}, bool value);",
                    "  !@end_c_declaration"]
             odecl, ostmts = self.object_access(t, setter, handle, False, [f"obj%{v.name} = value"])
             fb += [f"  subroutine {setter}({handle}, value) bind(C, name=\"{setter}\")"] + self.dllexport(setter) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL), value :: value"] + odecl + ostmts + \
                 [f"  end subroutine {setter}"]
-            decls.append((f"void {v.cname}(bool value)", f"{setter}({hm}, value);"))
-        else:
+            decls.append((put, f"void {put}(bool value)", f"{setter}({hm}, value);", " (setter)"))
+        elif kind == "array":
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
             fb.append(f"  !  void {cname}(const {self.c_type_name(t)}* {handle}, {ct}** data, "
@@ -1014,17 +1023,18 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
                     f" {cname}({hm}, &data, " + ", ".join(f"&{d}" for d in dims) +
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
-            decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
-                     (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
+            const = [(get, f"Eigen::Map<const {et}> {get}() const", body.replace("{}", f"const {et}"), "")]
+            decls = const if mode == "get" else \
+                [(get, f"Eigen::Map<{et}> {get}()", body.replace("{}", et), "")] + \
+                [(get, const[0][1], const[0][2], " (const version)")]   # set: whole arrays by reference
         doc, dox = self.component_docs(t).get(v.name, []) or [f"component {v.cname}"], self.cfg["doxygen"]
-        for k, (decl, body) in enumerate(decls):
+        for fn, decl, body, suffix in decls:
             lines = list(doc)
-            if lines and k == 1:
-                lines[-1] += " (setter)" if kind == "logical" else " (const version)"
+            lines[-1] += suffix
             for line in lines:
                 hdecl.emit(1, f"{dox} {line}".rstrip())
             hdecl.emit(1, decl + ";")
-            cpp.emit(0, decl.replace(f" {v.cname}(", f" {cls_name}::{v.cname}(", 1))
+            cpp.emit(0, decl.replace(f" {fn}(", f" {cls_name}::{fn}(", 1))
             cpp.emit(0, "{")
             for stmt in body.split("; "):
                 cpp.emit(1, stmt.rstrip(";") + ";")
@@ -1189,6 +1199,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 self.method(t, bd, p, args, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-method")
             getters = self.getters(t)
+            if getters and t.name in getattr(self.prog, "implicit_accessors", ()):
+                self.report.add("info", f"accessors-implicit:{t.name}")     # no accessors list: all public (ref)
             if getters or self.consts or self.const_todo:
                 hpp.emit(0, "")
             for v, kind, _ in self.consts:
@@ -1754,19 +1766,29 @@ def comp_public(t, v):
 
 
 def register_accessors(prog, wrapped):
-    """components of wrapped classes are getters in C++: obj%n -> obj.n()"""
+    """accessors of the components of wrapped classes (generated getters; callers: obj%n -> obj.n()): the
+    listed public components ("*": all), types without a list: all public components (ref), noted in the report;
+    logical: set instead of ref (no reference into Fortran); constants: get"""
     cfg = prog.cfg
+    prog.implicit_accessors = set()
     reverse = set(cfg["wrap_reverse"]) | set(cfg["wrap_reverse_factories"])
     for m in wrapped:
         for t in m.types.values():
-            acc = cfg["accessors"].setdefault(t.name, {})
+            listed = cfg["accessors"].get(t.name)
+            consts = set(cfg["wrap_constants"].get(t.name, []))
+            if listed is None and t.name not in reverse:
+                prog.implicit_accessors.add(t.name)
+            listed = listed or {"*": (None, "ref")}
+            acc = {}
             if t.name in reverse:               # implemented in C++: only the constants (also inherited ones)
-                for n in cfg["wrap_constants"].get(t.name, []):
-                    acc.setdefault(n, None)
-                continue
+                listed = {}
             for v in t.comps.values():
-                if comp_public(t, v):
-                    acc.setdefault(v.name, None)
+                ent = listed.get(v.name) or listed.get("*")
+                if ent is not None and comp_public(t, v) and v.name not in consts:
+                    acc[v.name] = (ent[0], "set" if v.base == "logical" and ent[1] == "ref" else ent[1])
+            for n in consts:
+                acc[n] = ((listed.get(n) or (None,))[0], "get")
+            cfg["accessors"][t.name] = acc
 
 
 def check_dependencies(prog, wrapped, translated, report):

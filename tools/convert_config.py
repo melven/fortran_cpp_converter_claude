@@ -25,8 +25,7 @@ PROJECT = {"namespace": "namespace", "namespace_map": "namespace_map", "extra_in
 MAP = {"kind_map": "kinds", "constant_map": "constants", "include_map": "includes", "function_map": "functions",
        "call_templates": "calls", "procedure_map": "interfaces"}
 TESTS = {"test_extensions": "extensions", "test_modules": "modules", "test_includes": "includes"}
-TYPE_DICT = {"type_map": "cpp", "wrap_constants": "constants", "accessors": "accessors",
-             "member_accessors": "member_accessors", "unwrap_types": "unwrap", "expand_args": "expand",
+TYPE_DICT = {"type_map": "cpp", "wrap_constants": "constants", "unwrap_types": "unwrap", "expand_args": "expand",
              "named_element_lists": "element_list", "wrap_handle_member": "handle_member", "c_class_names": "c_name",
              "wrap_reverse_factories": "factory", "reverse_factory_instances": "instance"}
 TYPE_LIST = {"wrap_independent_bases": ("independent", True), "wrap_owned": ("owned", True),
@@ -50,7 +49,8 @@ def convert(old):
     new, style = {}, {}
     name = Names()
     types, procs, mods = {}, {}, {}
-    known = set(config.DEFAULTS) | set(STYLE) | set(REMOVED) | {"member_suffix", "log_error", "log_error_include"}
+    known = set(config.DEFAULTS) | set(STYLE) | set(REMOVED) | {"member_suffix", "log_error", "log_error_include",
+                                                                "member_accessors"}
     for k in old:
         if k not in known:
             warn(f"unknown key {k!r} dropped")
@@ -157,6 +157,12 @@ def convert(old):
     for k, nk in TYPE_DICT.items():
         for t, v in old.get(k, {}).items():
             typ(t)[nk] = v
+    # accessors: existing classes (old accessors: writes through the returned reference -> :ref) and translated
+    # classes (old member_accessors: already component[:mode]) in one list
+    for t, v in old.get("accessors", {}).items():
+        typ(t).setdefault("accessors", []).extend(e if ":" in e else e + ":ref" for e in v)
+    for t, v in old.get("member_accessors", {}).items():
+        typ(t).setdefault("accessors", []).extend(v)
     for t, v in old.get("named_elements", {}).items():
         typ(t)["named_elements"] = True if v == "" else v
     for k, (nk, v) in TYPE_LIST.items():

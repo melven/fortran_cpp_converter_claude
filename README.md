@@ -49,11 +49,27 @@ entries are printed).
 | `[tests]` | `extensions` (`[".pf", ".pfunit"]`), `modules` (test framework modules), `includes` |
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
 | `[modules.M]` | `header` (header of a module that is not translated, or output name of a translated one; `""`: no include, no missing-module warning), `exclude` (names not emitted, glob patterns; `M` may be a pattern) |
-| `[types.T]` | `cpp` (existing C++ class), `accessors`, `member_accessors`, `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, `"listener"`), `factory = {register, unregister}`, `instance` |
+| `[types.T]` | `cpp` (existing C++ class), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, `"listener"`), `factory = {register, unregister}`, `instance` |
 | `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`) |
 | `[procedures.P]` | `c_name`, `translate`, `sizes` |
 
 Names are case-insensitive; `T` may be a glob pattern for `template` (`[types."*_config_type".bindings]`).
+
+Accessors: `accessors = ["n", "tol:set", "x:ref", "coupling_manager=couplingManager:ref", "*"]`, each entry
+`component[=name][:mode]` (`*`: all components; name: default style `getter_name` / `setter_name`). Modes: `get`
+(default) `T n() const` (scalars by value, others `const T&`), writes from other code are TODOs (also through
+the returned object); `set`: + `void tol(T)`, `obj%tol = v` → `obj.tol(v)` (whole member); `ref`: + `T& x()`, writes
+through the reference. The same list serves every origin of the class, so its callers do not change when a type
+moves from wrapped to translated:
+
+| Class | Listed components | Not listed |
+|---|---|---|
+| translated | data member renamed (style `member`: `n_`, protected; private in final classes), accessors generated; own and derived methods of the run use the member, other code the accessors | plain member |
+| wrapped (`-W`) | accessors generated (glue into the Fortran object; `logical`: `set` instead of `ref`) | public components `ref` if the type has no list (report info `accessors-implicit`), else none |
+| `-I` (translated or wrapped before), existing C++ (`cpp`) | called only | plain member |
+| reverse type | only `constants` (`get`) | – |
+
+Constants (`constants`) always have `get` accessors.
 Short entries fit on one line: `[types] legacy_type = {cpp = "wrappers::Legacy"}`, `[types.T.bindings]
 solve.template = "..."`.
 
@@ -63,7 +79,7 @@ solve.template = "..."`.
 | `[layout]` | include guard, doxygen prefix, brace style, width of C declarations |
 | `[types]` | `scalar`, `vec`, `mat`, `ivec`, `imat`, `int` |
 | `[conventions]` | member access, optional / array / integer array arguments, Eigen placeholders, size checks of wrapped methods, gtest asserts |
-| `[members]` | templates of the data member name and the accessors (`member_accessors`) |
+| `[members]` | templates of the data member name, the accessor names and the accessors |
 | `[errors]` | logging in catch blocks (and its includes), exception texts of the wrapper glue |
 
 Templates use `{placeholders}` (no brace escaping); unknown placeholders are errors.
@@ -113,7 +129,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
 | array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
-| members (`[types.solver_type] member_accessors`) | `["n", "tol:set", "x:ref"]` (or `"*"`): protected `n_` (style `members.member`) (private in final classes) with public accessors: `int n() const` (scalars by value, others `const T&`), `set`: + `void tol(scalar value)`, `ref`: + `vec& x()`; own and derived methods use `n_`, other code the accessors; writes to `get` members are TODOs. Unlisted types / members: unchanged; forms of the accessors: style `[members]` |
+| members with `accessors` (`[types.solver_type] accessors = ["n", "tol:set", "x:ref"]`) | protected `n_` (private in final classes) with public `int n() const`, `void tol(scalar value)`, `vec& x()`; own and derived methods use `n_`, other code the accessors (see [Configuration](#configuration)) |
 | local variables | declared before the first top-level statement that uses it; merged with a defining assignment (`int m = A.rows();`), `allocate` (`mat As(m, m);`) or constructor call (`block_lu tmp(1, n);`). Loop variables used only in their loops: `for (int i = ...)`; scalars used only in one loop body or if / select case branch and assigned first there: declared there (`int a = 2 * i;`) |
 | `do i = 1, n` whose variable is mostly an array index (lower bound 1) | `for (int i = 0; i < n; ++i)` with `a(i)` → `a(i)` and other uses `i + 1` |
 | internal procedures (`contains` inside a procedure) | lambdas `auto f = [&](...) -> T { ... };` at the start of the host body (host association by reference capture), ordered by their dependencies; recursive ones stay Fortran comments |
@@ -204,8 +220,10 @@ order). Several configuration files can be combined: `-c f2cpp.toml -c examples/
 | `M.hpp` | the classes with the interface of the translation (empty default constructor, no copy, protected `explicit MySolver(project_MySolver& c)` and handle member (style `handle_member`, default `handle_`; per root type `[types.model_type] handle_member = "model_c_"`), no other members; derived classes `using Base::Base;`); of the C interface only the forward declaration `struct project_MySolver;`, `M.h` is included in `M.cpp` |
 | `M.cpp` | glue: `resize` of `intent(out)` arrays, call, `ierr != 0` → `std::runtime_error`; size checks of the other arrays with style `size_checks = true`; exception texts: style `[errors]` |
 
-Translated modules use the wrapped classes like translated ones; public components are const / non-const getter pairs
-(documented like the component, the const one with " (const version)": `int& n()`, `const int& n() const`; arrays `Eigen::Map<vec>` / `Eigen::Map<const vec>`; `logical`: `bool x() const` by value and the setter `void x(bool)`). Handle: by default a pointer to the C struct `project_<Class>` = bind(C) type `<Class>_c` (in the
+Translated modules use the wrapped classes like translated ones; components have the accessors of `accessors`
+(documented like the component; `get`: `int n() const`, arrays `Eigen::Map<const vec> d() const`; `ref`: + `int& n()`
+/ `Eigen::Map<vec> d()`, the const one with " (const version)"; `set`: + `void n(int)`; `logical`: `bool x() const`
+by value, setter `void x(bool)` for `set` / `ref`). Types without `accessors`: all public components `ref`. Handle: by default a pointer to the C struct `project_<Class>` = bind(C) type `<Class>_c` (in the
 binding module) whose member `p_impl` points to the Fortran object, for class hierarchies to
 `<Root>Wrapper_type`.
 
@@ -483,12 +501,12 @@ Components that are accessor functions in the C++ class:
 
 ```toml
 [types]                    # components; ["*"] = all components
-system_type.accessors = ["models", "offsets"]     # system%models -> system.models()
-other_type.accessors = ["coupling_manager=couplingManager"]   # renamed: x%coupling_manager -> x.couplingManager()
+system_type.accessors = ["models:ref", "offsets"]     # system%models -> system.models()
+other_type.accessors = ["coupling_manager=couplingManager:ref"]   # renamed: x%coupling_manager -> x.couplingManager()
 ```
 
-An accessor is assumed to return a reference, also if the Fortran component is a pointer:
-`this%system%count` → `system().count`. Accessors of a base type apply in derived classes.
+`ref`: the accessor returns a reference (also for pointer components: `this%system%count` → `system().count`);
+`get`: a const reference, writes are TODOs. Accessors of a base type apply in derived classes.
 
 `header` is also the way to rename: `use project_global_thing` becomes
 `#include "project_thing.hpp"`, and if that module is translated in the same call its output

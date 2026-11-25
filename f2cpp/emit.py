@@ -321,7 +321,7 @@ class ModuleEmitter:
                 last = []
                 for k, n in enumerate(names):
                     level = (t.comps[n].access_need if auto else fixed) if n is not None else 2
-                    if n in modes:                 # member_accessors: protected (private if final)
+                    if n in modes:                 # accessors: protected (private if final)
                         level = 0 if final else 1
                     entry = (lead if k == 0 else [], d, n, [])
                     sections[level].append(entry)
@@ -369,19 +369,24 @@ class ModuleEmitter:
         tr.emit(ind, "};")
 
     def accessor_modes(self, t):
-        """{component: get | set | ref} of member_accessors (own components of t)"""
-        m = self.cfg["member_accessors"].get(t.name, {})
-        return {n: m.get(n) or m.get("*") for n, v in t.comps.items()
-                if (m.get(n) or m.get("*")) and v.base != "procedure" and not v.companions and not v.unwrapped}
+        """{component: (getter name, setter name, get | set | ref)} of the accessors of t's own components"""
+        m, res = self.cfg["accessors"].get(t.name, {}), {}
+        if t.module.name not in getattr(self.prog, "translated", ()):     # e.g. C++ copies of struct constants
+            return res
+        for n, v in t.comps.items():
+            ent = m.get(n) or m.get("*")
+            if ent and v.base != "procedure" and not v.companions and not v.unwrapped:
+                res[n] = tuple(ent[0] or subst(self.cfg[k], name=v.cname)
+                               for k in ("member_getter_name", "member_setter_name")) + (ent[1],)
+        return res
 
     def emit_accessors(self, tr, t, modes, ind):
-        """public accessors of the members renamed to <name>_ (member_accessors)"""
+        """public accessors of the members renamed to <name>_ (accessors of a translated class)"""
         cfg, docs = self.cfg, self.component_docs(t)
         dox = cfg["doxygen"]
-        for n, mode in modes.items():
+        for n, (get, put, mode) in modes.items():
             v = t.comps[n]
             ty, m = tr.cpp_type(v), subst(cfg["member_name"], name=v.cname)
-            get, put = (subst(cfg[k], name=v.cname) for k in ("member_getter_name", "member_setter_name"))
             snip = {"type": ty, "name": get, "member": m}
             plain = v.rank == 0 and v.base in ("real", "integer", "logical") and not v.ptr_like and not v.has("pointer")
             doc = docs.get(n, []) or [f"component {v.cname}"]

@@ -45,7 +45,7 @@ size_checks = false            # wrapped methods: check array sizes in the C++ g
 gtest_assert = "ASSERT"        # pFUnit asserts abort the test -> ASSERT_*; "EXPECT" changes the logic
 gtest_eigen_near = true        # the project provides ASSERT_NEAR / EXPECT_NEAR for Eigen types
 
-[members]                      # accessors of translated types (config: [types.X] member_accessors)
+[members]                      # accessors (config: [types.X] accessors); the templates: translated classes
 member = "{name}_"             # the renamed data member ({name}: the component)
 getter_name = "{name}"         # accessor names, used by the generated accessors and their callers
 setter_name = "{name}"

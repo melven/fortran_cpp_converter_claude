@@ -98,8 +98,9 @@ Priorities: tests first (they protect every later step), then correctness, then 
   message templates); macros and their roles in generated Fortran derived from the prefix / include; removed:
   `closed_hierarchy`, `declare_at_first_use`, `zero_based_loops`, `explicit_this`, `wrap_handle = "direct"`,
   `wrap_dllexport`; `tools/convert_config.py` for old configs.
-- `-I` modules analysed like translated ones (getters of wrapped classes without `accessors`); one `accessors` syntax
-  for wrapped and translated classes.
+- [done] One `accessors` list per type (`component[=name][:get|set|ref]`) for translated, wrapped, `-I` and existing
+  classes; callers do not change when a type moves from wrapped to translated.
+- `-I` modules analysed like translated ones (e.g. implicit accessors of wrapped classes given with `-I`).
 - Emitter state: one context object per module (`ModuleState`) instead of attributes set in `generate`.
 
 ### 4. Later
