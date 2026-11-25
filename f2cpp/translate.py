@@ -5,8 +5,11 @@ from dataclasses import dataclass
 
 from .model import cls, lname, items_of, cname, Var
 from .prepass import CPP_MARK, PF_MARK, BLANK_MARK, ASSERT_PREFIX
+from .config import subst
 
 TODO = "TODO(f2cpp)"
+# separator lines of the generated Fortran (the project's style): not carried over into C++
+FORTRAN_SEPARATORS = ("!" + "=" * 80, "!" + "-" * 70)
 
 
 NON_WORD = r"\W"      # (no backslash inside f-string expressions: Python 3.11)
@@ -40,7 +43,8 @@ class X:
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
     via_accessor: bool = False   # component through a getter (accessor, wrapped class)
-    access: str = None       # member_accessors mode of a component accessed from outside: get | set | ref
+    access: str = None       # accessor mode of a component accessed from outside: get | set | ref
+    setter: str = None       # set mode: code of the setter function (obj.tol)
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -579,7 +583,7 @@ class Translator:
 
     def member(self, obj, name, qual=""):
         """code of member 'name' of obj; 'this->' is omitted unless a local name hides the member"""
-        if obj.raw == "this" and not self.cfg["explicit_this"]:
+        if obj.raw == "this":
             hidden = {v.cname for p in self.scope_chain() for v in p.vars.values() if not v.is_this}
             hidden |= {v.cname for v in self.overrides.values()}
             if qual or name not in hidden:
@@ -588,7 +592,8 @@ class Translator:
         return (obj.raw if obj.raw is not None else par(obj)) + sep + qual + name
 
     def accessor(self, tname, comp, spelled):
-        """name of the accessor function if the component is one in the existing C++ class, else None"""
+        """(getter name, setter name, mode, declaring type or None) if the component of type tname (or a base
+        type) has accessors, else None"""
         acc = self.cfg["accessors"]
         if not acc or tname is None:
             return None
@@ -599,21 +604,21 @@ class Translator:
         for name in chain:
             t = self.find_type(name)
             names = acc.get(name, {})
-            listed = comp in names or "*" in names
             if (t is not None and comp in t.comps) or comp in names or (t is None and "*" in names):
                 # the type that defines the component decides; type not parsed: trust the configuration
-                return (names.get(comp) or spelled) if listed else None
+                ent = names.get(comp) or names.get("*")
+                if ent is None:
+                    return None
+                get, put = (ent[0] or subst(self.cfg[k], name=spelled) for k in ("member_getter_name",
+                                                                                  "member_setter_name"))
+                return get, put, ent[1], t
         return None
 
-    def member_mode(self, td, n):
-        """member_accessors mode of component n of type td (declared in td or a base type), or None"""
-        for t in [td, *self.prog.ancestors(td)] if td is not None else []:
-            if n in t.comps:
-                if t.module.name in getattr(self.prog, "wrapped", ()):
-                    return None
-                m = self.cfg["member_accessors"].get(t.name, {})
-                return m.get(n) or m.get("*")
-        return None
+    def own_member(self, owner, td, n, on_this):
+        """component n with accessors, used in a method of the class declaring it (or a derived one): the data
+        member itself, if that class is translated in this run (not wrapped, not an existing C++ class)"""
+        return owner is not None and on_this and self.in_class_of(td, n) and \
+            owner.module.name in getattr(self.prog, "translated", ()) and owner.name not in self.cfg["type_map"]
 
     def in_class_of(self, td, n):
         """the current method belongs to the type that declares component n of td or to a type derived from it"""
@@ -632,6 +637,14 @@ class Translator:
             comp.access_need = max(comp.access_need, 1)
         else:
             comp.access_need = 2
+
+    def used_binding(self, owner, b):
+        """record from where a binding is called (C++ visibility of private bindings)"""
+        mp = self.method_proc()
+        ctx = self.find_type(mp.method_of) if mp is not None and mp.method_of else None
+        if ctx is not None and ctx is owner:
+            return
+        b.access_need = max(b.access_need, 1 if ctx is not None and owner in self.prog.ancestors(ctx) else 2)
 
     def x_Proc_Component_Ref(self, node):
         """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
@@ -663,6 +676,7 @@ class Translator:
             if cur.var is not None and cur.var.companions and n in cur.var.companions and subs is None:
                 cv = cur.var.companions[n]      # arr(i)%offset -> arr_offset[i - 1]
                 acc = self.accessor(holder.tname, cv.name, cv.cname) if holder is not None else None
+                acc = acc[0] if acc else None
                 if acc:                         # getter (wrapped class or existing C++ class)
                     x = X(self.member(holder, acc, holder.qual) + "()", cv.rank, cv.base, 100, cv, whole=True)
                 else:
@@ -691,33 +705,28 @@ class Translator:
                             qual=self.prog.type_name(n, self.mod) + "::")
                     continue
                 self.report.add("info", "unknown-component:" + n)
-                acc = self.accessor(cur.tname, n, cname(str(pname)))
-                x = X(self.member(cur, acc, cur.qual) + "()" if acc else
+                ent = self.accessor(cur.tname, n, cname(str(pname)))
+                x = X(self.member(cur, ent[0], cur.qual) + "()" if ent else
                       self.member(cur, cname(str(pname)), cur.qual))
                 if subs is not None:            # an accessor is data: subscripts are array indices
-                    x = self.unknown_ref(x.code, subs, array=bool(acc))
-            elif self.member_mode(td, n):     # member_accessors: n_ in its class, n() elsewhere
-                self.used_member(td, n, comp)
-                mode = self.member_mode(td, n)
-                if on_this and self.in_class_of(td, n):
-                    x = self.var_ref(comp, self.member(cur, comp.cname + self.cfg["member_suffix"], cur.qual))
-                    mode = None
-                else:
-                    x = X(self.member(cur, comp.cname, cur.qual) + "()", comp.rank, comp.base, 100, comp,
-                          comp.tname, whole=True, via_accessor=True, access=mode)
+                    x = self.unknown_ref(x.code, subs, array=bool(ent))
+                if ent:
+                    x.access, x.setter = ent[2], self.member(cur, ent[1], cur.qual)
+            elif (ent := self.accessor(td.name, n, comp.cname)) and self.own_member(ent[3], td, n, on_this):
+                self.used_member(td, n, comp)       # accessors of a translated class: <member> in its methods
+                x = self.var_ref(comp, self.member(cur, subst(self.cfg["member_name"], name=comp.cname), cur.qual))
                 if subs is not None:
                     x = self.subscript(x, comp, subs)
-                    x.access = mode
             else:
                 self.used_member(td, n, comp)
-                acc = self.accessor(cur.tname, n, comp.cname)
+                acc = ent[0] if ent else None
                 if comp.elem_uptr and td.module.name in getattr(self.prog, "wrapped", ()):
                     # objects of an unwrapped type in a wrapped (Fortran) class: only the companions exist
                     nxt = parts[parts.index(p) + 1] if p is not parts[-1] else None
                     nn = lname(nxt.items[0] if cls(nxt) == "Part_Ref" else nxt) if nxt is not None else None
                     if subs is None and nxt is None and comp.companions:     # size(b%arr): of a companion
                         cv = next(iter(comp.companions.values()))
-                        acc = self.accessor(cur.tname, cv.name, cv.cname) or cv.cname
+                        acc = (self.accessor(cur.tname, cv.name, cv.cname) or (cv.cname,))[0]
                         self.report.add("info", f"unwrapped-shape:{n}->{cv.name}")
                         cur = X(self.member(cur, acc, cur.qual) + "()", cv.rank, cv.base, 100, cv, whole=True)
                         continue
@@ -725,13 +734,18 @@ class Translator:
                         raise Untranslatable("unwrapped-object-of-wrapped-class")
                 if acc:     # the accessor returns a reference, also for pointer components
                     x = X(self.member(cur, acc, cur.qual) + "()", comp.rank, comp.base, 100, comp,
-                          comp.tname, whole=True, via_accessor=True)
+                          comp.tname, whole=True, via_accessor=True, access=ent[2],
+                          setter=self.member(cur, ent[1], cur.qual))
                     if self.via_getters and n in self.cfg["wrap_constants"].get(td.name, []):
                         self.note("wrapped-constant", f"{comp.cname}: copy made at setup (changes are not seen)")
                 else:
                     x = self.var_ref(comp, self.member(cur, comp.cname, cur.qual))
                 if subs is not None:
                     x = self.subscript(x, comp, subs)
+                    x.access = ent[2] if acc else None
+            # through a const getter (not a pointer): the whole chain is read-only
+            if cur.access == "get" and x.access is None and not (cur.var is not None and cur.var.has("pointer")):
+                x.access = "get"
             cur = x
             cur.on_this = on_this
         return cur
@@ -1224,6 +1238,7 @@ class Translator:
         p = self.prog.binding_proc(owner, b) if owner else None
         if b is not None:
             b.spellings.add(str(bname).strip())
+            self.used_binding(owner, b)
         if p is None and owner is not None and n in owner.generics:
             # generic binding: find the specific procedure that fits the arguments
             cands = []
@@ -1234,6 +1249,11 @@ class Translator:
                     if ps is not None and ps not in cands:
                         cands.append(ps)
             p = self.pick_specific(cands, items_of(args)) if cands else None
+            for tt in [td, *self.prog.ancestors(td)]:     # visibility of the specific bindings (overloads)
+                for s_name in tt.generics.get(n, ()):
+                    owner_s, b_s = self.prog.find_binding(td, s_name)
+                    if b_s is not None:
+                        self.used_binding(owner_s, b_s)
             argc = self.bound_args(p, items_of(args)) if p is not None else self.plain_args(items_of(args))
         elif p is not None:
             argc = self.bound_args(p, items_of(args))
@@ -1337,6 +1357,8 @@ class Translator:
                 d = f'#include "{new}"' if new else ""
             if d:
                 self.out.append(d)
+            return
+        if s.strip() in FORTRAN_SEPARATORS:
             return
         c = self.comment_text(node)
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]
@@ -1507,13 +1529,13 @@ class Translator:
             self.emit(ind, f"{cpp_cls} {self.new_named_element(v, items_of(lhs_n.items[1]))}({m.group(3)});")
             return
         lhs = self.ref(lhs_n)
-        if lhs.access == "get":                 # member_accessors: read-only from outside
+        if lhs.access == "get":                 # accessors: read-only from outside
             raise Untranslatable("member-read-only")
-        if lhs.access == "set":                 # the setter overload (whole member only)
-            if not lhs.whole:
+        if lhs.access == "set":                 # the setter (whole member only)
+            if not lhs.whole or lhs.setter is None:
                 raise Untranslatable("member-setter-element")
             r = self.expr(rhs_n)
-            self.emit(ind, f"{lhs.code[:-2]}({self.matrix(r) if r.rank else r.code});")
+            self.emit(ind, f"{lhs.setter}({self.matrix(r) if r.rank else r.code});")
             return
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
@@ -2129,7 +2151,7 @@ class Translator:
             i = self.expr(var).code
             decl = f"{self.cpp_type(v)} " if n in self.loop_decl and v is not None else ""
             st = self.expr(bounds[2]).code if len(bounds) > 2 else "1"
-            if n in self.loop_local and self.cfg["zero_based_loops"] and st in ("1", "-1"):
+            if n in self.loop_local and st in ("1", "-1"):
                 idx, other, arg = self.index_uses(node, n)
                 shift = 1 if idx > other and not arg else 0
             lo, hi = self.minus(bounds[0], shift), self.expr(bounds[1])

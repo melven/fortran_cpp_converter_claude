@@ -17,8 +17,9 @@ from fparser.two import Fortran2003 as F
 
 from .emit import ModuleEmitter, BANNER, squeeze, strip_blank
 from .model import cls, lname, items_of
-from .translate import TODO, Untranslatable
+from .translate import TODO, Untranslatable, FORTRAN_SEPARATORS
 from .reverse import ReverseMixin
+from .config import subst
 
 
 def lower_camel(name):
@@ -69,16 +70,13 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             return f"{self.cfg['c_prefix']}_{self.c_class(t)}"
         return f"{self.cfg['c_prefix']}_{self.c_class_name(self.root(t)[1])}"
 
-    def struct_handle(self, t):
-        return self.cfg["wrap_handle"] == "struct" and self.root(t)[1] not in self.cfg["wrap_direct_handles"]
-
     def struct_type(self, t):
         """bind(C) type of the C struct of the handle: <Root>_c"""
         return f"{self.c_class_name(self.root(t)[1])}_c"
 
     def handle_member(self, t):
         """C++ member of the C handle (wrap_handle_member of the root type, default handle_)"""
-        return self.cfg["wrap_handle_member"].get(self.root(t)[1], "handle_")
+        return self.cfg["wrap_handle_member"].get(self.root(t)[1], self.cfg["handle_member"])
 
     def use_only(self, lines):
         """use statements (with only-lists) of the wrapped module and of the other parsed modules whose public
@@ -123,7 +121,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
 
     def owned(self, t):
         """C++ object owns the Fortran object (wrap_owned): destructor frees it, move-only"""
-        return t.name in self.cfg["wrap_owned"] and self.is_root(t) and not self.poly(t) and self.struct_handle(t)
+        return t.name in self.cfg["wrap_owned"] and self.is_root(t) and not self.poly(t)
 
     def owned_type(self, v):
         """(type, None) of an array argument of a wrap_owned type, or (None, reason)"""
@@ -137,7 +135,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
     def wrap_from_c(self, t, name, ht, hpp, cpp):
         """<Class>_private::wrapFromC(c): C++ object of the C object c (protected constructor; derived
         classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
-        hm = self.handle_member(t) if t is not None else "handle_"
+        hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
         cls = name.split("::")[-1]
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
@@ -182,11 +180,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
 
     def object_access(self, t, cname, handle, has_err, body):
         """binding statements: the Fortran object `obj` from the handle, around the statements body"""
-        decl, stmts, ptr = [], [""], handle
-        if self.struct_handle(t):               # handle -> bind(C) struct -> p_impl
-            decl.append(f"    type({self.struct_type(t)}), pointer :: this_c")
-            stmts.append(f"    call c_f_pointer({handle}, this_c)")
-            ptr = "this_c%p_impl"
+        # handle -> bind(C) struct -> p_impl
+        decl, stmts, ptr = [f"    type({self.struct_type(t)}), pointer :: this_c"], \
+            ["", f"    call c_f_pointer({handle}, this_c)"], "this_c%p_impl"
         if not self.poly(t):
             return decl + [f"    type({t.spelling or t.name}), pointer :: obj"], \
                 stmts + [f"    call c_f_pointer({ptr}, obj)"] + [f"    {x}" for x in body]
@@ -204,8 +200,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         return f"{self.cfg['c_prefix']}_{self.c_class(t)}_{what}"
 
     def dllexport(self, cname):
-        m = self.cfg["wrap_dllexport"]
-        return [f"#ifdef {m}", f"  {m} :: {cname}", "#endif"] if m else []
+        return ["#ifdef DLLEXPORT", f"  DLLEXPORT :: {cname}", "#endif"]
 
     # ------------------------------------------------------------------ analysis
     def doc_sizes(self, p):
@@ -389,11 +384,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         return {"real": "real(C_REAL)", "integer": "integer(C_INT)", "logical": "logical(C_BOOL)"}[v.base]
 
     def getters(self, t):
-        """public components with a getter: [(var, kind)] kind scalar | array | logical"""
+        """public components with accessors (register_accessors): [(var, kind)] kind scalar | array | logical"""
         res = []
         consts = self.cfg["wrap_constants"].get(self.root(t)[1], [])
+        acc = self.cfg["accessors"].get(t.name, {})
         for v in t.comps.values():
-            if not comp_public(t, v) or v.name in consts or self.excluded(f"{t.name}%{v.name}"):
+            if v.name not in acc or v.name in consts or self.excluded(f"{t.name}%{v.name}"):
                 continue
             if v.companion_of:                  # unwrap_types: obj%arr(:)%comp is not contiguous
                 self.report.add("todo", f"wrap-component:{v.name}")
@@ -467,9 +463,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         names = self.cfg["wrap_constants"].get(t.name, [])
         if not names:
             return [], []
-        if not self.is_root(t) or not self.struct_handle(t):
+        if not self.is_root(t):
             self.report.add("todo", f"wrap-constants:{t.name}")
-            return [], [f"constants {', '.join(names)}: only for root types with a struct handle"]
+            return [], [f"constants {', '.join(names)}: only for root types"]
         res, todo = [], []
         for n in names:
             v = t.comps.get(n)
@@ -549,12 +545,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         """Fortran (not bind(C)) project_<Class>_setup(obj) -> handle / project_<Class>_destroy(handle):
         C struct (and wrapper of a hierarchy) with the constants; the object must outlive the handle"""
         setup, destroy = self.c_name(t, "setup"), self.c_name(t, "destroy")
-        ft, poly, struct = t.spelling or t.name, self.poly(t), self.struct_handle(t)
+        ft, poly = t.spelling or t.name, self.poly(t)
         sty, wty = self.struct_type(t), self.wrapper_type(t) if self.poly(t) else None
-        own = ([f"type({sty}), pointer :: this_c"] if struct else []) + \
-            ([f"type({wty}), pointer :: wrapper"] if poly else [])
+        own = [f"type({sty}), pointer :: this_c"] + ([f"type({wty}), pointer :: wrapper"] if poly else [])
         bufs, frees = [], []
-        copy = self.copy_constants(consts, "this_c", "obj", bufs, frees) if struct else []
+        copy = self.copy_constants(consts, "this_c", "obj", bufs, frees)
         fb += ["", f"  !> handle of obj for C / C++ (obj must outlive it; release with {destroy})",
                f"  function {setup}(obj) result(handle)",
                f"    {'class' if poly else 'type'}({ft}), target :: obj", "    type(C_PTR) :: handle"] + \
@@ -562,21 +557,16 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         p = "c_loc(wrapper)" if poly else "c_loc(obj)"
         if poly:
             fb += ["    allocate(wrapper)", "    wrapper%ptr => obj"]
-        if struct:
-            fb += ["    allocate(this_c)", f"    this_c%p_impl = {p}"] + [f"    {x}" for x in copy] + \
-                ["    handle = c_loc(this_c)"]
-        else:
-            fb.append(f"    handle = {p}")
+        fb += ["    allocate(this_c)", f"    this_c%p_impl = {p}"] + [f"    {x}" for x in copy] + \
+            ["    handle = c_loc(this_c)"]
         fb += [f"  end function {setup}", "",
                f"  !> releases the handle of {setup} (not the object)", f"  subroutine {destroy}(handle)",
                "    type(C_PTR), intent(inout) :: handle"] + [f"    {d}" for d in own + bufs] + \
             ["", "    if (.not. c_associated(handle)) return"]
-        if struct:
-            fb += ["    call c_f_pointer(handle, this_c)"] + [f"    {x}" for x in frees]
+        fb += ["    call c_f_pointer(handle, this_c)"] + [f"    {x}" for x in frees]
         if poly:
-            fb += [f"    call c_f_pointer({'this_c%p_impl' if struct else 'handle'}, wrapper)", "    deallocate(wrapper)"]
-        if struct:
-            fb.append("    deallocate(this_c)")
+            fb += ["    call c_f_pointer(this_c%p_impl, wrapper)", "    deallocate(wrapper)"]
+        fb.append("    deallocate(this_c)")
         fb += ["    handle = C_NULL_PTR", f"  end subroutine {destroy}"]
         if self.owned(t):                       # C++ owns the object: frees object and struct
             free, h = self.c_name(t, "free"), lower_camel(self.c_class(t))
@@ -589,7 +579,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                  f"  end subroutine {free}"]
 
     def constant_getter(self, t, v, kind, hdecl, cpp):
-        hm = self.handle_member(t) if t is not None else "handle_"
+        hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
         tr, n = self.tr(), v.cname
         if kind == "struct":
             for line in self.component_docs(t).get(v.name, []):
@@ -632,7 +622,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
 
     def method(self, t, bd, p, args, fb, hdecl, cpp):
         """emit the binding, the declaration and the glue of one method (t, bd None: module procedure)"""
-        hm = self.handle_member(t) if t is not None else "handle_"
+        hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
         tr = self.tr(p)
         err = tr.err
         cname = self.c_name(t, bd.name) if t is not None else self.proc_c_name(p)
@@ -795,8 +785,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     cond = " || ".join(f"{h} != {c}" for h, c in zip(have, codes, strict=True))
                     if present:
                         cond = f"{present} && ({cond})"
-                    glue += [("pre", f"if( {cond} )"),       # {WHERE}: the C++ method (known below)
-                             ("pre", f'  throw std::invalid_argument("{{WHERE}}: wrong dimension of parameter {v.cname}!");')]
+                    msg = subst(self.cfg["size_message"], param=v.cname)     # {where}: the C++ method (known below)
+                    glue += [("pre", f"if( {cond} )"), ("pre", f'  throw std::invalid_argument("{msg}");')]
         if has_err:
             f_args.append("ierr")
             decls.append("integer(C_INT), intent(out) :: ierr")
@@ -846,7 +836,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         cpp.emit(0, "{")
         for g in glue:
             if isinstance(g, tuple) and g[0] == "pre":
-                cpp.emit(1, g[1].replace("{WHERE}", f"{qual}{name}"))
+                cpp.emit(1, subst(g[1], where=f"{qual}{name}"))
         cargs = ", ".join(([hm] if t is not None else []) + [g for g in glue if not isinstance(g, tuple)] +
                           (["&ierr"] if has_err else []))
         if has_err:
@@ -864,7 +854,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             cpp.emit(1, "return res;")
         if has_err:
             cpp.emit(1, "if( ierr != 0 )")
-            cpp.emit(2, f'throw std::runtime_error("Error: calling C function {cname} in {qual}{name}!");')
+            msg = subst(self.cfg["call_message"], cfunc=cname, where=f"{qual}{name}")
+            cpp.emit(2, f'throw std::runtime_error("{msg}");')
             if r is not None:
                 cpp.emit(1, "return res;")
         cpp.emit(0, "}")
@@ -971,7 +962,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         cpp.emit(0, "")
 
     def getter(self, t, v, kind, fb, hdecl, cpp):
-        hm = self.handle_member(t) if t is not None else "handle_"
+        """accessors of component v (mode of register_accessors): get: const getter; ref: + reference;
+        set: + setter (logical: always, Fortran logical has no C reference)"""
+        hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
+        name, mode = self.cfg["accessors"][t.name][v.name]
+        get, put = (name or subst(self.cfg[k], name=v.cname) for k in ("member_getter_name", "member_setter_name"))
         tr = self.tr()
         cname = self.c_name(t, v.name)
         handle = lower_camel(self.c_class(t))
@@ -987,8 +982,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                    f"    type(C_PTR), value :: {handle}", "    type(C_PTR) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
             ty = tr.cpp_type(v)
-            decls = [(f"{ty}& {v.cname}()", f"return *{cname}({hm});"),
-                     (f"const {ty}& {v.cname}() const", f"return *{cname}({hm});")]
+            decls = [(get, f"{ty}& {get}()", f"return *{cname}({hm});", ""),
+                     (get, f"const {ty}& {get}() const", f"return *{cname}({hm});", " (const version)")] \
+                if mode == "ref" else [(get, f"{ty} {get}() const", f"return *{cname}({hm});", "")]
+            if mode == "set":
+                decls.append((put, f"void {put}({ty} value)", f"*{cname}({hm}) = value;", " (setter)"))
         elif kind == "logical":
             fb.append(f"  !  bool {cname}(const {self.c_type_name(t)}* {handle});")
             fb.append("  !@end_c_declaration")
@@ -996,16 +994,17 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             fb += [f"  function {cname}({handle}) result(res) bind(C, name=\"{cname}\")"] + self.dllexport(cname) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL) :: res"] + odecl + ostmts + \
                 [f"  end function {cname}"]
-            decls = [(f"bool {v.cname}() const", f"return {cname}({hm});")]  # Fortran logical: no reference
-            setter = self.c_name(t, f"{v.name}_set")       # ... so a setter (overload of the getter name)
+            decls = [(get, f"bool {get}() const", f"return {cname}({hm});", "")]  # Fortran logical: no reference
+        if kind == "logical" and mode != "get":             # ... so a setter (overload of the getter name)
+            setter = self.c_name(t, f"{v.name}_set")
             fb += ["", "  !@c_declaration", f"  !  void {setter}({self.c_type_name(t)}* {handle}, bool value);",
                    "  !@end_c_declaration"]
             odecl, ostmts = self.object_access(t, setter, handle, False, [f"obj%{v.name} = value"])
             fb += [f"  subroutine {setter}({handle}, value) bind(C, name=\"{setter}\")"] + self.dllexport(setter) + [
                    f"    type(C_PTR), value :: {handle}", "    logical(C_BOOL), value :: value"] + odecl + ostmts + \
                 [f"  end subroutine {setter}"]
-            decls.append((f"void {v.cname}(bool value)", f"{setter}({hm}, value);"))
-        else:
+            decls.append((put, f"void {put}(bool value)", f"{setter}({hm}, value);", " (setter)"))
+        elif kind == "array":
             ct = self.c_type(v)
             dims = ["n1"] if v.rank == 1 else ["n1", "n2"]
             fb.append(f"  !  void {cname}(const {self.c_type_name(t)}* {handle}, {ct}** data, "
@@ -1024,17 +1023,18 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             body = (f"{ct}* data = nullptr; " + " ".join(f"int {d} = 0;" for d in dims) +
                     f" {cname}({hm}, &data, " + ", ".join(f"&{d}" for d in dims) +
                     "); return Eigen::Map<{}>(data, " + ", ".join(dims) + ");")
-            decls = [(f"Eigen::Map<{et}> {v.cname}()", body.replace("{}", et)),
-                     (f"Eigen::Map<const {et}> {v.cname}() const", body.replace("{}", f"const {et}"))]
+            const = [(get, f"Eigen::Map<const {et}> {get}() const", body.replace("{}", f"const {et}"), "")]
+            decls = const if mode == "get" else \
+                [(get, f"Eigen::Map<{et}> {get}()", body.replace("{}", et), "")] + \
+                [(get, const[0][1], const[0][2], " (const version)")]   # set: whole arrays by reference
         doc, dox = self.component_docs(t).get(v.name, []) or [f"component {v.cname}"], self.cfg["doxygen"]
-        for k, (decl, body) in enumerate(decls):
+        for fn, decl, body, suffix in decls:
             lines = list(doc)
-            if lines and k == 1:
-                lines[-1] += " (setter)" if kind == "logical" else " (const version)"
+            lines[-1] += suffix
             for line in lines:
                 hdecl.emit(1, f"{dox} {line}".rstrip())
             hdecl.emit(1, decl + ";")
-            cpp.emit(0, decl.replace(f" {v.cname}(", f" {cls_name}::{v.cname}(", 1))
+            cpp.emit(0, decl.replace(f" {fn}(", f" {cls_name}::{fn}(", 1))
             cpp.emit(0, "{")
             for stmt in body.split("; "):
                 cpp.emit(1, stmt.rstrip(";") + ";")
@@ -1062,13 +1062,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         return [re.sub(r"(@brief:?\s*)", lambda m: m.group(1) + prefix, line, count=1) for line in lines]
 
     def log_includes(self):
-        """header of the error logging in catch blocks (log_error) or <cstdio>"""
+        """headers of the error logging in catch blocks (style: errors.log_includes)"""
         if not self.needs_cstdio:
             return []
-        if not self.cfg["log_error"]:
-            return ["#include <cstdio>", ""]
-        inc = self.cfg["log_error_include"]
-        return ["#include <string>", ""] + ([f"#include {inc}", ""] if inc else [])
+        return [f"#include {inc}" for inc in self.cfg["log_includes"]] + [""]
 
     def cpp_file_header(self, ext, prefix=None, suffix=""):
         from .emit import plain_comment
@@ -1133,12 +1130,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             root, rname = self.root(t)
             hm = self.handle_member(t)
             if self.is_root(t):
-                if self.struct_handle(t):       # struct of the handle: bind(C) type <Class>_c
-                    typedefs += [f"!typedef struct {ht}", "!{", "!  void* p_impl = nullptr;"] + \
-                        [f"!  {line}" for line in self.constants_struct(self.constants(t)[0])[0]] + [f"!}} {ht};", "!"]
-                    structs.append(t)
-                else:
-                    typedefs.append(f"!typedef struct {ht} {ht};")
+                # struct of the handle: bind(C) type <Class>_c
+                typedefs += [f"!typedef struct {ht}", "!{", "!  void* p_impl = nullptr;"] + \
+                    [f"!  {line}" for line in self.constants_struct(self.constants(t)[0])[0]] + [f"!}} {ht};", "!"]
+                structs.append(t)
                 if self.poly(t):
                     wrappers.append(t)
             elif root is not None and root.module is not mod:       # hierarchy from another module
@@ -1147,7 +1142,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     os.path.basename(prog.file_stem(root.module.name))
                 if f'!#include "{rstem}.h"' not in typedefs:
                     typedefs.insert(0, f'!#include "{rstem}.h"')
-                imported = [self.wrapper_type(t)] + ([self.struct_type(t)] if self.struct_handle(t) else [])
+                imported = [self.wrapper_type(t), self.struct_type(t)]
                 uses.add(f"  use {root.module.spelling}_c_binding, only: {', '.join(imported)}")
             elif root is None:
                 hpp.emit(0, f"// {TODO}: base type {rname} is not parsed (give its module with -I)")
@@ -1204,6 +1199,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 self.method(t, bd, p, args, fb, hpp, cpp)
                 self.report.add("translated", "wrapped-method")
             getters = self.getters(t)
+            if getters and t.name in getattr(self.prog, "implicit_accessors", ()):
+                self.report.add("info", f"accessors-implicit:{t.name}")     # no accessors list: all public (ref)
             if getters or self.consts or self.const_todo:
                 hpp.emit(0, "")
             for v, kind, _ in self.consts:
@@ -1431,7 +1428,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         b[:] = declaration_separators(procedure_separators(spec_sections(b, start)))
 
 
-SEPARATOR = "  !" + "=" * 80
+SEPARATOR = "  " + FORTRAN_SEPARATORS[0]
 
 
 def positional(call, dummies):
@@ -1550,7 +1547,7 @@ def procedure_separators(b):
     return out
 
 
-DECL_SEPARATOR = "    !" + "-" * 70
+DECL_SEPARATOR = "    " + FORTRAN_SEPARATORS[1]
 DECL = re.compile(r"\s+(?:type|class|real|integer|logical|character|complex|double\s+precision|procedure)\b[^!]*::\s*(.*)",
                   re.I)
 
@@ -1769,19 +1766,29 @@ def comp_public(t, v):
 
 
 def register_accessors(prog, wrapped):
-    """components of wrapped classes are getters in C++: obj%n -> obj.n()"""
+    """accessors of the components of wrapped classes (generated getters; callers: obj%n -> obj.n()): the
+    listed public components ("*": all), types without a list: all public components (ref), noted in the report;
+    logical: set instead of ref (no reference into Fortran); constants: get"""
     cfg = prog.cfg
+    prog.implicit_accessors = set()
     reverse = set(cfg["wrap_reverse"]) | set(cfg["wrap_reverse_factories"])
     for m in wrapped:
         for t in m.types.values():
-            acc = cfg["accessors"].setdefault(t.name, {})
+            listed = cfg["accessors"].get(t.name)
+            consts = set(cfg["wrap_constants"].get(t.name, []))
+            if listed is None and t.name not in reverse:
+                prog.implicit_accessors.add(t.name)
+            listed = listed or {"*": (None, "ref")}
+            acc = {}
             if t.name in reverse:               # implemented in C++: only the constants (also inherited ones)
-                for n in cfg["wrap_constants"].get(t.name, []):
-                    acc.setdefault(n, None)
-                continue
+                listed = {}
             for v in t.comps.values():
-                if comp_public(t, v):
-                    acc.setdefault(v.name, None)
+                ent = listed.get(v.name) or listed.get("*")
+                if ent is not None and comp_public(t, v) and v.name not in consts:
+                    acc[v.name] = (ent[0], "set" if v.base == "logical" and ent[1] == "ref" else ent[1])
+            for n in consts:
+                acc[n] = ((listed.get(n) or (None,))[0], "get")
+            cfg["accessors"][t.name] = acc
 
 
 def check_dependencies(prog, wrapped, translated, report):

@@ -31,15 +31,17 @@ def parse_file(path, cfg, parser):
     return mods
 
 
-def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
-    """translate all files in paths; interface_only files are parsed for their symbols only;
-    wrap files get the C++ interface of the translation, implemented by calls of the Fortran code"""
+def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapped_interface=()):
+    """translate all files in paths; interface_only files are parsed for their symbols only (wrapped_interface:
+    modules wrapped in their own run); wrap files get the C++ interface of the translation, implemented by calls of
+    the Fortran code"""
     report = report or Report()
     paths = list(paths) + [w for w in wrap if w not in paths]
     parser = ParserFactory().create(std="f2008")
     prog = Program(cfg)
     todo = []
-    for path in list(paths) + list(interface_only):
+    iface_wrapped = set()
+    for path in list(paths) + list(interface_only) + list(wrapped_interface):
         try:
             mods = parse_file(path, cfg, parser)
         except Exception as e:      # fparser syntax errors
@@ -70,11 +72,14 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=()):
             prog.add(m)
             if path in paths:
                 todo.append((path, m))
+            elif path in wrapped_interface:
+                iface_wrapped.add(m)
     prog.finish()
     wrapped = [m for path, m in todo if path in wrap]
-    prog.wrapped = {m.name for m in wrapped}
+    prog.wrapped = {m.name for m in wrapped} | {m.name for m in iface_wrapped}     # C++ classes are wrappers
+    prog.translated = {m.name for _, m in todo if m not in wrapped}
     from .wrap import WrapEmitter, register_accessors, check_dependencies
-    register_accessors(prog, wrapped)
+    register_accessors(prog, wrapped + sorted(iface_wrapped, key=lambda m: m.name))
     check_dependencies(prog, wrapped, [m for _, m in todo if m not in wrapped], report)
     os.makedirs(outdir, exist_ok=True)
     written = []
@@ -129,6 +134,8 @@ def main(argv=None):
     ap.add_argument("-n", "--namespace", help="C++ namespace (overrides config)")
     ap.add_argument("-I", "--interface", action="append", default=[], metavar="FILE",
                     help="parse FILE only for its symbols (used modules), no output")
+    ap.add_argument("-w", "--wrapped-interface", action="append", default=[], metavar="FILE",
+                    help="like -I, for a module that is wrapped (-W) in its own run: its classes are wrapper classes")
     ap.add_argument("-x", "--exclude", action="append", default=[], metavar="MODULE:NAME",
                     help="do not emit NAME of MODULE (procedure, type, variable, type%%binding; glob patterns)")
     ap.add_argument("-W", "--wrap", action="append", default=[], metavar="FILE",
@@ -149,7 +156,8 @@ def main(argv=None):
     sys.setrecursionlimit(100000)
     threading.stack_size(512 * 1024 * 1024)
     worker = threading.Thread(target=lambda: result.append(translate(args.files, cfg, args.outdir,
-                                                                     args.interface, wrap=args.wrap)))
+                                                                     args.interface, wrap=args.wrap,
+                                                                     wrapped_interface=args.wrapped_interface)))
     worker.start()
     worker.join()
     if not result:

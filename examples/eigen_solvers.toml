@@ -2,27 +2,33 @@
 # Adapt the type names, binding names and argument positions to the Fortran classes.
 # {self}: the object the method is called on; {0}, {1}, ...: the arguments (without ierr).
 
-[type_map]
-eigensolver_type = "Eigen::EigenSolver<mat>"
-linearsolver_type = "Eigen::PartialPivLU<mat>"
-leastsquares_type = "Eigen::ColPivHouseholderQR<mat>"
+[modules]                   # no header of the replaced Fortran modules
+eigensolver_mod = {header = ""}
+linearsolver_mod = {header = ""}
+leastsquares_mod = {header = ""}
 
-[module_headers]            # no header of the replaced Fortran modules
-eigensolver_mod = ""
-linearsolver_mod = ""
-leastsquares_mod = ""
+[types.eigensolver_type]
+cpp = "Eigen::EigenSolver<mat>"
 
-[method_templates]
+[types.eigensolver_type.bindings]
 # call es%solveSymmetric(A, lambda, V, ierr): the symmetric case uses another Eigen class than the object
-"eigensolver_type%solvesymmetric" = "{ Eigen::SelfAdjointEigenSolver<mat> es_({0}); {1} = es_.eigenvalues(); {2} = es_.eigenvectors(); }"
+solvesymmetric.template = "{ Eigen::SelfAdjointEigenSolver<mat> es_({0}); {1} = es_.eigenvalues(); {2} = es_.eigenvectors(); }"
 # call es%solveNonsymmetric(A, lambda, V, ierr): eigenvalues / eigenvectors are complex in general
-"eigensolver_type%solvenonsymmetric" = "{self}.compute({0}); {1} = {self}.eigenvalues().real(); {2} = {self}.eigenvectors().real();  // TODO: complex eigenvalues"
+solvenonsymmetric.template = "{self}.compute({0}); {1} = {self}.eigenvalues().real(); {2} = {self}.eigenvectors().real();  // TODO: complex eigenvalues"
 
+[types.linearsolver_type]
+cpp = "Eigen::PartialPivLU<mat>"
+
+[types.linearsolver_type.bindings]
 # call lu%setup(n, ierr): not needed (the decomposition is sized by compute) -> empty template drops the call
-"linearsolver_type%setup" = ""
+setup.template = ""
 # call lu%factorize(A, ierr); call lu%solve(b, x, ierr)
-"linearsolver_type%factorize" = "{self}.compute({0});"
-"linearsolver_type%solve" = "{1} = {self}.solve({0});"
+factorize.template = "{self}.compute({0});"
+solve.template = "{1} = {self}.solve({0});"
 
+[types.leastsquares_type]
+cpp = "Eigen::ColPivHouseholderQR<mat>"
+
+[types.leastsquares_type.bindings]
 # call ls%solve(A, b, x, ierr)
-"leastsquares_type%solve" = "{2} = {self}.compute({0}).solve({1});"
+solve.template = "{2} = {self}.compute({0}).solve({1});"

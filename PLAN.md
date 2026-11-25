@@ -93,8 +93,16 @@ Priorities: tests first (they protect every later step), then correctness, then 
   regex post-processing; layout (sections, separators, line limits) as a final printer.
 - Split `translate.py` (expressions, statements, calls, intrinsics, error flag) and `wrap.py` (names/config,
   binding, glue, constants, Fortran printer) into modules/mixins without behaviour change (golden files first).
-- Declarative config normalisation (key → type / normaliser), generated option documentation (README table from
-  `DEFAULTS` comments).
+- [done] Config restructured: config file (`[project]`, `[macros]`, `[map]`, `[modules.M]`, `[types.T]` with
+  `bindings`, `[procedures.P]`, ...) and style file (`f2cpp/style.toml`: names, layout, conventions, accessor and
+  message templates); macros and their roles in generated Fortran derived from the prefix / include; removed:
+  `closed_hierarchy`, `declare_at_first_use`, `zero_based_loops`, `explicit_this`, `wrap_handle = "direct"`,
+  `wrap_dllexport`; `tools/convert_config.py` for old configs.
+- [done] One `accessors` list per type (`component[=name][:get|set|ref]`) for translated, wrapped, `-I` and existing
+  classes; callers do not change when a type moves from wrapped to translated.
+- [done] `-w FILE`: interface of a module wrapped in its own run (implicit accessors, wrapped object arguments).
+- [done] `int_arrays = "auto"`: what other modules see is `Eigen::VectorXi` (independent of the callers of a run),
+  so callers are the same with `-I`; `std::vector<int>` only inside a module.
 - Emitter state: one context object per module (`ModuleState`) instead of attributes set in `generate`.
 
 ### 4. Later
