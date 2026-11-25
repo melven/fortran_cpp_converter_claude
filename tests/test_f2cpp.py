@@ -219,18 +219,18 @@ def test_features(out):
     assert "mutable vec work;  //!< scratch space" in hpp and "'work' is translated as an owning array" not in hpp
     assert "if (work.size() == 0) work.resize(max_items);" in cpp and "if (work.size() > 0) work(0) = m;" in cpp
     assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
-    # integer arrays: std::vector<int> unless used in array expressions / as vector subscript
-    assert "int count_marked(const std::vector<int>& flags);" in hpp
+    # integer arrays: std::vector<int> unless used in array expressions / as vector subscript; interface (public
+    # procedures, components, variables): Eigen, independent of the callers of the run (same with -I)
+    assert "int count_marked(const Eigen::VectorXi& flags);" in hpp and "int count_ones(const std::vector<int>& flags)" in cpp
     assert "std::vector<int> marks;" in cpp and "Eigen::VectorXi sel;" in cpp
     assert "std::vector<int> fixed = {1, 0, 1};" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
     assert "marks.resize(m);" in cpp and "std::fill(marks.begin(), marks.end(), 0);" in cpp
     assert "marks[i - 1] = 1;" in cpp and "copy = marks;" in cpp and "fixed = {1, 0, 1};" in cpp
-    assert "count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes[3];" in cpp
+    assert "count_ones(marks) + count_ones(copy) + count_ones(fixed) + count_marked(sel) + primes[3];" in cpp
     assert "sel = (Eigen::VectorXi(2) << 1, 2).finished();" in cpp and "shifted = (sel.array() + 1).matrix();" in cpp
     assert "if (!copy.empty()) copy.clear();" in cpp
-    assert "if (static_cast<int>(flags.size()) == 2 || static_cast<int>(flags.size()) == 4 || " \
-           "(n > 0 && n < 2)) n = 0;" in cpp
-    assert "if (!(n == 0 && static_cast<int>(flags.size()) >= 0)) n = 1;" in cpp
+    assert "if (flags.size() == 2 || flags.size() == 4 || (n > 0 && n < 2)) n = 0;" in cpp
+    assert "if (!(n == 0 && flags.size() >= 0)) n = 1;" in cpp
     assert "(Eigen::Array<bool, Eigen::Dynamic, 1>(2) << (n == 0), (n == 1)).finished()" in cpp
     # output statements, string arrays, owned pointers
     assert 'std::fill(lines.begin(), lines.end(), "");' in cpp
@@ -789,10 +789,10 @@ def test_optional_arrays_are_empty_by_default(out, tmp_path):
         "subroutine h(a)\nreal, intent(in) :: a(:)\ncall f(a, s=1.0)\ncall f(a, a)\nend subroutine\nend module\n")
     translate([str(tmp_path / "o_mod.F90")], config.load(), str(tmp_path))
     hpp, cpp = (tmp_path / "o_mod.hpp").read_text(), (tmp_path / "o_mod.cpp").read_text()
-    assert "void f(const vec& a, const vec& w = vec(), const std::vector<int>& idx = std::vector<int>(), " \
-           "std::optional<scalar> s = std::nullopt);" in hpp
-    assert "if (w.size() == 0) return;" in cpp and "if (!idx.empty()) g(w);" in cpp
-    assert "f(a, vec(), std::vector<int>(), 1.0);" in cpp and "f(a, a);" in cpp
+    assert "void f(const vec& a, const vec& w = vec(), const Eigen::VectorXi& idx = Eigen::VectorXi(), " \
+           "std::optional<scalar> s = std::nullopt);" in hpp       # public procedure: Eigen integer vector
+    assert "if (w.size() == 0) return;" in cpp and "if (idx.size() > 0) g(w);" in cpp
+    assert "f(a, vec(), Eigen::VectorXi(), 1.0);" in cpp and "f(a, a);" in cpp
 
 
 def test_unwrapped_mutable_wrapper_type(tmp_path):
@@ -1463,13 +1463,13 @@ def test_unwrapped_type_with_companions(tmp_path):
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([os.path.join(CORPUS, "unwrap", "blocks_mod.F90")], c, str(tmp_path))
     hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
-    assert "  //! the operator\n  std::vector<std::unique_ptr<Op>> arr;\n  //! first row\n  std::vector<int> arr_offset1;\n" \
-           "  //! first column\n  std::vector<int> arr_offset2;" in hpp
+    assert "  //! the operator\n  std::vector<std::unique_ptr<Op>> arr;\n  //! first row\n  Eigen::VectorXi arr_offset1;\n" \
+           "  //! first column\n  Eigen::VectorXi arr_offset2;" in hpp        # companions of a public component
     assert "class Block;" not in hpp and "class Block\n" not in hpp and "mutable" not in hpp
     assert "  arr_offset1.resize(n);\n  arr_offset2.resize(n);\n  arr.resize(n);" in cpp
-    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1[i] = 10 * (i + 1);\n" \
-           "    arr_offset2[i] = arr_offset1[i] + 1;" in cpp
-    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2[i]));" in cpp
+    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1(i) = 10 * (i + 1);\n" \
+           "    arr_offset2(i) = arr_offset1(i) + 1;" in cpp
+    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2(i)));" in cpp
     if not shutil.which("g++") or not os.path.isdir(EIGEN):
         return
     (tmp_path / "main.cpp").write_text('#include "blocks_mod.hpp"\n#include <cstdio>\nint main()\n{\n'
@@ -1505,7 +1505,7 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
     assert "  offsets_.row = c.offsets.row;\n  offsets_.col = c.offsets.col;\n" \
            "  offsets_.w = Eigen::Map<const vec>(c.offsets.w, 2);\n" \
            "  offsets_.scale = Eigen::Map<const vec>(c.offsets.scale, c.offsets.scale_size);\n" in cpp
-    assert "  offsets_.idx.assign(c.offsets.idx, c.offsets.idx + c.offsets.idx_size);" in cpp
+    assert "  offsets_.idx = Eigen::Map<const Eigen::VectorXi>(c.offsets.idx, c.offsets.idx_size);" in cpp
     if shutil.which("g++") and os.path.isdir(EIGEN):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
              "holder_mod.cpp"], str(tmp_path))
@@ -1526,7 +1526,7 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
     translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, d, wrap=[src])
     hpp = (tmp_path / "blocks_mod.hpp").read_text()
     user = (tmp_path / "blocks_user_mod.cpp").read_text()       # translated code using the wrapped class
-    assert "for (int i = 0; i < static_cast<int>(b.arr_offset1().size()); ++i)" in user
+    assert "for (int i = 0; i < b.arr_offset1().size(); ++i)" in user
     assert "sum_offsets = sum_offsets + b.arr_offset1()[i];" in user
     b, h = (tmp_path / "blocks_mod_c_binding.F90").read_text(), (tmp_path / "blocks_mod.h").read_text()
     assert "  int* arr_offset1 = nullptr;\n  int arr_offset1_size = 0;\n" in flat(h)
@@ -2807,6 +2807,27 @@ def test_wrapped_interface(tmp_path):
     assert both == read((str(tmp_path / "iw"),), "solver_user_mod.cpp") and "s.n() + s.diag()(0)" in both
     assert "s.n + s.diag(0)" in read((str(tmp_path / "i"),), "solver_user_mod.cpp")
     assert not os.path.exists(tmp_path / "iw" / "mysolver_mod.hpp")        # no output for -w
+
+
+def test_int_arrays_same_with_interface_only(tmp_path):
+    """int_arrays = "auto": what other modules see is Eigen::VectorXi, so a caller is the same whether the callee is
+    translated in the run or given with -I (private procedures: std::vector<int> unless linked, see count_ones)"""
+    (tmp_path / "ia_mod.F90").write_text(
+        "module ia_mod\n  implicit none\n  private\n  public :: total\ncontains\n"
+        "  integer function total(flags)\n    integer, intent(in) :: flags(:)\n    total = ones(flags)\n  end function\n"
+        "  integer function ones(flags)\n    integer, intent(in) :: flags(:)\n    integer :: i\n    ones = 0\n"
+        "    do i = 1, size(flags)\n      ones = ones + flags(i)\n    end do\n  end function\nend module ia_mod\n")
+    (tmp_path / "ib_mod.F90").write_text(
+        "module ib_mod\n  use ia_mod, only: total\n  implicit none\ncontains\n  integer function run(n)\n"
+        "    integer, intent(in) :: n\n    integer, allocatable :: marks(:)\n    allocate(marks(n))\n    marks = 1\n"
+        "    run = total(marks)\n  end function\nend module ib_mod\n")
+    a, b = str(tmp_path / "ia_mod.F90"), str(tmp_path / "ib_mod.F90")
+    translate([a, b], cfg(), str(tmp_path / "t"))
+    translate([b], cfg(), str(tmp_path / "i"), [a])
+    user = read((str(tmp_path / "t"),), "ib_mod.cpp")
+    assert user == read((str(tmp_path / "i"),), "ib_mod.cpp") and "Eigen::VectorXi marks(n);" in user
+    lib = read((str(tmp_path / "t"),), "ia_mod.cpp")
+    assert "int total(const Eigen::VectorXi& flags)" in lib and "int ones(const Eigen::VectorXi& flags)" in lib
 
 
 def test_private_bindings(tmp_path):

@@ -51,7 +51,7 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 - `parse_type_spec`, `parse_array_spec`, `parse_decl`, `parse_proc_decl`: declarations → `Var`.
 - `collect_param_docs`: `!<` / `!>` documentation of dummies. `collect_proc`, `collect_type`, `collect_module`: parse tree → symbols.
 - `_target_name`, `classify_pointers`: Fortran pointers → owned (`unique_ptr`) / references / raw.
-- `Program`: `add`, `finish` (cross-module analysis), `inconsistent_case`, `classify_callbacks` (user-data callbacks), `unwrap_types` (wrapper types → wrapped type + companions), `mark_named_elements`, `file_stem`, `decide_int_vectors`, `visible`, `find_type`, `ancestors`, `polymorphic`, `find_component` (incl. inherited), `find_binding`, `binding_proc`, `overrides`, `descendants`, `overridden`, `type_name` (C++ name incl. namespace / type_map), `namespace`.
+- `Program`: `add`, `finish` (cross-module analysis), `inconsistent_case`, `classify_callbacks` (user-data callbacks), `unwrap_types` (wrapper types → wrapped type + companions), `mark_named_elements`, `file_stem`, `decide_int_vectors` (interface of a module: Eigen; inside: by uses and links), `visible`, `find_type`, `ancestors`, `polymorphic`, `find_component` (incl. inherited), `find_binding`, `binding_proc`, `overrides`, `descendants`, `overridden`, `type_name` (C++ name incl. namespace / type_map), `namespace`.
 
 ### translate.py
 - `Untranslatable(category)`: raised for anything not translated (statement becomes a `TODO(f2cpp)` comment).

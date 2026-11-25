@@ -101,8 +101,8 @@ Priorities: tests first (they protect every later step), then correctness, then 
 - [done] One `accessors` list per type (`component[=name][:get|set|ref]`) for translated, wrapped, `-I` and existing
   classes; callers do not change when a type moves from wrapped to translated.
 - [done] `-w FILE`: interface of a module wrapped in its own run (implicit accessors, wrapped object arguments).
-- `-I` modules analysed like translated ones: `int_arrays = "auto"` decisions of their procedures depend on the
-  callers of their own run (now: `Eigen::VectorXi` assumed for `-I` procedures; a mismatch is a compile error).
+- [done] `int_arrays = "auto"`: what other modules see is `Eigen::VectorXi` (independent of the callers of a run),
+  so callers are the same with `-I`; `std::vector<int>` only inside a module.
 - Emitter state: one context object per module (`ModuleState`) instead of attributes set in `generate`.
 
 ### 4. Later

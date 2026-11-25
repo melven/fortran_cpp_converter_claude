@@ -194,7 +194,7 @@ contains
     if (associated(a%payload)) allocate(b%payload)
   end subroutine relink
 
-  !> number of entries equal to one; flags stays a std::vector<int> (linked with the actual arguments)
+  !> number of entries equal to one (public: Eigen::VectorXi, independent of the callers)
   function count_marked(flags) result(n)
     integer, intent(in) :: flags(:)
     integer :: n, i
@@ -206,6 +206,16 @@ contains
       if (flags(i) == 1) n = n + 1
     end do
   end function count_marked
+
+  !> number of entries equal to one; private: flags stays a std::vector<int> (linked with the actual arguments)
+  function count_ones(flags) result(n)
+    integer, intent(in) :: flags(:)
+    integer :: n, i
+    n = 0
+    do i = 1, size(flags)
+      if (flags(i) == 1) n = n + 1
+    end do
+  end function count_ones
 
   function int_arrays(m, v) result(total)
     integer, intent(in) :: m
@@ -222,7 +232,7 @@ contains
     end do
     copy = marks
     fixed = [1, 0, 1]
-    total = count_marked(marks) + count_marked(copy) + count_marked(fixed) + primes(4)
+    total = count_ones(marks) + count_ones(copy) + count_ones(fixed) + count_marked(sel) + primes(4)
     ! uses that need an Eigen vector: vector subscript, array expression
     sel = [1, 2]
     shifted = sel + 1

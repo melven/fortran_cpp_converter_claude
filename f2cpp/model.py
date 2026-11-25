@@ -668,24 +668,30 @@ class Program:
         return m.spelling if m is not None and m.spelling else modname
 
     def decide_int_vectors(self, translated):
-        """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>"""
+        """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>; only for
+        entities used inside their module: what other modules see (dummies / results of public procedures and of
+        methods of public types, public components of public types, public module variables) is Eigen::VectorXi,
+        so the choice does not depend on the callers of the run (same with -I)"""
         if self.cfg["int_arrays"] != "auto":
             return
         for m in self.modules.values():
-            scopes = [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.ifaces.values()]
-            for p in m.procs.values():
-                t = self.find_type(p.method_of, m) if p.method_of else None
-                if m not in translated or p.external or (t is not None and self.polymorphic(t)):
-                    scopes.append({a: p.vars[a] for a in p.args if a in p.vars})   # fixed signatures
-            if m not in translated:             # existing C++ code: keep Eigen vectors
-                scopes += [p.vars for p in m.procs.values()]
-                for scope in scopes:
-                    for v in scope.values():
-                        v.needs_eigen = True
+            if m not in translated:             # -I modules: their interface; existing C++ code: Eigen vectors
+                scopes = [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.ifaces.values()] + \
+                    [p.vars for p in m.procs.values()]
             else:
-                for scope in scopes[1 + len(m.types):]:
-                    for v in scope.values():
-                        v.needs_eigen = True
+                public = {t.name for t in m.types.values() if m.is_public(t.name)}
+                specifics = {s for g, names in m.generics.items() if m.is_public(g) for s in names}
+                scopes = [{n: v for n, v in m.vars.items() if m.is_public(n, v.access)}] + \
+                    [{n: v for n, v in t.comps.items() if (v.access == "public" if v.access else not t.private_comps)}
+                     for t in m.types.values() if t.name in public] + [p.vars for p in m.ifaces.values()]
+                for p in m.procs.values():
+                    t = self.find_type(p.method_of, m) if p.method_of else None
+                    if p.external or (t is not None and self.polymorphic(t)) or m.is_public(p.name) or \
+                            p.name in specifics or p.method_of in public:      # fixed signatures
+                        scopes.append({a: p.vars[a] for a in p.args + [p.result] if a in p.vars})
+            for scope in scopes:
+                for v in scope.values():
+                    v.needs_eigen = True
         changed = True
         while changed:
             changed = False
