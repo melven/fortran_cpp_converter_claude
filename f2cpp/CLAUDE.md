@@ -37,6 +37,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
   files, keyword overrides (internal keys), `normalise` (lower case, `<PREFIX>_*` macros, macro roles from
   `macro_include`, `c_prefix` / `c_real` / ... from the namespace). Macro prefix: from the files' namespace, not `-n`.
 - `subst(template, **values)`: style templates (`{name}`, no brace escaping).
+- `unused_entries(cfg, words, prog)`: `--check-config` (entries whose names do not occur in the sources; globs match words).
 - `tools/convert_config.py`: old flat format → config + style file (one-time).
 
 ### prepass.py
@@ -92,7 +93,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - Reverse types: `reverse_constants`, `reverse_types`, `reverse_type` (C struct, C++ base, Fortran `CWrapper<Thing>_type`, factories), `fortran_behind` (Fortran implementation for C++: `wrap_<method>`, `create_<Thing>_C_from_Fortran`, C++ `CWrapper<Thing>`), `fortran_method_c`, `cwrapper_module`.
 
 ### report.py
-- `Report`: `start` (current file), `add(kind, category)`, `summary`, `write_json`.
+- `Report`: `start` (current file; `Report.CONFIG`: pseudo file of `--check-config`), `add(kind, category)`, `summary`, `write_json`.
 
 ## Findings (problems, simplifications, inconsistencies)
 

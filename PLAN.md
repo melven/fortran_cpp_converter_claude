@@ -57,8 +57,8 @@ syntax (f-strings). Fixed later: output subdirectory for `_c_binding.F90`. Not f
 Priorities: tests first (they protect every later step), then correctness, then structure for extensions.
 
 ### 0. Next (small, no major rework)
-- Unused config entries in the report (`config-unused:types.X.bindings.y`, modules / procedures that no parsed
-  module has): finds leftovers and typos (e.g. a type name in `procedures`).
+- [done] `--check-config`: config entries that no file of the run uses, or of the wrong kind (a type under
+  `[procedures]`), in the report (pseudo file `<config>`).
 - Remaining hard-coded C++ names into the style (`[names]`): `<Class>_private`, `CWrapper<Thing>`,
   `<method>_wrapper`, the `_n` size parameter.
 - Split `test_f2cpp.py` (3200 lines) by area with a `conftest.py` (mechanical; see 1).

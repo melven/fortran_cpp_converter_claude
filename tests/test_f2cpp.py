@@ -2851,6 +2851,40 @@ def test_includes_by_name(tmp_path):
     assert '  if (x < 0.0) Logger("lg").log_error("negative");' in cpp
 
 
+def test_unused_config_entries(tmp_path):
+    """--check-config: config entries that no file of the run uses (or of the wrong kind) are reported (pseudo file
+    <config>); off by default (one config serves runs over parts of the code base)"""
+    (tmp_path / "x.toml").write_text("""
+[map.functions]
+no_such_fn = "f"
+[types.Missing_type]
+cpp = "M"
+[types.MySolver_type]
+accessors = ["n", "nothere"]
+[types.MySolver_type.bindings]
+apply.translate = true
+gone.template = ""
+[types."My*_type".bindings]
+scale.template = "{self}.scale({0});"
+[modules]
+"*solver_mod" = {exclude = ["norm"]}
+[procedures]
+MySolver_type = {translate = true}
+residual_norm = {c_name = "rn"}
+""")
+    c = config.load(str(tmp_path / "x.toml"), strict=True)
+    src = os.path.join(CORPUS, "wrapped", "mysolver_mod.F90")
+    assert Report.CONFIG not in translate([], c, str(tmp_path), wrap=[src])[0].files
+    c = config.load(str(tmp_path / "x.toml"), strict=True)       # (a run adds the accessors of wrapped classes)
+    report, _ = translate([], c, str(tmp_path), wrap=[src], check_config=True)
+    info = report.files[Report.CONFIG]["info"]
+    assert set(info) == {"config-unused:map.functions.no_such_fn", "config-unused:types.missing_type",
+                         "config-unused:types.mysolver_type.accessors.nothere",
+                         "config-unused:types.mysolver_type.bindings.gone",
+                         "config-wrong-kind:procedures.mysolver_type (a type)"}
+    assert "config: 5 entries not used by the files of this run" in report.summary()
+
+
 def test_private_bindings(tmp_path):
     """procedure, private / a private statement after contains: Fortran private is module-private, so the C++
     section follows the callers (own methods: private, derived types: protected, other procedures: public)"""

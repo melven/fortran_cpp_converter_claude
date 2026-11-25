@@ -31,17 +31,20 @@ def parse_file(path, cfg, parser):
     return mods
 
 
-def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapped_interface=()):
+def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapped_interface=(), check_config=False):
     """translate all files in paths; interface_only files are parsed for their symbols only (wrapped_interface:
     modules wrapped in their own run); wrap files get the C++ interface of the translation, implemented by calls of
-    the Fortran code"""
+    the Fortran code; check_config: report config entries that no file uses"""
     report = report or Report()
     paths = list(paths) + [w for w in wrap if w not in paths]
     parser = ParserFactory().create(std="f2008")
     prog = Program(cfg)
     todo = []
-    iface_wrapped = set()
+    iface_wrapped, words = set(), set()         # words: names in the sources (unused config entries)
     for path in list(paths) + list(interface_only) + list(wrapped_interface):
+        with open(path) as f:
+            text = f.read()
+        words |= {w.lower() for w in re.findall(r"[A-Za-z_]\w*", text + "\n" + prepass(text, cfg))}
         try:
             mods = parse_file(path, cfg, parser)
         except Exception as e:      # fparser syntax errors
@@ -75,6 +78,11 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapp
             elif path in wrapped_interface:
                 iface_wrapped.add(m)
     prog.finish()
+    unused = config.unused_entries(cfg, words, prog) if check_config else []
+    if unused:
+        report.start(report.CONFIG)
+        for cat in unused:
+            report.add("info", cat)
     wrapped = [m for path, m in todo if path in wrap]
     prog.wrapped = {m.name for m in wrapped} | {m.name for m in iface_wrapped}     # C++ classes are wrappers
     prog.translated = {m.name for _, m in todo if m not in wrapped}
@@ -142,6 +150,8 @@ def main(argv=None):
                     help="module that stays in Fortran: generate its C++ interface, glue code and C binding")
     ap.add_argument("--keep-original", action="store_true", default=None,
                     help="emit each Fortran statement as comment above its translation")
+    ap.add_argument("--check-config", action="store_true",
+                    help="report config entries that no given file uses (run over the whole code base, rest as -I)")
     ap.add_argument("--report", metavar="JSON", help="write construct coverage report (no source text)")
     ap.add_argument("--strict", action="store_true", default=None,
                     help="stop at internal errors (f2cpp bugs) instead of keeping the statement as comment")
@@ -157,7 +167,8 @@ def main(argv=None):
     threading.stack_size(512 * 1024 * 1024)
     worker = threading.Thread(target=lambda: result.append(translate(args.files, cfg, args.outdir,
                                                                      args.interface, wrap=args.wrap,
-                                                                     wrapped_interface=args.wrapped_interface)))
+                                                                     wrapped_interface=args.wrapped_interface,
+                                                                     check_config=args.check_config)))
     worker.start()
     worker.join()
     if not result:

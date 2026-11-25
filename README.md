@@ -26,6 +26,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 | `-n NS` | C++ namespace (not the macro prefix) |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
 | `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`, `type%component` of wrapped types / struct constants; glob patterns, e.g. `io_mod:*_records`); in the config file `[modules.M] exclude = ["name", ...]` (`[modules."*"]` for all modules). Applies to translated and wrapped modules |
+| `--check-config` | report config entries that no given file uses (`config-unused:types.x_type.bindings.solve`, ...) or of the wrong kind (`config-wrong-kind:procedures.x_type (a type)`): for a run over the whole code base (other modules as `-I`), to find leftovers and typos |
 | `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
 
 Pass all modules that depend on each other in one call (or via `-I`): types, ranks and

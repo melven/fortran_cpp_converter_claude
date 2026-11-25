@@ -29,7 +29,7 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 
 ## Tests (one line each)
 
-- `test_config_file_format`, `test_style_file`, `test_convert_old_config`: config / style formats, `tools/convert_config.py`.
+- `test_config_file_format`, `test_style_file`, `test_convert_old_config`: config / style formats, `tools/convert_config.py`; `test_unused_config_entries`: `--check-config`.
 - `test_prepass_macros`, `test_custom_macro_names`: macro expansion. `test_report`: report contents, no source text.
 - `test_expressions`, `test_classes`, `test_features`, `test_pfunit`, `test_options`: string checks of the translated corpus.
 - `test_compiles[name]`: every translated corpus module and test compiles (`-Wall -Werror`).

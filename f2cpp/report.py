@@ -4,6 +4,8 @@ from collections import Counter
 
 
 class Report:
+    CONFIG = "<config>"                         # pseudo file: config entries not used by the files of the run
+
     def __init__(self):
         self.files = {}
         self.cur = None
@@ -25,6 +27,10 @@ class Report:
     def summary(self):
         lines = []
         for name, c in self.files.items():
+            if name == self.CONFIG:
+                lines.append(f"config: {sum(c['info'].values())} entries not used by the files of this run")
+                lines += [f"    info         {n:4d}  {cat}" for cat, n in sorted(c["info"].items())]
+                continue
             nt, nu = sum(c["translated"].values()), sum(c["untranslated"].values())
             ne = sum(c["error"].values())
             lines.append(f"{name}: {nt} statements translated, {nu} left as Fortran comment, "
