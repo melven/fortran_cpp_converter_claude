@@ -143,11 +143,12 @@ DEFAULTS = {
     # without wrap_chk_argument), {ierr}: the flag; must return; [statement, Fortran include file], e.g.
     # ["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"] (or the statement alone); None: ierr = -1 and return
     "wrap_fail": None,
+    # C string -> Fortran string (string arguments): [module, function]; None: [<ns>_str, str_array_ptr_to_str]
     "wrap_string_in": None,
     # Fortran string -> new C string and its deletion (character constants of reverse types): [module, copy, delete]
     # copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:);
     # delete(cStr_ptr): type(C_PTR), intent(inout); None: generated f2cpp_copy_string / f2cpp_delete_string
-    "wrap_string_out": None,                   # [module, function] C string -> Fortran string: [<ns>_str, str_array_ptr_to_str]
+    "wrap_string_out": None,
     # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
     # "procedure") -> {"x": "this%n", "a(2)": "3"}
     "wrap_sizes": {},
@@ -161,10 +162,11 @@ DEFAULTS = {
     # part of the wrapped hierarchy, the next derived type is its root (handle, wrapper type)
     "wrap_independent_bases": [],
     "wrap_direct_handles": [],
-    # "constant" components of wrapped root types: members of the C struct of the handle (copied by
-    # project_<Class>_set_constants, called in wrapFromC), only a const getter in C++.
-    # {"mysolver_type": ["n", "diag"]}: real / integer / logical scalars, rank 1 arrays (fixed size:
-    # copied; allocatable / pointer: pointer + size into the Fortran object)
+    # "constant" components: members of the C struct (copied once). Wrapped root types: filled by
+    # project_<Class>_setup (freed by project_<Class>_destroy), only a const getter in C++;
+    # {"mysolver_type": ["n", "diag"]}: real / integer / logical scalars, rank 1 arrays (fixed size: copied;
+    # allocatable / pointer: pointer + size into the Fortran object), structs of these. Reverse types: set by
+    # the C++ constructor (real / integer / logical / character scalars, also inherited components)
     "wrap_constants": {},
     # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
     # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
