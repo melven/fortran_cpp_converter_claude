@@ -8,7 +8,13 @@ the tests that `return`).
 
 | Path | Content |
 |---|---|
-| `test_f2cpp.py` | all tests (one file, ~3200 lines); helpers `run` (subprocess, asserts rc 0), `cfg` (test config with keyword overrides of internal keys), `out` (module fixture: whole corpus translated once), `flat` (joins one-parameter-per-line C declarations), `read`, `cxx` (`g++ -Wall -Werror -c`) |
+| `test_config.py` | config / style files, converter, macros, report, options |
+| `test_translate.py` | translation of the corpus and of single constructs (string checks, compiles, numerics) |
+| `test_accessors.py` | accessors, member / binding visibility |
+| `test_wrap.py` | wrapped modules (`-W`, `-w`) |
+| `test_reverse.py` | bidirectional types, factories, `class(*)`, coding rules of generated classes |
+| `helpers.py` | `CORPUS`, `SUPPORT`, `EIGEN`, `MODULES`, `needs_cxx`, `run` (subprocess, asserts rc 0), `run_exe` (valgrind), `cfg` (test config with keyword overrides of internal keys), `flat` (joins one-parameter-per-line C declarations), `read`, `cxx` (`g++ -Wall -Werror -c`) |
+| `conftest.py` | fixture `out`: the corpus translated once per session (read only) |
 | `corpus/*.F90`, `*.pf` | translated modules and pFUnit tests (`MODULES`); `driver.F90` (Fortran reference program) |
 | `corpus/wrapped/` | modules wrapped with `-W` (Fortran stays, C++ interface) and their users |
 | `corpus/reverse/` | abstract types implemented in C++ (reverse types, factories, constants, `class(*)` state) |

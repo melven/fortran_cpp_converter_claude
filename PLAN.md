@@ -61,7 +61,7 @@ Priorities: tests first (they protect every later step), then correctness, then 
   `[procedures]`), in the report (pseudo file `<config>`).
 - Remaining hard-coded C++ names into the style (`[names]`): `<Class>_private`, `CWrapper<Thing>`,
   `<method>_wrapper`, the `_n` size parameter.
-- Split `test_f2cpp.py` (3200 lines) by area with a `conftest.py` (mechanical; see 1).
+- [done] Tests split by area (`test_config/translate/accessors/wrap/reverse.py`, `helpers.py`, `conftest.py`).
 - Report-driven corpus growth with the converted config on the real code base (needs the user's `--report`).
 
 ### 1. Tests (short term)
@@ -71,9 +71,7 @@ Priorities: tests first (they protect every later step), then correctness, then 
 - [done] Ruff bugbear (`B`): unused loop variables, `zip(..., strict=True)` where the lengths must match (a
   mismatch is now an internal error instead of silent truncation). [done] line length 132 (E501; not for the test file: long assertions of generated code).
 - [done] Valgrind in the run tests (`run_exe`: memory errors and definite leaks fail) for all compiled programs.
-- Split `test_f2cpp.py` by area (`test_translate_*.py`, `test_wrap_*.py`, `test_reverse_*.py`, `conftest.py`
-  with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test)
-  (also in 0).
+- [done] Split the tests by area (see 0); the build helpers repeated in the run tests could move to `helpers.py`.
 - Golden files for a few representative outputs (reviewed diffs instead of many substring assertions), keep
   targeted assertions for semantics.
 - Differential numerics: for every translated corpus module, a generated Fortran ↔ C++ comparison harness
