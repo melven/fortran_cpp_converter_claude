@@ -8,6 +8,8 @@ from .prepass import CPP_MARK, PF_MARK, BLANK_MARK, ASSERT_PREFIX
 from .config import subst
 
 TODO = "TODO(f2cpp)"
+# separator lines of the generated Fortran (the project's style): not carried over into C++
+FORTRAN_SEPARATORS = ("!" + "=" * 80, "!" + "-" * 70)
 
 
 NON_WORD = r"\W"      # (no backslash inside f-string expressions: Python 3.11)
@@ -1355,6 +1357,8 @@ class Translator:
                 d = f'#include "{new}"' if new else ""
             if d:
                 self.out.append(d)
+            return
+        if s.strip() in FORTRAN_SEPARATORS:
             return
         c = self.comment_text(node)
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]

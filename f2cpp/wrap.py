@@ -17,7 +17,7 @@ from fparser.two import Fortran2003 as F
 
 from .emit import ModuleEmitter, BANNER, squeeze, strip_blank
 from .model import cls, lname, items_of
-from .translate import TODO, Untranslatable
+from .translate import TODO, Untranslatable, FORTRAN_SEPARATORS
 from .reverse import ReverseMixin
 from .config import subst
 
@@ -1428,7 +1428,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         b[:] = declaration_separators(procedure_separators(spec_sections(b, start)))
 
 
-SEPARATOR = "  !" + "=" * 80
+SEPARATOR = "  " + FORTRAN_SEPARATORS[0]
 
 
 def positional(call, dummies):
@@ -1547,7 +1547,7 @@ def procedure_separators(b):
     return out
 
 
-DECL_SEPARATOR = "    !" + "-" * 70
+DECL_SEPARATOR = "    " + FORTRAN_SEPARATORS[1]
 DECL = re.compile(r"\s+(?:type|class|real|integer|logical|character|complex|double\s+precision|procedure)\b[^!]*::\s*(.*)",
                   re.I)
 

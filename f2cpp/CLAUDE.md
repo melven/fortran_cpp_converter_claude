@@ -81,6 +81,7 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 - Methods: `method` (binding + declaration + glue of one method; ~230 lines), `owned_array`, `tr` (with `via_getters`), `translated_here` / `translated_method` (`wrap_translate`), `doc` (fallback doxygen), `not_wrapped`, `getter`.
 - Files: `header_comments`, `brief`, `log_includes`, `cpp_file_header`, `fortran_file_header`, `generate` (all outputs of a wrapped module; ~300 lines), `finish_module` (C declarations in column 1, only-lists, private/public, precision macros and includes before `module`, sections, separators, line splitting).
 - Text post-processing: `fortran_continue` (132 columns), `split_params` (long C declarations), `procedure_separators`, `section`, `spec_sections` (public / interface / type sections, one abstract interface block), `public_list`, `short_names` (63-character limit), `iso_c_only`, `use_line`, `c_header` (`.h` from `!@c_declaration`).
+- `FORTRAN_SEPARATORS` (translate.py): the separator lines of generated Fortran; such comment lines are dropped in C++.
 - Global: `comp_public`, `register_accessors` (accessors of wrapped types: listed / implicit `*:ref`, logical `set`, constants `get`; reverse types: only constants), `check_dependencies`.
 
 ### reverse.py (`ReverseMixin`)

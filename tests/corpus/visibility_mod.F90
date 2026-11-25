@@ -24,9 +24,13 @@ module visibility_mod
 
 contains
 
+  !================================================================================
+  !> adds n if it is valid (separator lines of the project style: not in C++)
   subroutine add(this, n)
     class(counter_type), intent(inout) :: this
     integer, intent(in) :: n
+    !----------------------------------------------------------------------
+
     if (this%check(n)) call this%bump(n)
   end subroutine add
 

@@ -147,7 +147,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | test module that is used by another module (shared test helpers) | additionally `<module>.hpp` with its types, constants and helper prototypes; the helpers are then not `static` |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see style `gtest_eigen_near`, `tests.includes`), `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
-| comments, `#ifdef`, `#include` (`map.includes`) | preserved |
+| comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped |
 | doxygen `!>` / `!<` | `//!` / `//!<` (style `doxygen = "///"` for the other style) |
 | `integer, intent(in) :: arg !< text` (also `!>` lines before the declaration) | `//! @param[in] arg text` in the documentation of the function in the header; result: `@return` |
 | file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |

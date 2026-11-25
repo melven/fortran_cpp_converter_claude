@@ -2841,6 +2841,8 @@ def test_private_bindings(tmp_path):
            "  bool check(int n) const;  //!< own methods only: private\n  int total = 0;\n};" in hpp
     assert "public:\n  // default for the following bindings\n  void add_scaled(int n);\n\nprivate:\n" \
            "  void scaled_add(int n);  //!< own methods only: private\n  int factor = 2;\n};" in hpp
+    assert "//---" not in hpp + read((d,), "visibility_mod.cpp") and "//===" not in hpp     # Fortran separators
+    assert "  //! adds n if it is valid" in hpp
     if shutil.which("g++") and os.path.isdir(EIGEN):
         cxx((d,), "visibility_mod")
     c = cfg(member_access="fortran")            # as declared
