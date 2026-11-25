@@ -21,6 +21,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 |---|---|
 | `files` | modules (`.F90`) → `<Module>.hpp` + `<Module>.cpp` (spelling of the `module` statement; a note on stderr if that differs from the file name, a warning for files without a module); pFUnit tests (`.pf`, `.pfunit`, or any module that uses `funit` / `pfunit`) → `<module>.cpp` |
 | `-I FILE` | parse only for symbols (types, signatures); no output. For used modules that are translated separately or already exist in C++ |
+| `-w FILE` | like `-I`, for a module that is wrapped (`-W`) in its own run: its classes are wrapper classes (accessors of wrapped classes, wrapped object arguments) |
 | `-c TOML` | configuration (see [Configuration](#configuration)); may be repeated, later files take precedence (tables and include lists are merged) |
 | `-n NS` | C++ namespace (not the macro prefix) |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
@@ -65,8 +66,8 @@ moves from wrapped to translated:
 | Class | Listed components | Not listed |
 |---|---|---|
 | translated | data member renamed (style `member`: `n_`, protected; private in final classes), accessors generated; own and derived methods of the run use the member, other code the accessors | plain member |
-| wrapped (`-W`) | accessors generated (glue into the Fortran object; `logical`: `set` instead of `ref`) | public components `ref` if the type has no list (report info `accessors-implicit`), else none |
-| `-I` (translated or wrapped before), existing C++ (`cpp`) | called only | plain member |
+| wrapped (`-W`; `-w`: called only) | accessors generated (glue into the Fortran object; `logical`: `set` instead of `ref`) | public components `ref` if the type has no list (report info `accessors-implicit`), else none |
+| `-I` (translated before), existing C++ (`cpp`) | called only | plain member |
 | reverse type | only `constants` (`get`) | – |
 
 Constants (`constants`) always have `get` accessors.
@@ -93,6 +94,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `override` / `= 0`, destructor |
 | type without derived type in the run | `class xyz final` |
 | binding that is overridden in a derived type / root of a hierarchy | `virtual` method / virtual destructor; other methods are not virtual |
+| `procedure, private :: f`, `private` after `contains` (module-private) | `private:` if only methods of the type call it, `protected:` if methods of derived types do, else public (style `member_access = "fortran"`: `private:`); constructors / destructors stay public |
 | binding `configure` with `intent(out)` passed object (`project.constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`project.destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
 | components | data types without (emitted) methods: `public:`; otherwise `private:` by default; `protected:` if used by methods of derived classes; `public:` if used anywhere else in the run (free functions, other classes, tests, structure constructors). style `member_access = "fortran"`: as declared in Fortran |

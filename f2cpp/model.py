@@ -133,6 +133,7 @@ class Binding:
     nopass: bool = False
     pass_arg: str = None
     access: str = None
+    access_need: int = 0         # 0 called by own methods only, 1 by methods of derived types, 2 from elsewhere
     generic: str = None
     spelling: str = None         # binding name as written in the type definition
     spellings: set = field(default_factory=set)     # spellings of the references that resolve to it
@@ -149,6 +150,7 @@ class TypeDef:
     generics: dict = field(default_factory=dict)
     finals: list = field(default_factory=list)
     private_comps: bool = False
+    private_bindings: bool = False   # `private` statement after `contains`
     spelling: str = None         # name as written in the type definition
     generic_spelling: dict = field(default_factory=dict)
     children: set = field(default_factory=set)
@@ -355,6 +357,8 @@ def collect_type(node, module):
                         elif s in ("public", "private"):
                             bd.access = s
                     t.bindings[bd.name] = bd
+                elif cls(b) == "Binding_Private_Stmt":
+                    t.private_bindings = True
                 elif cls(b) == "Generic_Binding":
                     t.generics[lname(b.items[1])] = [lname(x) for x in items_of(b.items[2])]
                     t.generic_spelling[lname(b.items[1])] = cname(str(b.items[1]).strip())

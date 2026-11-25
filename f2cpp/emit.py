@@ -238,13 +238,22 @@ class ModuleEmitter:
                 if q is not None and any(not str(c).startswith((PF_MARK, CPP_MARK, BLANK_MARK))
                                          for c in q.doc):
                     documented.add(id(b))
+        hidden, pending = {0: [], 1: []}, None     # private bindings: (start in tr.out, level)
+
+        def flush():
+            if pending is not None:     # move the lines of a private binding into its section
+                hidden[pending[1]].extend(tr.out[pending[0]:])
+                del tr.out[pending[0]:]
         for b in binds:
             k = cls(b)
+            trailing = k == "Comment" and prev is not None and b.item is not None and last_line(prev) == b.item.span[0]
+            if not trailing:            # a trailing comment moves with its (private) binding
+                flush()
+                pending = None
             if k == "Comment":
-                if prev is not None and id(prev) in documented and b.item is not None and \
-                        last_line(prev) == b.item.span[0]:
+                if trailing and id(prev) in documented:
                     continue        # short comment at the binding: the detailed one of the procedure is used
-                tr.comment(b, ind + 1, prev)
+                tr.comment(b, ind + 1, prev if cls(prev) != "Binding_Private_Stmt" else None)
                 continue
             prev = b
             if k == "Specific_Binding":
@@ -257,6 +266,8 @@ class ModuleEmitter:
                     self.report.add("untranslated", "binding")
                     tr.fortran_comment(b, ind + 1, "binding to unknown procedure")
                     continue
+                level = self.binding_level(t, bd, p)
+                pending = (len(tr.out), level) if level < 2 else None
                 ptr = self.tr(p)
                 self.doc(tr, p, ind + 1)
                 special = self.cfg["constructor_bindings"] + self.cfg["destructor_bindings"]
@@ -288,10 +299,11 @@ class ModuleEmitter:
                 tr.emit(ind + 1, f"~{name}();")
             elif k == "Generic_Binding":
                 tr.emit(ind + 1, f"// generic '{lname(b.items[1])}': specific procedures are C++ overloads")
+        flush()
         for q in callbacks:             # former callback implementations with user data of this type
             self.doc(tr, q, ind + 1)
             tr.emit(ind + 1, self.proto(self.tr(q), q) + ";")
-        if t.comps:
+        if t.comps or hidden[0] or hidden[1]:
             if binds or callbacks or (poly and not t.parent):
                 tr.emit(0, "")
             # sections: 2 public, 1 protected, 0 private; each entry: comments before, statement,
@@ -329,6 +341,9 @@ class ModuleEmitter:
                 lead = []
             if lead:
                 sections[2].append((lead, None, None, []))
+            for level in (1, 0):        # private bindings first in their section
+                if hidden[level]:
+                    sections[level].insert(0, ([], hidden[level], None, []))
             first = True
             for level, label in ((2, "public:"), (1, "protected:"), (0, "private:")):
                 if not sections[level]:
@@ -342,6 +357,9 @@ class ModuleEmitter:
                     for c in before:
                         tr.comment(c, ind + 1)
                     if d is None:
+                        continue
+                    if isinstance(d, list):     # declarations of private bindings
+                        tr.out.extend(d)
                         continue
                     v = t.comps.get(n) if n is not None else None
                     if cls(d) == "Data_Component_Def_Stmt" and v is not None and v.unwrapped_type and \
@@ -367,6 +385,15 @@ class ModuleEmitter:
                         ct, cd = self.var_decl(tr, cv, True).split("\0")
                         tr.emit(ind + 1, f"{ct} {cd};")
         tr.emit(ind, "};")
+
+    def binding_level(self, t, bd, p):
+        """C++ section of a binding: 2 public, 1 protected, 0 private. Fortran private bindings (module-private) are
+        private / protected / public by their calls (own methods / derived types / elsewhere); member_access =
+        "fortran": private; constructors and destructors stay public"""
+        private = bd.access == "private" or (bd.access is None and t.private_bindings)
+        if not private or p.is_ctor or p.is_dtor:
+            return 2
+        return 0 if self.cfg["member_access"] == "fortran" else bd.access_need
 
     def accessor_modes(self, t):
         """{component: (getter name, setter name, get | set | ref)} of the accessors of t's own components"""

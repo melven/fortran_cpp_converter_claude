@@ -636,6 +636,14 @@ class Translator:
         else:
             comp.access_need = 2
 
+    def used_binding(self, owner, b):
+        """record from where a binding is called (C++ visibility of private bindings)"""
+        mp = self.method_proc()
+        ctx = self.find_type(mp.method_of) if mp is not None and mp.method_of else None
+        if ctx is not None and ctx is owner:
+            return
+        b.access_need = max(b.access_need, 1 if ctx is not None and owner in self.prog.ancestors(ctx) else 2)
+
     def x_Proc_Component_Ref(self, node):
         """a % b inside the argument list of an unknown function (parsed as structure constructor)"""
         base, _, last = node.items
@@ -1228,6 +1236,7 @@ class Translator:
         p = self.prog.binding_proc(owner, b) if owner else None
         if b is not None:
             b.spellings.add(str(bname).strip())
+            self.used_binding(owner, b)
         if p is None and owner is not None and n in owner.generics:
             # generic binding: find the specific procedure that fits the arguments
             cands = []
@@ -1238,6 +1247,11 @@ class Translator:
                     if ps is not None and ps not in cands:
                         cands.append(ps)
             p = self.pick_specific(cands, items_of(args)) if cands else None
+            for tt in [td, *self.prog.ancestors(td)]:     # visibility of the specific bindings (overloads)
+                for s_name in tt.generics.get(n, ()):
+                    owner_s, b_s = self.prog.find_binding(td, s_name)
+                    if b_s is not None:
+                        self.used_binding(owner_s, b_s)
             argc = self.bound_args(p, items_of(args)) if p is not None else self.plain_args(items_of(args))
         elif p is not None:
             argc = self.bound_args(p, items_of(args))

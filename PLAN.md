@@ -100,7 +100,9 @@ Priorities: tests first (they protect every later step), then correctness, then 
   `wrap_dllexport`; `tools/convert_config.py` for old configs.
 - [done] One `accessors` list per type (`component[=name][:get|set|ref]`) for translated, wrapped, `-I` and existing
   classes; callers do not change when a type moves from wrapped to translated.
-- `-I` modules analysed like translated ones (e.g. implicit accessors of wrapped classes given with `-I`).
+- [done] `-w FILE`: interface of a module wrapped in its own run (implicit accessors, wrapped object arguments).
+- `-I` modules analysed like translated ones: `int_arrays = "auto"` decisions of their procedures depend on the
+  callers of their own run (now: `Eigen::VectorXi` assumed for `-I` procedures; a mismatch is a compile error).
 - Emitter state: one context object per module (`ModuleState`) instead of attributes set in `generate`.
 
 ### 4. Later

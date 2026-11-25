@@ -2795,6 +2795,40 @@ def test_accessors_same_for_wrapped_and_translated(tmp_path):
         cxx((wd,), "mysolver_mod")
 
 
+def test_wrapped_interface(tmp_path):
+    """-w: a module wrapped in its own run, given for its symbols only: its classes have the accessors of a wrapped
+    class (here implicit: all public components), so the callers are those of a run that wraps it; -I: translated"""
+    w = os.path.join(CORPUS, "wrapped")
+    user, solver = os.path.join(w, "solver_user_mod.F90"), os.path.join(w, "mysolver_mod.F90")
+    translate([user], cfg(), str(tmp_path / "w"), wrap=[solver])
+    translate([user], cfg(), str(tmp_path / "iw"), wrapped_interface=[solver])
+    translate([user], cfg(), str(tmp_path / "i"), [solver])
+    both = read((str(tmp_path / "w"),), "solver_user_mod.cpp")
+    assert both == read((str(tmp_path / "iw"),), "solver_user_mod.cpp") and "s.n() + s.diag()(0)" in both
+    assert "s.n + s.diag(0)" in read((str(tmp_path / "i"),), "solver_user_mod.cpp")
+    assert not os.path.exists(tmp_path / "iw" / "mysolver_mod.hpp")        # no output for -w
+
+
+def test_private_bindings(tmp_path):
+    """procedure, private / a private statement after contains: Fortran private is module-private, so the C++
+    section follows the callers (own methods: private, derived types: protected, other procedures: public)"""
+    d, src = str(tmp_path), os.path.join(CORPUS, "visibility_mod.F90")
+    translate([src], cfg(), d)
+    hpp = read((d,), "visibility_mod.hpp")
+    assert "  void add(int n);\n  void clear();  //!< also a module procedure: public\n\nprotected:\n" \
+           "  void bump(int n);  //!< also derived types: protected\n\nprivate:\n" \
+           "  bool check(int n) const;  //!< own methods only: private\n  int total = 0;\n};" in hpp
+    assert "public:\n  // default for the following bindings\n  void add_scaled(int n);\n\nprivate:\n" \
+           "  void scaled_add(int n);  //!< own methods only: private\n  int factor = 2;\n};" in hpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "visibility_mod")
+    c = cfg(member_access="fortran")            # as declared
+    translate([src], c, str(tmp_path / "f"))
+    hpp = read((str(tmp_path / "f"),), "visibility_mod.hpp")
+    assert "private:\n  bool check(int n) const;  //!< own methods only: private\n" \
+           "  void bump(int n);  //!< also derived types: protected\n  void clear();" in hpp
+
+
 def test_config_file_format(tmp_path):
     """sections of the config file -> internal keys; derived macros (prefix, include); errors for unknown / old keys"""
     (tmp_path / "x.toml").write_text("""
