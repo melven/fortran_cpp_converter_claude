@@ -882,6 +882,16 @@ class ModuleEmitter:
     def std_includes(self, text, names):
         return [f"#include <{h}>" for h, keys in names if any(k in text for k in keys)]
 
+    def name_includes(self, text, skip=""):
+        """#include lines of [map.headers] whose C++ name occurs in text (whole word); not those of skip (the
+        text of the own header) nor the includes of every header"""
+        res = []
+        for name, inc in self.cfg["name_headers"].items():
+            if inc not in res and inc not in self.cfg["extra_includes"] and \
+                    re.search(rf"\b{re.escape(name)}\b", text) and not re.search(rf"\b{re.escape(name)}\b", skip):
+                res.append(inc)
+        return [f"#include {i}" for i in res]
+
     def open_ns(self):
         return f"namespace {self.ns} {{"
 
@@ -1075,7 +1085,8 @@ class ModuleEmitter:
                     [BANNER.format(src=os.path.basename(self.src))] + self.guard()[0] + [""]
                 h += self.std_includes("\n".join(hpp.out + protos_pub.out + aliases.out), self.HEADER_INCLUDES)
                 inc_h, _ = self.includes("\n".join(hpp.out + protos_pub.out + aliases.out + cpp.out + cpp_priv.out))
-                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + inc_h
+                h += [f"#include {i}" for i in cfg["extra_includes"] + cfg["test_includes"]] + inc_h + \
+                    self.name_includes("\n".join(hpp.out + protos_pub.out + aliases.out))
                 h += [""] + using + [""] + (types_fwd + [""] if len(types_fwd) > 1 or aliases.out else []) + \
                     aliases.out + strip_blank(hpp.out)
                 h += ([""] + protos_pub.out if protos_pub.out else []) + [""] + self.guard()[1]
@@ -1090,7 +1101,7 @@ class ModuleEmitter:
         h += self.std_includes(guard_text, self.HEADER_INCLUDES)
         body = "\n".join(cpp.out + cpp_priv.out + protos_priv.out)
         inc_h, inc_c = self.includes(guard_text, body)
-        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h
+        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + self.name_includes(guard_text)
         h += [""] + mod_doc.out + [self.open_ns(), ""]
         if types_fwd and (len(types_fwd) > 1 or aliases.out):
             h += types_fwd + [""]
@@ -1102,7 +1113,7 @@ class ModuleEmitter:
         body = "\n".join(cpp.out + cpp_priv.out)
         c = self.file_header(top, cfg["source_ext"]) + \
             [BANNER.format(src=os.path.basename(self.src)), f'#include "{self.prog.file_stem(mod.name)}{cfg["header_ext"]}"']
-        c += inc_c + [""]
+        c += inc_c + self.name_includes(body, guard_text) + [""]
         c += self.std_includes(body, self.SOURCE_INCLUDES)
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
         if cpp_priv.out or protos_priv.out:
@@ -1184,7 +1195,8 @@ class ModuleEmitter:
                                                        ("optional", ["std::optional"]),
                                                        ("vector", ["std::vector"])])
         c += [f"#include {i}" for i in self.cfg["extra_includes"] + self.cfg["test_includes"]] + \
-            self.includes("\n".join(cpp.out + cpp_priv.out + protos.out))[0] + dirs.out
+            self.includes("\n".join(cpp.out + cpp_priv.out + protos.out))[0] + \
+            self.name_includes("\n".join(cpp.out + cpp_priv.out + protos.out)) + dirs.out
         if shared:
             c.append(f'#include "{self.prog.file_stem(mod.name)}{self.cfg["header_ext"]}"')
         # tests are not part of the project namespace

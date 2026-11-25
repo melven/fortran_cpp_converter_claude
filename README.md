@@ -26,6 +26,7 @@ f2cpp src/expm_mod.F90 src/block_lu_mod.F90 test/test_expm_mod.pf \
 | `-n NS` | C++ namespace (not the macro prefix) |
 | `--keep-original` | Fortran statement as `// F:` comment above every translated statement |
 | `-x MODULE:NAME` | do not emit `NAME` (module procedure, type, module variable, `type%binding`, `type%component` of wrapped types / struct constants; glob patterns, e.g. `io_mod:*_records`); in the config file `[modules.M] exclude = ["name", ...]` (`[modules."*"]` for all modules). Applies to translated and wrapped modules |
+| `--check-config` | report config entries that no given file uses (`config-unused:types.x_type.bindings.solve`, ...) or of the wrong kind (`config-wrong-kind:procedures.x_type (a type)`): for a run over the whole code base (other modules as `-I`), to find leftovers and typos |
 | `--report JSON` | construct coverage report: categories, counts and names of unresolved identifiers; **no source text** |
 
 Pass all modules that depend on each other in one call (or via `-I`): types, ranks and
@@ -46,7 +47,7 @@ entries are printed).
 | `[project]` | `namespace` (default `project`), `namespace_map` (`[[module-regex, "child"], ...]`: child namespaces), `includes` (in every header; must provide `scalar`, `vec`, `mat`), `constructor_bindings` (`["configure"]`), `destructor_bindings` (`["finalize"]`), `error_arg` (`"ierr"`), `error_success` (`["0"]`), `drop_args` (names of `class(*)` user data dummies), `strict` (internal errors stop the run) |
 | `[macros]` | `prefix` (default: the outer namespace in upper case), `include` (the Fortran include file of the macros: generated Fortran then uses `<P>_CHK_IERR`, `<P>_CHK_ARGUMENT`, `<P>_ASSERT(.false., ierr)`; dropped in C++); `[macros.NAME]`: `fortran` (replacement before parsing), `cpp` (C++ statement of the call it becomes) |
 | `[prepass]` | `patches = [[regex, replacement], ...]` |
-| `[map]` | `kinds`, `constants`, `includes` (Fortran `#include` → C++, `""`: dropped), `functions` (function / subroutine → C++ function or template), `calls` (call → C++ statement; glob patterns), `interfaces` (abstract interface → C++ type) |
+| `[map]` | `kinds`, `constants`, `includes` (Fortran `#include` → C++, `""`: dropped), `functions` (function / subroutine → C++ function or template), `calls` (call → C++ statement; glob patterns), `interfaces` (abstract interface → C++ type), `headers` (C++ name → include, added to the `.hpp` / `.cpp` whose code uses the name, also from templates; whole words: `Logger = '"project_logging.hpp"'`) |
 | `[tests]` | `extensions` (`[".pf", ".pfunit"]`), `modules` (test framework modules), `includes` |
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
 | `[modules.M]` | `header` (header of a module that is not translated, or output name of a translated one; `""`: no include, no missing-module warning), `exclude` (names not emitted, glob patterns; `M` may be a pattern) |

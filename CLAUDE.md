@@ -35,7 +35,7 @@ Details: [`f2cpp/CLAUDE.md`](f2cpp/CLAUDE.md) (pipeline, every function in one l
 - All Fortran names are handled lower case; C++ output uses the spelling of the declaration.
 - The error argument (`ierr`) is removed everywhere; C++ uses exceptions.
 - New feature = synthetic example in `tests/corpus` (must compile with gfortran) + assertion in
-  `tests/test_f2cpp.py`; generated C++ must compile with `-Wall -Werror`.
+  the matching `tests/test_*.py` (see `tests/CLAUDE.md`); generated C++ must compile with `-Wall -Werror`.
 - fparser quirks: comments preceding a construct are children of that construct; comments in
   derived types sit between `Component_Part` nodes; `foo(x)` may be `Part_Ref`,
   `Function_Reference` or `Structure_Constructor`.

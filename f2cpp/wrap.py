@@ -1286,7 +1286,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         h += self.std_includes("\n".join(hpp.out) + ("\nstd::function" if mod.ifaces else ""),
                                self.HEADER_INCLUDES)
         inc_h, inc_c = self.includes("\n".join(hpp.out), "\n".join(cpp.out))
-        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c
+        h += [f"#include {i}" for i in cfg["extra_includes"]] + inc_h + inc_c + self.name_includes("\n".join(hpp.out))
         # the C interface stays out of the C++ header: only the handle types (same typedef as in the .h)
         handles = sorted({self.c_type_name(t) for t in self.wrapped_types()
                           if t.name not in cfg["unwrap_types"] and t.name not in values})
@@ -1312,10 +1312,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             h += [f"class {prog.type_name(t.name)};" for t in classes] + [""]
         h += aliases.out
         h += strip_blank(hpp.out) + ["", f"}}  // namespace {self.ns}", ""] + self.guard()[1]
+        named = self.name_includes("\n".join(cpp.out), "\n".join(hpp.out))     # [map.headers]
         c = self.cpp_file_header(cfg["source_ext"], "C++ wrapper: ") + \
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
              f'#include "{os.path.basename(stem)}.h"', ""] + self.log_includes() + \
+            (named + [""] if named else []) + \
             (["#include <any>", "#include <memory>", "#include <typeinfo>", ""]
              if self.cpp_data_used or self.fortran_data_used else []) + \
             [self.open_ns(), ""]

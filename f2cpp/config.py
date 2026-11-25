@@ -29,6 +29,7 @@ DEFAULTS = {
     "procedure_map": {},
     "constant_map": {},
     "include_map": {},
+    "name_headers": {},             # C++ name -> include, where the generated code uses the name
     "kind_map": {"8": "double", "4": "float", "real64": "double", "real32": "float",
                  "int64": "std::int64_t", "int32": "std::int32_t"},
     "test_extensions": [".pf", ".pfunit"],
@@ -99,7 +100,8 @@ SECTION_KEYS = {
               "includes": ("test_includes", "append")},
     "map": {"kinds": ("kind_map", "update"), "constants": ("constant_map", "update"),
             "includes": ("include_map", "update"), "functions": ("function_map", "update"),
-            "calls": ("call_templates", "update"), "interfaces": ("procedure_map", "update")},
+            "calls": ("call_templates", "update"), "interfaces": ("procedure_map", "update"),
+            "headers": ("name_headers", "update")},
     "wrap": {"string_in": ("wrap_string_in", None), "string_out": ("wrap_string_out", None)},
 }
 TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors", "unwrap",
@@ -327,3 +329,44 @@ def normalise(cfg):
     cfg["c_single_precision"] = cfg["c_single_precision"] or f"{ns.upper()}_SINGLE_PRECISION"
     cfg["wrap_string_in"] = cfg["wrap_string_in"] or [f"{ns.lower()}_str", "str_array_ptr_to_str"]
     return cfg
+
+
+def unused_entries(cfg, words, prog):
+    """report categories of config entries that the files of a run do not use: config-unused:<entry> (no such name
+    in the sources; glob patterns: no matching name), config-wrong-kind:<entry> (e.g. a type under [procedures])"""
+    import fnmatch
+    defaults = copy.deepcopy(DEFAULTS)
+    macros, calls = default_macros(cfg["macro_prefix"])
+    types = {n for m in prog.modules.values() for n in m.types}
+    procs = {n for m in prog.modules.values() for n in list(m.procs) + list(m.ifaces) + list(m.generics)}
+
+    def seen(name):
+        name = name.lower()
+        return any(fnmatch.fnmatchcase(w, name) for w in words) if any(c in name for c in "*?[") else name in words
+    entries = []                                # (label, names that must occur)
+    for key in ("type_map", "accessors", "wrap_constants", "unwrap_types", "expand_args", "named_elements",
+                "named_element_lists", "wrap_handle_member", "c_class_names", "wrap_reverse_factories",
+                "reverse_factory_instances"):
+        entries += [(f"types.{t}", [t]) for t in cfg[key]]
+    for key in ("wrap_reverse", "wrap_listeners", "wrap_independent_bases", "wrap_owned"):
+        entries += [(f"types.{t}", [t]) for t in cfg[key]]
+    entries += [(f"types.{t}.accessors.{c}", [t, c]) for t, comps in cfg["accessors"].items() for c in comps if c != "*"]
+    for key in ("method_templates", "wrap_sizes", "wrap_translate"):
+        for e in cfg[key]:
+            t, _, b = e.partition("%")
+            entries.append((f"types.{t}.bindings.{b}", [t] + ([b] if b != "*" else [])) if b else (f"procedures.{t}", [t]))
+    entries += [(f"procedures.{p}", [p]) for p in cfg["c_procedure_names"]]
+    entries += [(f"modules.{m}", [m]) for m in cfg["module_headers"]]
+    entries += [(f"modules.{e.split(':')[0]}.exclude.{e.split(':', 1)[1]}", e.split(":", 1)) for e in cfg["exclude"]]
+    entries += [(f"macros.{n}", [n]) for n, v in cfg["macros"].items() if macros.get(n) != v]
+    for key, sec in (("function_map", "functions"), ("constant_map", "constants"), ("procedure_map", "interfaces")):
+        entries += [(f"map.{sec}.{n}", [n]) for n in cfg[key]]
+    entries += [(f"map.calls.{n}", [n]) for n, v in cfg["call_templates"].items() if calls.get(n) != v]
+    entries += [(f"map.kinds.{n}", [n]) for n, v in cfg["kind_map"].items() if defaults["kind_map"].get(n) != v]
+    res = []
+    for label, names in dict(entries).items():
+        if not all(seen(n) for n in names):
+            res.append(f"config-unused:{label}")
+        elif label.startswith("procedures.") and names[0] in types and names[0] not in procs:
+            res.append(f"config-wrong-kind:{label} (a type)")
+    return sorted(set(res))
