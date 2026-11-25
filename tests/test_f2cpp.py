@@ -2830,6 +2830,27 @@ def test_int_arrays_same_with_interface_only(tmp_path):
     assert "int total(const Eigen::VectorXi& flags)" in lib and "int ones(const Eigen::VectorXi& flags)" in lib
 
 
+def test_includes_by_name(tmp_path):
+    """[map.headers]: C++ name -> include, added to the header or the source that uses the name (also names from
+    call templates); whole words only; not repeated in the source if the header has it"""
+    (tmp_path / "lg_mod.F90").write_text(
+        "module lg_mod\n  use logging, only: log_error\n  use quad_mod, only: Rule_type\n  implicit none\ncontains\n"
+        "  subroutine check(r, x)\n    type(Rule_type), intent(in) :: r\n    real, intent(in) :: x\n"
+        "    if (x < 0.0) call log_error('lg', 'negative')\n  end subroutine\n"
+        "  subroutine other(x)\n    real, intent(in) :: x\n    if (x < 0.0) call log_error('lg', 'neg')\n"
+        "  end subroutine\nend module lg_mod\n")
+    (tmp_path / "x.toml").write_text(
+        '[map.headers]\nLogger = \'"project_log.hpp"\'\nQuad = \'"quad.hpp"\'\nLog = \'"never.hpp"\'\n'
+        '[map.calls]\nlog_error = "Logger({0}).log_error({1});"\n'
+        '[types]\nRule_type = {cpp = "Quad::Rule"}\n[modules]\nquad_mod = {header = ""}\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([str(tmp_path / "lg_mod.F90")], c, str(tmp_path))
+    hpp, cpp = read((str(tmp_path),), "lg_mod.hpp"), read((str(tmp_path),), "lg_mod.cpp")
+    assert '#include "quad.hpp"' in hpp and "project_log.hpp" not in hpp
+    assert cpp.count('#include "project_log.hpp"') == 1 and '"quad.hpp"' not in cpp and "never.hpp" not in hpp + cpp
+    assert '  if (x < 0.0) Logger("lg").log_error("negative");' in cpp
+
+
 def test_private_bindings(tmp_path):
     """procedure, private / a private statement after contains: Fortran private is module-private, so the C++
     section follows the callers (own methods: private, derived types: protected, other procedures: public)"""

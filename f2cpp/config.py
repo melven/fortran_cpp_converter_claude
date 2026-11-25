@@ -29,6 +29,7 @@ DEFAULTS = {
     "procedure_map": {},
     "constant_map": {},
     "include_map": {},
+    "name_headers": {},             # C++ name -> include, where the generated code uses the name
     "kind_map": {"8": "double", "4": "float", "real64": "double", "real32": "float",
                  "int64": "std::int64_t", "int32": "std::int32_t"},
     "test_extensions": [".pf", ".pfunit"],
@@ -99,7 +100,8 @@ SECTION_KEYS = {
               "includes": ("test_includes", "append")},
     "map": {"kinds": ("kind_map", "update"), "constants": ("constant_map", "update"),
             "includes": ("include_map", "update"), "functions": ("function_map", "update"),
-            "calls": ("call_templates", "update"), "interfaces": ("procedure_map", "update")},
+            "calls": ("call_templates", "update"), "interfaces": ("procedure_map", "update"),
+            "headers": ("name_headers", "update")},
     "wrap": {"string_in": ("wrap_string_in", None), "string_out": ("wrap_string_out", None)},
 }
 TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors", "unwrap",
