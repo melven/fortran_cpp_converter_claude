@@ -1,7 +1,7 @@
 # f2cpp: state, risks, improvement plan
 
-As of 2026-11-23 (branch `claude/peaceful-pascal-jeib0p`): ~7,800 lines of Python in `f2cpp/`, 87 tests
-(~90 s), synthetic corpus of 44 Fortran / pFUnit files. Function map and detailed findings: `f2cpp/CLAUDE.md`, tests:
+As of 2026-11-25 (branch `claude/peaceful-pascal-jeib0p`): ~8,300 lines of Python in `f2cpp/`, 105 tests
+(~140 s), synthetic corpus of 46 Fortran / pFUnit files. Function map and detailed findings: `f2cpp/CLAUDE.md`, tests:
 `tests/CLAUDE.md`.
 
 ## State
@@ -10,18 +10,21 @@ Two modes, usable together in one run:
 - **Translate** (default): Fortran modules / pFUnit tests → C++ (Eigen, googletest). Covers OOP (types,
   bindings, polymorphism, generics), arrays (0-based, lower bounds, slices, aliasing), pointers, callbacks with
   user data, internal procedures (lambdas), `class(*)` (`std::any`), error flag → exceptions, configurable
-  mappings (functions, calls, methods, types, accessors, macros). Not translatable statements stay as commented
-  Fortran (`TODO(f2cpp)`) and are counted in the report.
+  mappings (functions, calls, methods, types, accessors, macros, includes by use). Not translatable statements stay
+  as commented Fortran (`TODO(f2cpp)`) and are counted in the report.
 - **Wrap** (`-W`, bottom-up migration): the Fortran module stays; C binding module + C header + C++ wrapper classes
   with the same interface as a translation. Extensions: constants (also struct constants), owned objects,
-  unwrapped types, listeners, `wrap_translate` (single methods in C++), reverse types / factories (abstract Fortran
+  unwrapped types, listeners, `translate` (single methods in C++), bidirectional types / factories (abstract Fortran
   types implemented in C++, also Fortran implementations used from C++), `class(*)` state in both directions,
-  sizes from checks / `wrap_sizes` / documentation, generated Fortran in the project's style (sections, macros,
-  line limits).
+  sizes from checks / `sizes` / documentation, generated Fortran in the project's style (sections, macros,
+  line limits). `-w`: interface of a module wrapped in its own run.
+- **Configuration**: config file (what: project, macros, maps, per module / type / procedure) + style file (how:
+  names, layout, conventions, templates); one `accessors` list per type; callers do not change when a type moves
+  from wrapped to translated or is given with `-I` / `-w`.
 
 Verification: string assertions on the generated code; compile checks (`-Wall -Werror`, gfortran `-Wall
 -Werror`); run tests that compare C++ / mixed builds with the pure Fortran program (numerics, wrapped modules,
-reverse types, `class(*)`); valgrind by hand on selected executables. No CI.
+reverse types, `class(*)`), all run under valgrind; CI (ruff, pytest with the full tool chain, Python 3.11 / 3.13).
 
 ## Risks
 
@@ -35,7 +38,7 @@ Assessment (with the user, 2026-11-23): status in brackets.
    location (module::procedure, line) and the f2cpp location, exit code 2, `--strict` stops (used by the tests).
    [done]
 4. **Lifetime / ownership across C and Fortran**: known; `class(*)` holders: `move_alloc` only (Fortran has no copy
-   hook), valgrind on the run tests by hand. [known; automate valgrind]
+   hook); valgrind on all run tests. [known; valgrind automated]
 5. **Regular expressions on the generated Fortran** (in f2cpp, not in the user's code): `WrapEmitter.finish_module`
    rewrites the generated binding text (sections, public list, only-lists, short names, separators, line
    continuation). Each step parses Fortran lines with patterns; the order matters and a new generated construct
@@ -53,6 +56,14 @@ syntax (f-strings). Fixed later: output subdirectory for `_c_binding.F90`. Not f
 
 Priorities: tests first (they protect every later step), then correctness, then structure for extensions.
 
+### 0. Next (small, no major rework)
+- Unused config entries in the report (`config-unused:types.X.bindings.y`, modules / procedures that no parsed
+  module has): finds leftovers and typos (e.g. a type name in `procedures`).
+- Remaining hard-coded C++ names into the style (`[names]`): `<Class>_private`, `CWrapper<Thing>`,
+  `<method>_wrapper`, the `_n` size parameter.
+- Split `test_f2cpp.py` (3200 lines) by area with a `conftest.py` (mechanical; see 1).
+- Report-driven corpus growth with the converted config on the real code base (needs the user's `--report`).
+
 ### 1. Tests (short term)
 - [done] CI (`.github/workflows/ci.yml`): ruff (pyflakes, syntax), pytest with coverage on Python 3.11 / 3.13,
   full tool chain, `F2CPP_REQUIRE_TOOLCHAIN` fails when compile tools are missing. Line coverage 93%.
@@ -61,7 +72,8 @@ Priorities: tests first (they protect every later step), then correctness, then 
   mismatch is now an internal error instead of silent truncation). [done] line length 132 (E501; not for the test file: long assertions of generated code).
 - [done] Valgrind in the run tests (`run_exe`: memory errors and definite leaks fail) for all compiled programs.
 - Split `test_f2cpp.py` by area (`test_translate_*.py`, `test_wrap_*.py`, `test_reverse_*.py`, `conftest.py`
-  with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test).
+  with `run`, `cfg`, `read`, `flat`, compiler flags, the build helpers that are now repeated in each run test)
+  (also in 0).
 - Golden files for a few representative outputs (reviewed diffs instead of many substring assertions), keep
   targeted assertions for semantics.
 - Differential numerics: for every translated corpus module, a generated Fortran ↔ C++ comparison harness
@@ -69,7 +81,7 @@ Priorities: tests first (they protect every later step), then correctness, then 
   slices, negative integer division).
 - Property-style tests for the expression layer: random index expressions / slices → C++ evaluated vs. Fortran.
 - Report-driven corpus growth: every construct category from the user's `--report` that is untranslated or
-  noted gets a synthetic example.
+  noted gets a synthetic example (also in 0).
 
 ### 2. Correctness (short / middle term)
 - [done] internal errors visible, `--strict`; keyword overrides normalised; prepass dump; parameter spelling;
@@ -81,11 +93,10 @@ Priorities: tests first (they protect every later step), then correctness, then 
 - [dropped] Explicit kind check in the generated Fortran: a kind mismatch already gives compiler errors at the C
   interface (real / integer passed directly to the `bind(C)` dummies).
 
-### 3. Structure and extensibility (middle term)
+### 3. Structure and extensibility (middle term; the open items are major rework)
 - [done] One `class(*)` mechanism: the `project_<module>_Any` struct (destroy + userData) for forward wrapping too;
   `FortranState` / `project_FortranAny` removed.
 - [kept] Listeners stay separate from reverse types (intended differences: C++ owns the listener, owner arguments).
-- Listeners as reverse types with a non-owning bridge (one implementation of function-pointer types).
 - Argument kinds as small classes (scalar, logical, array, optional array, string, owned, any, created object)
   with `fortran()`, `c()`, `cpp()` parts, shared by `WrapEmitter.method`, `ReverseMixin.forward` and
   `fortran_method_c`; this removes most of the duplicated per-direction code and makes new kinds local changes.

@@ -5,7 +5,7 @@ Pipeline (`cli.translate`): `prepass` (text) → fparser2 (f2008) → `model.col
 `Program.decide_int_vectors` → output pass: `ModuleEmitter` (translated) or `WrapEmitter` (wrapped, `-W`).
 `Translator` (one per procedure) does expressions and statements; emitters do declarations, classes, files.
 
-Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 790 lines.
+Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 800 lines.
 
 ## Files
 
@@ -97,26 +97,20 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 ## Findings (problems, simplifications, inconsistencies)
 
 Correctness
-- `Translator.stmt` catches every exception and emits the statement as `TODO` (`internal:<Exception>`): robust, but
-  hides Python bugs. Only one test checks the absence of `internal:` categories; a corpus-wide check is missing.
+- `Translator.stmt` catches every exception: an internal error (report kind `error`, exit code 2); the tests run with
+  `strict = true`, so any internal error fails them.
 - Broad `except Exception` also in `pick_specific` (argument of unknown kind: "assume it fits"), `known_size`,
   `doc_sizes`: silent fallbacks.
-- `cli.translate` writes the `_c_binding.F90` / c_wrapper file before creating the output subdirectory (only an
-  issue with `module_headers` that contain a directory); on a parse error it writes `<file>.f2cpp_prepass` next to
-  the *input* file.
 - `prepass.expand_macros` skips a macro if a `!` precedes it on the line, also inside a string literal.
 - Generated C++ for Fortran and C++ sources of the same stem: `x_mod.F90` and `x_mod.cpp` both compile to `x_mod.o`
   in simple builds (tests use `-o *_cxx.o`).
-- Reverse wrappers: C/C++ parameter names are the lower-case Fortran names (`needanotheriteration`), not the
-  declared spelling.
 - `PROJECT_CHK_IERR` mode passes `integer(C_INT)` as default `integer` (same kind on the supported compilers only).
 - `class(*)` data held across the C interface: Fortran has no copy hook; an intrinsic copy of a `class(*)` holding
   `CWrapperAny_type` double-frees (rule: `move_alloc` only, not enforceable).
-- Report noise: `unlimited-polymorphic` is counted per signature emission (several times per argument).
 
 Structure / simplifications
-- Listeners (`wrap_listeners`) and reverse types (`wrap_reverse`) are two implementations of the same idea
-  (function pointers + user data); listeners could become reverse types with a non-owning bridge.
+- Listeners and bidirectional types are two implementations of function pointers + user data (kept: C++ owns the
+  listener, owner arguments).
 - Very long functions: `WrapEmitter.generate` (~300 lines), `WrapEmitter.method` (~230), `ReverseMixin.forward`
   (~220), `ModuleEmitter.generate` (~220), `emit_type` (~170), `reverse_type` (~150). Each mixes Fortran, C and
   C++ generation of one feature; candidates: one small object per argument kind with `fortran()`, `c()`, `cpp()`.
@@ -127,7 +121,7 @@ Structure / simplifications
   `public_extra`, `extra_uses`, ...) and is read by the mixin; caches in `self.__dict__` (`constants_cache`,
   `reverse_constants_cache`), `getattr(self, ..., default)` patterns, `fortran_any_done` not reset in `generate`
   (fine only because there is one emitter per module).
-- `wrap_constants` means two things: copied at setup (forward types, C struct filled by Fortran) and set by the C++
-  constructor (reverse types).
+- `constants` means two things: copied at setup (wrapped types, C struct filled by Fortran) and set by the C++
+  constructor (bidirectional types).
 - `translate.py` mixes expression, statement, intrinsic and error-flag logic in one 2500-line class; split along
   these lines (mixins or modules) without changing behaviour.

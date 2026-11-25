@@ -1,6 +1,6 @@
 # tests: map for development
 
-`python3 -m pytest -q` (~90 s; `--durations=8` shows the slow ones). Compile / run tests need `g++`, `gfortran`,
+`python3 -m pytest -q` (~140 s; `--durations=8` shows the slow ones). Compile / run tests need `g++`, `gfortran`,
 Eigen (`/usr/include/eigen3`), googletest, LAPACK; without them they return early or are skipped (silently for
 the tests that `return`).
 
@@ -8,7 +8,7 @@ the tests that `return`).
 
 | Path | Content |
 |---|---|
-| `test_f2cpp.py` | all tests (one file, ~2600 lines); helpers `run` (subprocess, asserts rc 0), `cfg` (test config with keyword overrides of internal keys), `out` (module fixture: whole corpus translated once), `flat` (joins one-parameter-per-line C declarations), `read`, `cxx` (`g++ -Wall -Werror -c`) |
+| `test_f2cpp.py` | all tests (one file, ~3200 lines); helpers `run` (subprocess, asserts rc 0), `cfg` (test config with keyword overrides of internal keys), `out` (module fixture: whole corpus translated once), `flat` (joins one-parameter-per-line C declarations), `read`, `cxx` (`g++ -Wall -Werror -c`) |
 | `corpus/*.F90`, `*.pf` | translated modules and pFUnit tests (`MODULES`); `driver.F90` (Fortran reference program) |
 | `corpus/wrapped/` | modules wrapped with `-W` (Fortran stays, C++ interface) and their users |
 | `corpus/reverse/` | abstract types implemented in C++ (reverse types, factories, constants, `class(*)` state) |
@@ -50,7 +50,7 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 - `test_wrap_translate_guards`: `wrap_translate` (translated methods of wrapped classes).
 - `test_reverse_wrapped_types`: reverse types + factories; pure Fortran vs mixed build give identical output.
 - `test_reverse_type_fortran_implementation_in_cpp`: Fortran implementation used in C++ (`CWrapperThing`).
-- `test_reverse_type_constants`: reverse constants (inherited), known sizes, `wrap_chk_argument`, `wrap_chk_ierr`, both directions, run.
+- `test_reverse_type_constants`: reverse constants (inherited), known sizes, macros in generated Fortran (`[macros] include`), both directions, run.
 - `test_reverse_class_star_is_todo`, `test_reverse_class_star_cpp_data`: `class(*)` of reverse types (TODO cases; both directions, run).
 
 ## Conventions and pitfalls
@@ -61,4 +61,4 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 - Assertions compare generated text exactly: style changes touch many tests; use `flat()` for C declarations.
 - Objects of Fortran and C++ files with the same stem collide (`x_mod.o`): compile C++ with `-o x_mod_cxx.o`.
 - Output of Fortran (`print`) and C (`printf`) in one program are buffered separately: let one side print.
-- Valgrind is not part of the suite; run it by hand on the `m` executables (`--basetemp` keeps them).
+- Compiled programs run under valgrind when installed (`run_exe`: memory errors and definite leaks fail).
