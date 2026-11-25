@@ -308,7 +308,7 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
 - array sizes that both sides know (integer literals and constants, from `sizes`, a size check or the
   documentation `dimension (this\%stateSize)`): no `_n` argument; Fortran checks `size(x)` (`ierr = -1`, or
   with `[macros] include = "project_macros.h"`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`
-  with the include before the module; without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
+  with the include right after the `module` statement (it may contain `use` statements); without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
   and resizes outputs; otherwise the size is passed (`x, x_n`)
 - the other direction: a Fortran implementation behind the struct for C / C++:
   `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with

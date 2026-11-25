@@ -312,8 +312,9 @@ def test_reverse_type_constants(tmp_path):
     assert "  Thing* thing = static_cast<Thing*>(self->userData);\n  const int state_n = thing->stateSize();" in cpp
     assert "bool* needAnotherIteration, int* ierr) noexcept" in cpp       # declared spelling
     assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
-    assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and \
-        '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in b         # both macros used
+    # include right after the module statement (it may contain use statements), precision macros before it
+    assert '#endif\n\nmodule project_c_wrapper_convergence_mod\n#include "project_macros.h"\n  use' in cw and \
+        '#endif\n\nmodule convergence_mod_c_binding\n#include "project_macros.h"\n  use' in b         # both macros used
     # wrap_<method>: pointer views (sizes: constants of the struct), positional arguments, PROJECT_CHK_IERR
     assert "  !" + "=" * 80 + "\n  !> check_convergence of a Fortran implementation" in b
     assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer, contiguous :: state_f(:)\n" in b

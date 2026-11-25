@@ -1424,7 +1424,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b) and \
                     f'#include "{chk[1]}"' not in includes:
                 includes.append(f'#include "{chk[1]}"')
-        macros = includes + macros
+        b[m + 1:m + 1] = includes           # after the module statement (an include may contain use statements)
         b[m:m] = macros + [""]
         start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
         b[:] = declaration_separators(procedure_separators(spec_sections(b, start)))
