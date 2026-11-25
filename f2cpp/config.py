@@ -1,287 +1,324 @@
-"""Configuration defaults; overridden by a TOML file and command line options."""
+"""Configuration: config file (what is translated / wrapped and how it maps to C++) and style file (how the
+generated code looks, defaults in style.toml). Both are read into one flat dict with internal keys; README.md
+documents the file formats. Keyword overrides of load() use the internal keys."""
 import copy
+import os
+import re
 import tomllib
 
+STYLE_FILE = os.path.join(os.path.dirname(__file__), "style.toml")
+
+# internal keys; the style keys are filled from style.toml
 DEFAULTS = {
     "namespace": "project",
-    # [[module-name-regex, "child::namespace"], ...] -> namespace <namespace>::<child>
-    "namespace_map": [],
-    "type_suffix": "_type",        # stripped from derived type names
-    "type_case": "keep",           # "keep" | "camel"
-    # type-bound procedures with these binding names become constructors (if the passed
-    # object is intent(out)) / destructors (if there are no further arguments)
+    "namespace_map": [],            # [[module-name-regex, "child::namespace"], ...]
     "constructor_bindings": ["configure"],
     "destructor_bindings": ["finalize"],
-    "include_guard": "ifndef",    # "ifndef": #ifndef FILE_NAME_HPP ... #endif; "pragma": #pragma once
-    "doxygen": "//!",             # prefix of documentation comments ("//!" or "///")
-    "brace_style": "allman",      # "allman": { on its own line; "attached": if (...) {
-    # True: the run sees all derived classes (files to translate and -I): classes without derived
-    # class are final, methods are virtual only if they are deferred or overridden.
-    # False: every method of a class hierarchy is virtual, no final
-    "closed_hierarchy": True,
-    # "auto": data members are private; protected if used by methods of derived classes, public if
-    #         used anywhere else in the translated files (other classes, free functions, tests)
-    # "fortran": as declared in Fortran (public unless the type has a private statement)
-    "member_access": "auto",
-    # accessors instead of data members of translated types: type -> ["n", "tol:set", "x:ref", "*"]
-    # (component[:mode], "*": all; get (default): const getter (scalars by value), set: + setter overload
-    # tol(value), ref: + non-const reference); the member gets member_suffix (n_), protected (private if final);
-    # writes from other code: get -> TODO, set -> setter (whole member only), ref -> reference
-    "member_accessors": {},
-    "member_suffix": "_",
-    # local variables are declared at their first use (merged with the defining assignment,
-    # allocate or constructor call where possible); loop variables in the for statement
-    "declare_at_first_use": True,
-    # loops whose variable is mostly used as array index run from 0: do i = 1, n -> for (int i = 0; i < n; ++i)
-    "zero_based_loops": True,
-    # optional intent(in) arrays: "empty": `const vec& w = vec()`, present(w) -> w.size() > 0;
-    # "optional": `const std::optional<vec>& w = std::nullopt`
-    "optional_arrays": "empty",
-    "explicit_this": False,       # True: always write this->member
-    # values of the error flag that mean success (lower case), e.g. ["0", "myproj_success"]
     "error_success": ["0"],
-    "error_arg": "ierr",           # error flag argument, removed (C++ uses exceptions)
-    "scalar": "scalar",
-    "vec": "vec",
-    "mat": "mat",
-    "ivec": "Eigen::VectorXi",
-    # "auto": rank-1 integer arrays are std::vector<int> unless they are used in array expressions,
-    #         sections, as vector subscripts or passed to procedures that need an Eigen vector
-    # "eigen": always ivec
-    "int_arrays": "auto",
-    # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen 5.0 / master: only there)
-    # or "Eigen" (Eigen 3.4: Eigen::all / Eigen::last; the placeholders:: ones are deprecated there)
-    "eigen_placeholders": "Eigen::placeholders",
-    "imat": "Eigen::MatrixXi",
-    "int": "int",
-    # real/integer kind -> C++ type; unknown kinds fall back to scalar / int
+    "error_arg": "ierr",
+    "drop_args": [],
+    "extra_includes": [],
+    "strict": False,
+    "keep_original": False,         # command line only
+    "pre_patches": [],
+    "macros": {},                   # user macros; the <NS>_* defaults are added by normalise()
+    "macro_prefix": None,
+    "macro_include": None,
+    "call_templates": {},
+    "function_map": {},
+    "procedure_map": {},
+    "constant_map": {},
+    "include_map": {},
     "kind_map": {"8": "double", "4": "float", "real64": "double", "real32": "float",
                  "int64": "std::int64_t", "int32": "std::int32_t"},
-    # "auto": const vec& / vec&; Eigen::Ref only for out/inout dummies that receive a slice
-    #         (block, row, column) in one of the translated calls
-    # "plain": always const vec& / vec&
-    # "ref": always Eigen::Ref (accepts slices everywhere, like Fortran)
-    "array_args": "auto",
-    "header_ext": ".hpp",
-    "source_ext": ".cpp",
-    # included by every generated header (must provide scalar, vec, mat)
-    "extra_includes": [],
-    # error logging in the C++ wrappers called through function pointers (catch blocks):
-    # <log_error>("<Class>", e.what()); empty: std::fprintf(stderr, ...); log_error_include: its header
-    "log_error": "",                          # e.g. "project_log_error"
-    "log_error_include": "",                  # e.g. "\"project_log.hpp\""
-    # Fortran #include "x" -> C++ #include "y"; "" drops the include
-    "include_map": {},
-    # Fortran derived type (lower case) -> existing C++ class, e.g. "foo_type" = "wrappers::Foo"
-    "type_map": {},
-    # module -> header: `use module` becomes #include "header" ("" = no include). For modules that
-    # exist in C++ already, and to rename the output files of translated modules
-    "module_headers": {},
-    # components that are accessor functions in the existing C++ class:
-    # Fortran type -> component names (["*"]: all components): obj%models -> obj.models();
-    # renamed accessor: "coupling_manager=couplingManager"
-    "accessors": {},
-    # parts of modules that are not emitted (stay in Fortran only), glob patterns; in the config file
-    # [exclude] module = ["name", ...] (name: module procedure, type, module variable, "type%binding",
-    # "type%component" of wrapped types / struct constants)
-    "exclude": [],
-    "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding",
-                       "ieee_arithmetic"],
-    # macro name -> Fortran replacement ({0}, {1}: macro arguments), applied before parsing.
-    # Replace the names by the real ones in the config file; a [macros] table there extends
-    # these defaults. "{0}" / "allocate({0})": the macro disappears in C++.
-    # "call NAME({0})": translated with the call_templates entry of NAME (lower case).
-    "macros": {
-        "PROJECT_CHK_IERR": "{0}",
-        "PROJECT_ALLOCATE": "allocate({0})",
-        "PROJECT_ASSERT": "call PROJECT_ASSERT({0})",
-        "PROJECT_CHK_ARGUMENT": "call PROJECT_CHK_ARGUMENT({0})",
-        "PROJECT_ASSERT_MSG": "call PROJECT_ASSERT_MSG({0}, {1})",
-        "PROJECT_CHK_ARGUMENT_MSG": "call PROJECT_CHK_ARGUMENT_MSG({0}, {1})",
-    },
-    # [[regex, replacement], ...] applied to the Fortran source before anything else
-    "pre_patches": [],
-    # called procedure (lower case) -> C++ statement template
-    # {0}, {1}: translated arguments; {0:str}: argument as text for use inside a string literal
-    "call_templates": {
-        "project_assert": 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");',
-        "project_chk_argument": 'if (!({0})) throw std::invalid_argument("invalid argument: {0:str}");',
-        "project_assert_msg": "if (!({0})) throw std::logic_error({1});",
-        "project_chk_argument_msg": "if (!({0})) throw std::invalid_argument({1});",
-    },
-    # called function / subroutine (lower case) -> C++ function, same arguments; or a template
-    # with argument conversions: "c_fn({0}, {1:cstr}, {2:ptr}, {3:data})"
-    #   {i:cstr} std::string -> const char*, {i:ptr} address (output argument), {i:data} Eigen data pointer
-    "function_map": {},
-    "test_extensions": [".pf", ".pfunit"],     # pFUnit test files; also: modules using test_modules
+    "test_extensions": [".pf", ".pfunit"],
     "test_modules": ["funit", "pfunit", "pfunit_mod"],
-    # "type%binding" (lower case) -> C++ template for calls of that type-bound procedure:
-    # {self}: the object, {0}, {1}: arguments (conversions as in function_map), e.g.
-    # "lu_type%solve" = "{1} = {self}.solve({0});"
+    "test_includes": [],
+    "ignore_modules": ["funit", "pfunit", "pfunit_mod", "iso_fortran_env", "iso_c_binding", "ieee_arithmetic"],
+    "module_headers": {},
+    "exclude": [],                  # "module:name" (glob patterns)
+    "type_map": {},
+    "accessors": {},
+    "member_accessors": {},
     "method_templates": {},
-    # wrapper types around a single component (lower case) -> that component: variables of the type
-    # become the component itself, members are `mutable` (e.g. mutablerealarray1d_type = "v":
-    # type(MutableRealArray1d_type) :: tmp; this%tmp%v(i) -> mutable vec tmp; tmp(i - 1))
     "unwrap_types": {},
-    # wrapped modules (--wrap): C binding conventions
-    # names derived from the (outer) namespace NS if not set: ns_<Class>_<method>, NS_REAL,
-    # NS_SINGLE_PRECISION, module ns_str
-    "c_prefix": None,                         # <ns>_<Class>_<method>
-    "c_class_names": {},
-    "c_procedure_names": {},                  # module procedure -> C name (default project_<procedure>)
-    "c_real": None,                           # C type macro of real: <NS>_REAL
-    "c_single_precision": None,               # <NS>_SINGLE_PRECISION
-    "c_decl_width": 100,                      # longer C declarations (binding comments): one parameter per line
-    # argument check in generated Fortran (sizes of reverse-type arrays): [macro, Fortran include file],
-    # e.g. ["PROJECT_CHK_ARGUMENT", "project_macros.h"] -> PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr);
-    # None: if (...) then; ierr = -1; return; end if
-    "wrap_chk_argument": None,
-    # error flag check of calls in generated Fortran (wrap_<method>): [macro, Fortran include file],
-    # e.g. ["PROJECT_CHK_IERR", "project_macros.h"] -> PROJECT_CHK_IERR(call x%f(..., ierr), ierr)
-    "wrap_chk_ierr": None,
-    # error statement of generated Fortran with error flag (wrong object type, wrong class(*) data, size checks
-    # without wrap_chk_argument), {ierr}: the flag; must return; [statement, Fortran include file], e.g.
-    # ["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"] (or the statement alone); None: ierr = -1 and return
-    "wrap_fail": None,
-    # C string -> Fortran string (string arguments): [module, function]; None: [<ns>_str, str_array_ptr_to_str]
-    "wrap_string_in": None,
-    # Fortran string -> new C string and its deletion (character constants of reverse types): [module, copy, delete]
-    # copy(fStr, ierr) result(cStr): character(kind=C_CHAR), pointer, contiguous :: cStr(:);
-    # delete(cStr_ptr): type(C_PTR), intent(inout); None: generated f2cpp_copy_string / f2cpp_delete_string
-    "wrap_string_out": None,
-    # sizes of array arguments that are not given by a size check: "type%binding" (module procedures:
-    # "procedure") -> {"x": "this%n", "a(2)": "3"}
-    "wrap_sizes": {},
-    # check array sizes in the C++ glue before the call (the C interface has no sizes)
-    "wrap_size_checks": False,
-    # handle of wrapped objects: "struct": pointer to a bind(C) struct <Class>_c whose member p_impl points
-    # to the Fortran object (class hierarchies: to <Root>Wrapper_type); "direct": pointer to the object /
-    # wrapper itself. wrap_direct_handles: root types that use "direct" anyway
-    "wrap_handle": "struct",
-    # base types that exist independently in Fortran and C++ (e.g. a generic serialization base): not
-    # part of the wrapped hierarchy, the next derived type is its root (handle, wrapper type)
-    "wrap_independent_bases": [],
-    "wrap_direct_handles": [],
-    # "constant" components: members of the C struct (copied once). Wrapped root types: filled by
-    # project_<Class>_setup (freed by project_<Class>_destroy), only a const getter in C++;
-    # {"mysolver_type": ["n", "diag"]}: real / integer / logical scalars, rank 1 arrays (fixed size: copied;
-    # allocatable / pointer: pointer + size into the Fortran object), structs of these. Reverse types: set by
-    # the C++ constructor (real / integer / logical / character scalars, also inherited components)
-    "wrap_constants": {},
-    # wrapped types whose C++ objects own their Fortran object (destructor frees it; created in the binding,
-    # e.g. elements of array arguments: std::vector<X>, intent(out) / intent(in))
-    "wrap_owned": [],
-    # methods ("type%binding") / procedures of wrapped modules implemented in C++ (their translation instead of
-    # the glue; same declaration); reverse types: no <method>_wrapper (C++ only); glob patterns
-    "wrap_translate": [],
-    # types whose C++ objects are neither copyable nor movable: local arrays of them become one named
-    # variable per element (inputs(1) = T(...) -> Cls inputs_1(...); inputs -> {inputs_1, inputs_2});
-    # type -> C++ class ("" = the type's class name)
-    "named_elements": {},
-    # type -> C++ type of the list of elements (whole array as argument): VariableVector{inputs_1, inputs_2}
-    # (needed where the list is forwarded, e.g. std::make_unique<T>(...)); default: a plain braced list
-    "named_element_lists": {},
-    # C++ member holding the C handle per root type (derived classes use their root's), default handle_:
-    # {"model_type": "model_c_"} (names of hand-written base classes)
-    "wrap_handle_member": {},
-    # abstract types used as listeners (only deferred bindings with intent(in) arguments): a C++ class with
-    # pure virtual methods; its objects can be set as listener of wrapped objects
-    "wrap_listeners": [],
-    # abstract types implemented in C++ (C struct per C++ object, Fortran CWrapper<Thing>_type owning it)
-    "wrap_reverse": [],
-    # abstract factories implemented in C++: type -> {register = "proc", unregister = "proc"} of the
-    # Fortran factory registration (call register(name, factory), call unregister(name))
-    "wrap_reverse_factories": {},
-    # translated factories: type -> name of the global instance (<Factory>_private::instance("name"))
-    "reverse_factory_instances": {},
-    # macro for the DLL export attribute of the bind(C) routines ("" for none):
-    # #ifdef DLLEXPORT / DLLEXPORT :: name / #endif
-    "wrap_dllexport": "DLLEXPORT",
-    # dummy arguments of a (not translated) type that are several parameters in C++:
-    # type -> ["C++ type name = component", ...], e.g.
-    # confignode_type = ["int tixiHandle = tixiHandle", "const std::string& xpath = xml_path"]
     "expand_args": {},
-    # abstract interface (lower case) -> C++ type of procedure arguments / components declared
-    # `procedure(name)`; default: an alias `using name = std::function<...>` generated from the interface
-    "procedure_map": {},
-    # dummy arguments declared class(*) with one of these names are removed from all signatures and
-    # calls (user data of callbacks: captured by the lambda in C++)
-    "drop_args": [],
-    # named constants / enumerators (lower case) -> C++ expression, e.g.
-    # snapshotmode_read = "SnapshotMode::READ"
-    "constant_map": {},
-    "gtest_assert": "ASSERT",      # pFUnit asserts abort the test -> ASSERT_*; "EXPECT" changes the logic
-    # the project provides EXPECT_NEAR / ASSERT_NEAR for Eigen types: used for array comparisons;
-    # False: EXPECT_LE((expected - actual).cwiseAbs().maxCoeff(), tolerance)
-    "gtest_eigen_near": True,
-    "test_includes": [],           # additional includes of translated test files
-    "strict": False,               # internal errors (f2cpp bugs) stop the run instead of a TODO comment
-    "keep_original": False,        # emit the Fortran statement as comment above each statement
+    "named_elements": {},
+    "named_element_lists": {},
+    "c_class_names": {},
+    "c_procedure_names": {},
+    "wrap_chk_argument": None,
+    "wrap_chk_ierr": None,
+    "wrap_fail": None,
+    "wrap_string_in": None,
+    "wrap_string_out": None,
+    "wrap_sizes": {},
+    "wrap_independent_bases": [],
+    "wrap_constants": {},
+    "wrap_owned": [],
+    "wrap_translate": [],
+    "wrap_handle_member": {},
+    "wrap_listeners": [],
+    "wrap_reverse": [],
+    "wrap_reverse_factories": {},
+    "reverse_factory_instances": {},
 }
+
+# style file: section -> {key: internal key}
+STYLE_KEYS = {
+    "names": {k: k for k in ("type_suffix", "type_case", "header_ext", "source_ext", "handle_member", "c_prefix",
+                             "c_real", "c_single_precision")},
+    "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width")},
+    "types": {k: k for k in ("scalar", "vec", "mat", "ivec", "imat", "int")},
+    "conventions": {**{k: k for k in ("member_access", "optional_arrays", "array_args", "int_arrays",
+                                      "eigen_placeholders", "gtest_assert", "gtest_eigen_near")},
+                    "size_checks": "wrap_size_checks"},
+    "members": {"member": "member_name", **{k: "member_" + k for k in ("getter_name", "setter_name", "getter",
+                                                                       "getter_ref", "setter", "setter_ref",
+                                                                       "reference")}},
+    "errors": {"log": "log_stmt", "log_includes": "log_includes", "size_message": "size_message",
+               "call_message": "call_message"},
+}
+# placeholders of the style templates
+PLACEHOLDERS = {"member_name": {"name"}, "member_getter_name": {"name"}, "member_setter_name": {"name"},
+                "log_stmt": {"class", "message", "what"},
+                "size_message": {"where", "param"}, "call_message": {"cfunc", "where"},
+                **{"member_" + k: {"type", "name", "member"}
+                   for k in ("getter", "getter_ref", "setter", "setter_ref", "reference")}}
+CHOICES = {"type_case": ("keep", "camel"), "include_guard": ("ifndef", "pragma"), "brace_style": ("allman", "attached"),
+           "member_access": ("auto", "fortran"), "optional_arrays": ("empty", "optional"),
+           "array_args": ("auto", "plain", "ref"), "int_arrays": ("auto", "eigen"), "gtest_assert": ("ASSERT", "EXPECT")}
+
+# config file: [project] / [prepass] / [tests] / [map] / [wrap] key -> (internal key, merge: "append" | "update" | None)
+SECTION_KEYS = {
+    "project": {"namespace": ("namespace", None), "namespace_map": ("namespace_map", "append"),
+                "includes": ("extra_includes", "append"), "constructor_bindings": ("constructor_bindings", None),
+                "destructor_bindings": ("destructor_bindings", None), "error_arg": ("error_arg", None),
+                "error_success": ("error_success", None), "drop_args": ("drop_args", None), "strict": ("strict", None)},
+    "prepass": {"patches": ("pre_patches", "append")},
+    "tests": {"extensions": ("test_extensions", None), "modules": ("test_modules", None),
+              "includes": ("test_includes", "append")},
+    "map": {"kinds": ("kind_map", "update"), "constants": ("constant_map", "update"),
+            "includes": ("include_map", "update"), "functions": ("function_map", "update"),
+            "calls": ("call_templates", "update"), "interfaces": ("procedure_map", "update")},
+    "wrap": {"string_in": ("wrap_string_in", None), "string_out": ("wrap_string_out", None)},
+}
+TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors",
+             "member_accessors", "unwrap", "expand", "named_elements", "element_list", "handle_member", "c_name",
+             "translate", "bindings"}
+BINDING_KEYS = {"template", "translate", "sizes"}
+PROCEDURE_KEYS = {"c_name", "translate", "sizes"}
+MODULE_KEYS = {"header", "exclude"}
+SECTIONS = set(SECTION_KEYS) | {"style", "macros", "modules", "types", "procedures"}
+# keys of the old (flat) format
+OLD_KEYS = (set(DEFAULTS) | {k for sec in STYLE_KEYS.values() for k in sec.values()} | {
+    "closed_hierarchy", "declare_at_first_use", "zero_based_loops", "explicit_this", "wrap_handle",
+    "wrap_direct_handles", "wrap_dllexport", "member_suffix", "log_error", "log_error_include"}) - SECTIONS
+
+
+def default_macros(prefix):
+    """macros of the project (prefix: upper case) and the C++ statements of the calls they become"""
+    p, low = prefix, prefix.lower()
+    macros = {f"{p}_CHK_IERR": "{0}", f"{p}_ALLOCATE": "allocate({0})"}
+    calls = {}
+    for name, exc, text in (("ASSERT", "logic_error", "assertion failed"),
+                            ("CHK_ARGUMENT", "invalid_argument", "invalid argument")):
+        macros[f"{p}_{name}"] = f"call {p}_{name}({{0}})"
+        macros[f"{p}_{name}_MSG"] = f"call {p}_{name}_MSG({{0}}, {{1}})"
+        calls[f"{low}_{name.lower()}"] = f'if (!({{0}})) throw std::{exc}("{text}: {{0:str}}");'
+        calls[f"{low}_{name.lower()}_msg"] = f"if (!({{0}})) throw std::{exc}({{1}});"
+    return macros, calls
+
+
+def subst(template, **values):
+    """template with its {placeholders} replaced (no format escaping)"""
+    return re.sub(r"\{(\w+)\}", lambda m: str(values[m.group(1)]) if m.group(1) in values else m.group(0), template)
+
+
+def _fail(path, msg):
+    raise SystemExit(f"f2cpp: {path}: {msg}")
+
+
+def load_style(cfg, path):
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    for sec, vals in data.items():
+        if sec not in STYLE_KEYS or not isinstance(vals, dict):
+            _fail(path, f"unknown style section [{sec}]")
+        for k, v in vals.items():
+            if k not in STYLE_KEYS[sec]:
+                _fail(path, f"unknown style entry {sec}.{k}")
+            key = STYLE_KEYS[sec][k]
+            if key in CHOICES and v not in CHOICES[key]:
+                _fail(path, f"{sec}.{k} = {v!r}: one of {', '.join(CHOICES[key])}")
+            bad = set(re.findall(r"\{(\w+)\}", v)) - PLACEHOLDERS[key] if key in PLACEHOLDERS else set()
+            if bad:
+                _fail(path, f"{sec}.{k}: unknown placeholder(s) {', '.join(sorted(bad))} "
+                            f"(known: {', '.join(sorted(PLACEHOLDERS[key]))})")
+            cfg[key] = v
+
+
+def _merge(cfg, key, val, how):
+    if how == "append":
+        cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
+    elif how == "update":
+        cfg[key].update(val)
+    else:
+        cfg[key] = val
+
+
+def _flag(cfg, key, name, on):
+    if on and name not in cfg[key]:
+        cfg[key].append(name)
+
+
+def _check(path, where, ent, known):
+    if not isinstance(ent, dict):
+        _fail(path, f"{where}: a table expected")
+    bad = set(ent) - known
+    if bad:
+        _fail(path, f"{where}: unknown key(s) {', '.join(sorted(bad))} (known: {', '.join(sorted(known))})")
+
+
+def load_config(cfg, path, data):
+    """one config file into cfg"""
+    old = set(data) & OLD_KEYS
+    if old:
+        _fail(path, f"old config format (keys {', '.join(sorted(old))}): convert it with tools/convert_config.py")
+    for sec, vals in data.items():
+        if sec not in SECTIONS:
+            _fail(path, f"unknown config section [{sec}]")
+        if sec == "style":
+            continue
+        if not isinstance(vals, dict):
+            _fail(path, f"[{sec}]: a table expected")
+        if sec in SECTION_KEYS:
+            _check(path, f"[{sec}]", vals, set(SECTION_KEYS[sec]))
+            for k, v in vals.items():
+                key, how = SECTION_KEYS[sec][k]
+                _merge(cfg, key, v, how)
+        elif sec == "macros":
+            for k, v in vals.items():
+                if k in ("include", "prefix"):
+                    cfg["macro_" + k] = v
+                    continue
+                _check(path, f"macros.{k}", v, {"fortran", "cpp"})
+                if "fortran" in v:
+                    cfg["macros"][k] = v["fortran"]
+                if "cpp" in v:          # C++ statement of the call the macro becomes (or of the macro itself)
+                    m = re.match(r"\s*call\s+(\w+)", v.get("fortran", cfg["macros"].get(k, "")), re.I)
+                    cfg["call_templates"][(m.group(1) if m else k).lower()] = v["cpp"]
+        elif sec == "modules":
+            for mod, ent in vals.items():
+                _check(path, f"modules.{mod}", ent, MODULE_KEYS)
+                if "header" in ent:
+                    cfg["module_headers"][mod] = ent["header"]
+                    _flag(cfg, "ignore_modules", mod, not ent["header"])
+                cfg["exclude"] += [f"{mod}:{n}" for n in ent.get("exclude", []) if f"{mod}:{n}" not in cfg["exclude"]]
+        elif sec == "procedures":
+            for name, ent in vals.items():
+                _check(path, f"procedures.{name}", ent, PROCEDURE_KEYS)
+                if "c_name" in ent:
+                    cfg["c_procedure_names"][name] = ent["c_name"]
+                if "sizes" in ent:
+                    cfg["wrap_sizes"][name] = ent["sizes"]
+                _flag(cfg, "wrap_translate", name, ent.get("translate"))
+        else:
+            for name, ent in vals.items():
+                load_type(cfg, path, name, ent)
+
+
+TYPE_SIMPLE = {"cpp": "type_map", "constants": "wrap_constants", "accessors": "accessors",
+               "member_accessors": "member_accessors", "unwrap": "unwrap_types", "expand": "expand_args",
+               "element_list": "named_element_lists", "handle_member": "wrap_handle_member", "c_name": "c_class_names",
+               "factory": "wrap_reverse_factories", "instance": "reverse_factory_instances"}
+
+
+def load_type(cfg, path, t, ent):
+    _check(path, f"types.{t}", ent, TYPE_KEYS)
+    for k, key in TYPE_SIMPLE.items():
+        if k in ent:
+            cfg[key][t] = ent[k]
+    ne = ent.get("named_elements")             # true: the type's own class; a string: that C++ class
+    if ne is not None and ne is not False:
+        cfg["named_elements"][t] = "" if ne is True else ne
+    interop = ent.get("interop")
+    if interop not in (None, "bidirectional", "listener"):
+        _fail(path, f"types.{t}.interop = {interop!r}: \"bidirectional\" or \"listener\"")
+    _flag(cfg, "wrap_reverse", t, interop == "bidirectional")
+    _flag(cfg, "wrap_listeners", t, interop == "listener")
+    _flag(cfg, "wrap_independent_bases", t, ent.get("independent"))
+    _flag(cfg, "wrap_owned", t, ent.get("owned"))
+    _flag(cfg, "wrap_translate", f"{t}%*", ent.get("translate"))
+    for b, bent in ent.get("bindings", {}).items():
+        _check(path, f"types.{t}.bindings.{b}", bent, BINDING_KEYS)
+        if "template" in bent:
+            cfg["method_templates"][f"{t}%{b}"] = bent["template"]
+        if "sizes" in bent:
+            cfg["wrap_sizes"][f"{t}%{b}"] = bent["sizes"]
+        _flag(cfg, "wrap_translate", f"{t}%{b}", bent.get("translate"))
 
 
 def load(path=None, **overrides):
     cfg = copy.deepcopy(DEFAULTS)
+    load_style(cfg, STYLE_FILE)
     for p in ([path] if isinstance(path, str) else path or []):     # later files override earlier ones
         with open(p, "rb") as f:
-            user = tomllib.load(f)
-        for key, val in user.items():
-            if key not in cfg:
-                raise SystemExit(f"f2cpp: unknown config key '{key}' in {p}")
-            if key == "exclude":            # [exclude] module = ["name", ...] or ["module:name", ...]
-                items = [f"{m}:{n}" for m, names in val.items() for n in names] if isinstance(val, dict) else val
-                cfg[key] = cfg[key] + [v for v in items if v not in cfg[key]]
-            elif isinstance(cfg[key], dict):
-                cfg[key].update(val)
-            elif isinstance(cfg[key], list) and key in ("extra_includes", "test_includes", "ignore_modules",
-                                                         "pre_patches", "namespace_map"):
-                cfg[key] = cfg[key] + [v for v in val if v not in cfg[key]]
-            else:
-                cfg[key] = val
-    for key, val in overrides.items():          # keyword overrides: normalised like the TOML values
+            data = tomllib.load(f)
+        if "style" in data:
+            load_style(cfg, os.path.join(os.path.dirname(os.path.abspath(p)), data["style"]))
+        load_config(cfg, p, data)
+    # macros of the Fortran source: prefix from the namespace of the config files (not from -n)
+    cfg["macro_prefix"] = cfg["macro_prefix"] or cfg["namespace"].split("::")[0].upper()
+    for key, val in overrides.items():          # keyword overrides: normalised like the file values
         if val is not None:
             if key not in cfg:
                 raise TypeError(f"f2cpp: unknown config key '{key}'")
             cfg[key] = val
+    return normalise(cfg)
+
+
+def normalise(cfg):
+    ns = cfg["namespace"].split("::")[0]
+    # project macros: defaults <PREFIX>_*, extended / replaced by the config
+    prefix = cfg["macro_prefix"]
+    macros, calls = default_macros(prefix)
+    cfg["macros"] = {**macros, **cfg["macros"]}
+    cfg["call_templates"] = {**calls, **cfg["call_templates"]}
+    inc = cfg["macro_include"]
+    if inc:                     # generated Fortran uses the macros; the include has no C++ counterpart
+        cfg["wrap_chk_ierr"] = cfg["wrap_chk_ierr"] or [f"{prefix}_CHK_IERR", inc]
+        cfg["wrap_chk_argument"] = cfg["wrap_chk_argument"] or [f"{prefix}_CHK_ARGUMENT", inc]
+        cfg["wrap_fail"] = cfg["wrap_fail"] or [f"{prefix}_ASSERT(.false., {{ierr}})", inc]
+        cfg["include_map"].setdefault(inc, "")
     # accessors: type -> {component: C++ accessor name or None (same name)}
     cfg["accessors"] = {k.lower(): {n.split("=")[0].strip().lower(): (n.split("=")[1].strip() if "=" in n else None)
                                     for n in v} for k, v in cfg["accessors"].items()}
     cfg["drop_args"] = [a.lower() for a in cfg["drop_args"]]
-    # "type" = "component" or ["component", "metadata", ...]: the first replaces the variable, the others
-    # are companion variables <variable>_<component>
+    # "component" or ["component", "metadata", ...]: the first replaces the variable, the others are companion
+    # variables <variable>_<component>
     lists = {k.lower(): [v] if isinstance(v, str) else list(v) for k, v in cfg["unwrap_types"].items()}
     cfg["unwrap_types"] = {k: v[0].lower() for k, v in lists.items()}
     cfg["unwrap_companions"] = {k: [c.lower() for c in v[1:]] for k, v in lists.items() if len(v) > 1}
-    import re as _re
     # "C++ type name = component"; without "= component" the component has the parameter's name
     cfg["expand_args"] = {k.lower(): [(m.group(1), m.group(2), (m.group(3) or m.group(2)).lower()) for m in
-                                      (_re.match(r"^\s*([^=]*[^=\s])\s+(\w+)\s*(?:=\s*(\w+))?\s*$", e) for e in v) if m]
+                                      (re.match(r"^\s*([^=]*[^=\s])\s+(\w+)\s*(?:=\s*(\w+))?\s*$", e) for e in v) if m]
                           for k, v in cfg["expand_args"].items()}
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
-    cfg["c_class_names"] = {k.lower(): v for k, v in cfg["c_class_names"].items()}
-    cfg["c_procedure_names"] = {k.lower(): v for k, v in cfg["c_procedure_names"].items()}
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map",
-                "module_headers", "kind_map"):    # Fortran names
+                "module_headers", "kind_map", "c_class_names", "c_procedure_names", "named_elements",
+                "named_element_lists", "wrap_handle_member", "reverse_factory_instances"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
-    cfg["ignore_modules"] = [m.lower() for m in cfg["ignore_modules"]]
-    cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
-    cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
+    for key in ("ignore_modules", "wrap_owned", "wrap_listeners", "wrap_reverse", "wrap_independent_bases"):
+        cfg[key] = [t.lower() for t in cfg[key]]
+    for key in ("exclude", "wrap_translate"):
+        cfg[key] = [e.lower().replace(" ", "") for e in cfg[key]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
     cfg["member_accessors"] = {k.lower(): {e.split(":")[0].strip().lower(): (e.split(":")[1].strip().lower()
                                                                            if ":" in e else "get") for e in v}
                                for k, v in cfg["member_accessors"].items()}
-    cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
-    cfg["wrap_translate"] = [t.lower().replace(" ", "") for t in cfg["wrap_translate"]]
-    cfg["named_elements"] = {k.lower(): v for k, v in cfg["named_elements"].items()}
-    cfg["named_element_lists"] = {k.lower(): v for k, v in cfg["named_element_lists"].items()}
-    cfg["wrap_handle_member"] = {k.lower(): v for k, v in cfg["wrap_handle_member"].items()}
-    cfg["wrap_listeners"] = [t.lower() for t in cfg["wrap_listeners"]]
-    cfg["wrap_reverse"] = [t.lower() for t in cfg["wrap_reverse"]]
     cfg["wrap_reverse_factories"] = {k.lower(): {a.lower(): p for a, p in v.items()}
                                      for k, v in cfg["wrap_reverse_factories"].items()}
-    cfg["reverse_factory_instances"] = {k.lower(): v for k, v in cfg["reverse_factory_instances"].items()}
-    cfg["wrap_independent_bases"] = [t.lower() for t in cfg["wrap_independent_bases"]]
-    ns = cfg["namespace"].split("::")[0]
     cfg["c_prefix"] = cfg["c_prefix"] or ns.lower()
     cfg["c_real"] = cfg["c_real"] or f"{ns.upper()}_REAL"
     cfg["c_single_precision"] = cfg["c_single_precision"] or f"{ns.upper()}_SINGLE_PRECISION"

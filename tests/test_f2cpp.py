@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -295,11 +296,10 @@ def test_options(tmp_path):
     c["constructor_bindings"] = ["configure"]
     c["brace_style"] = "attached"
     c["include_guard"] = "pragma"
-    c["closed_hierarchy"] = False
     translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
     hpp = (tmp_path / "block_lu_mod.hpp").read_text()
     cpp = (tmp_path / "block_lu_mod.cpp").read_text()
-    assert "namespace abc::linalg {" in hpp and "class BlockLu {" in hpp and "final" not in hpp and "void factorize();" in hpp
+    assert "namespace abc::linalg {" in hpp and "class BlockLu final {" in hpp and "void factorize();" in hpp
     assert "#pragma once" in hpp and "#ifndef" not in hpp
     assert "void solve(Eigen::Ref<vec> x) const;" in hpp
     assert "void init(int nblocks, int bs);" in hpp      # "init" is not a constructor name by default
@@ -347,9 +347,9 @@ def test_custom_macro_names(tmp_path):
         "if (.not. any(sys%offsets%mask(ub:ue))) call log_debug('none')\n"
         "call log_debug(str(ext_fn(sys%handle, trim(sys%path), sys%a%b)))\nend subroutine\nend module\n")
     (tmp_path / "c.toml").write_text(
-        '[macros]\nXY_CHK_ARGUMENT = "call XY_CHK_ARGUMENT({0})"\n'
-        "[function_map]\nstr = \"std::to_string\"\nlog_debug = \"xy_log_debug\"\n"
-        "[call_templates]\nXY_CHK_ARGUMENT = 'if (!({0})) throw std::invalid_argument(\"{0:str}\");'\n")
+        '[macros.XY_CHK_ARGUMENT]\nfortran = "call XY_CHK_ARGUMENT({0})"\n'
+        "cpp = 'if (!({0})) throw std::invalid_argument(\"{0:str}\");'\n"
+        "[map.functions]\nstr = \"std::to_string\"\nlog_debug = \"xy_log_debug\"\n")
     translate([str(tmp_path / "m_mod.F90")], config.load(str(tmp_path / "c.toml")), str(tmp_path))
     cpp = (tmp_path / "m_mod.cpp").read_text()
     assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp
@@ -478,8 +478,8 @@ def test_accessors(tmp_path):
         "system%models(2)%id = n\nobj%value = 2.0 * obj%value\nsystem%coupling_manager%step = n\nend subroutine\nend module\n")
     c = config.load()
     (tmp_path / "f2cpp.toml").write_text(
-        '[accessors]\nSystem_type = ["models", "offsets", "coupling_manager=couplingManager"]\n'
-        'legacy_type = ["*"]\n')
+        '[types]\nSystem_type.accessors = ["models", "offsets", "coupling_manager=couplingManager"]\n'
+        'legacy_type.accessors = ["*"]\n')
     c = config.load(str(tmp_path / "f2cpp.toml"))
     translate([str(tmp_path / "a_mod.F90")], c, str(tmp_path), [os.path.join(CORPUS, "legacy_mod.F90")])
     assert "system.couplingManager().step = n;" in (tmp_path / "a_mod.cpp").read_text()
@@ -692,7 +692,7 @@ def test_internal_procedures_become_lambdas(out):
     assert "internal" not in str(out[1].files)
 
 
-def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
+def test_declarations_at_first_use_and_zero_based_loops(out):
     expm, poly, lu = read(out, "expm_mod.cpp"), read(out, "poly_mod.cpp"), read(out, "block_lu_mod.cpp")
     # merged with the defining assignment / allocate; others right before the first top-level use
     assert "  int m = A.rows();\n" in expm and "  mat As(m, m);\n" in expm
@@ -710,11 +710,6 @@ def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
     # loop variable used mostly as index: 0-based loop, other uses get + 1
     assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
     assert "for (int i = 0; i < nblocks; ++i)\n" in lu and "if (i + 1 > 1)\n" in lu
-    # switched off
-    c = cfg(declare_at_first_use=False, zero_based_loops=False)
-    translate([os.path.join(CORPUS, "block_lu_mod.F90")], c, str(tmp_path))
-    old = (tmp_path / "block_lu_mod.cpp").read_text()
-    assert "  int i, info, bs;\n" in old and "for (i = 1; i <= nblocks; ++i)\n" in old
 
 
 def test_lambda_inside_method_sees_the_host(tmp_path):
@@ -1052,8 +1047,8 @@ contains
   end function keep_me
 end module rec_mod
 """)
-    (tmp_path / "x.toml").write_text('[exclude]\nrec_mod = ["*_records", "internal_type"]\n'
-                                     '"*" = ["record_type%show"]\n')
+    (tmp_path / "x.toml").write_text('[modules]\nrec_mod.exclude = ["*_records", "internal_type"]\n'
+                                     '"*".exclude = ["record_type%show"]\n')
     main([str(tmp_path / "rec_mod.F90"), "-o", str(tmp_path / "out"), "-c", str(tmp_path / "x.toml"),
           "-x", "rec_mod:scratch"])
     hpp, cpp = (tmp_path / "out" / "rec_mod.hpp").read_text(), (tmp_path / "out" / "rec_mod.cpp").read_text()
@@ -1140,12 +1135,6 @@ def test_wrapped_class_with_hand_wrapped_base(tmp_path):
     assert '#include "body_wrapper.hpp"' in sh and "class sphere final : public body" in sh
     assert "  use body_mod_c_binding, only: bodyWrapper_type, body_c" in \
         (tmp_path / "sphere_mod_c_binding.F90").read_text()
-    c["wrap_handle"] = "direct"                 # simple case: the handle points to the wrapper itself
-    translate([], c, str(tmp_path), [os.path.join(w, "body_mod.F90")], wrap=[os.path.join(w, "sphere_mod.F90")])
-    sb = (tmp_path / "sphere_mod_c_binding.F90").read_text()
-    assert "  use body_mod_c_binding, only: bodyWrapper_type\n" in sb and "this_c" not in sb
-    assert "typedef struct project_body project_body;" not in (tmp_path / "sphere_mod.h").read_text()
-    assert '#include "body_mod.h"' in (tmp_path / "sphere_mod.h").read_text()
 
 
 def test_wrapped_header_forward_declarations(tmp_path):
@@ -1324,7 +1313,7 @@ contains
   end subroutine read_more
 end module cfg_mod
 """)
-    (tmp_path / "x.toml").write_text('[expand_args]\nConfigNode_type = ["int tixiHandle = tixiHandle", '
+    (tmp_path / "x.toml").write_text('[types.ConfigNode_type]\nexpand = ["int tixiHandle = tixiHandle", '
                                      '"const std::string& xpath = xml_path"]\n')
     c = config.load(str(tmp_path / "x.toml"))
     translate([str(tmp_path / "cfg_mod.F90")], c, str(tmp_path))
@@ -1385,7 +1374,7 @@ contains
   end subroutine read_settings
 end module cfg_mod
 """)
-    (tmp_path / "x.toml").write_text('[expand_args]\nConfigNode_type = ["TixiDocumentHandle tixiHandle = tixiHandle", '
+    (tmp_path / "x.toml").write_text('[types.ConfigNode_type]\nexpand = ["TixiDocumentHandle tixiHandle = tixiHandle", '
                                      '"const std::string& xpath = xml_path"]\n')
     rep = Report()
     translate([str(tmp_path / "cfg_mod.F90"), str(tmp_path / "test_cfg_mod.pf")],
@@ -1446,8 +1435,8 @@ contains
 end module project_solverX
 """)
     (tmp_path / "x.toml").write_text(
-        '[expand_args]\nConfigNode_type = ["int tixiHandle", "const std::string& xml_path"]\n'
-        '[method_templates]\n"*_config_type%read" = "project::config::{module_base}Config_wrapper {self}({0});"\n')
+        '[types.ConfigNode_type]\nexpand = ["int tixiHandle", "const std::string& xml_path"]\n'
+        '[types."*_config_type".bindings]\nread.template = "project::config::{module_base}Config_wrapper {self}({0});"\n')
     translate([str(tmp_path / "project_solverX.F90")], config.load(str(tmp_path / "x.toml")), str(tmp_path))
     cpp = (tmp_path / "project_solverX.cpp").read_text()
     assert "  project::config::solverXConfig_wrapper config(tixiHandle, xml_path);\n" in cpp
@@ -1470,7 +1459,7 @@ def test_call_templates_with_glob_patterns(tmp_path):
 
 def test_unwrapped_type_with_companions(tmp_path):
     """array of a type around a polymorphic object plus metadata: one std::vector per component"""
-    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n')
+    (tmp_path / "x.toml").write_text('[types.Block_type]\nunwrap = ["p", "offset1", "offset2"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([os.path.join(CORPUS, "unwrap", "blocks_mod.F90")], c, str(tmp_path))
     hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
@@ -1530,8 +1519,8 @@ def test_wrapped_constants_of_unwrapped_companions(tmp_path):
     """wrapped type with an array of an unwrapped type: the companions obj%arr(:)%offset are gathered into
     C buffers by setup (const getters only)"""
     d = str(tmp_path)
-    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n'
-                                     '[wrap_constants]\nBlocks_type = ["arr_offset1", "arr_offset2"]\n')
+    (tmp_path / "x.toml").write_text('[types.Block_type]\nunwrap = ["p", "offset1", "offset2"]\n'
+                                     '[types.Blocks_type]\nconstants = ["arr_offset1", "arr_offset2"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     src = os.path.join(CORPUS, "unwrap", "blocks_mod.F90")
     translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, d, wrap=[src])
@@ -1586,8 +1575,8 @@ end program drv
 
 def test_unwrapped_companions_of_an_existing_class(tmp_path):
     """the class with the array of the unwrapped type exists in C++ (-I): its getters from accessors"""
-    (tmp_path / "x.toml").write_text('[unwrap_types]\nBlock_type = ["p", "offset1", "offset2"]\n'
-                                     '[accessors]\nBlocks_type = ["arr", "arr_offset1"]\n')
+    (tmp_path / "x.toml").write_text('[types.Block_type]\nunwrap = ["p", "offset1", "offset2"]\n'
+                                     '[types.Blocks_type]\naccessors = ["arr", "arr_offset1"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([os.path.join(CORPUS, "unwrap", "blocks_user_mod.F90")], c, str(tmp_path),
               [os.path.join(CORPUS, "unwrap", "blocks_mod.F90")])
@@ -1622,7 +1611,7 @@ end module q_mod
 def test_wrapped_owned_objects_in_arrays(tmp_path):
     """black-box objects (wrap_owned): std::vector of C++ objects that own their Fortran object"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
-    (tmp_path / "x.toml").write_text('wrap_owned = ["InternalStateWrapper_type"]\n')
+    (tmp_path / "x.toml").write_text('[types.InternalStateWrapper_type]\nowned = true\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     src = os.path.join(w, "state_mod.F90")
     translate([], c, d, wrap=[src])
@@ -1685,8 +1674,9 @@ def test_wrapped_listener(tmp_path):
     """abstract listener type implemented in C++: Fortran bridge type calling private static trampolines of the
     C++ class through function pointers (no C++ symbol referenced by the Fortran library)"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
-    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\nlog_error = "project_log_error"\n'
-                                     'log_error_include = \'"project_log.hpp"\'\n')
+    (tmp_path / "x.toml").write_text('style = "s.toml"\n[types.AbstractListener_type]\ninterop = "listener"\n')
+    (tmp_path / "s.toml").write_text('[errors]\nlog = \'project_log_error("{class}", ("{message}: " + '
+                                     'std::string({what})).c_str());\'\nlog_includes = ["<string>", \'"project_log.hpp"\']\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     src = os.path.join(w, "listen_mod.F90")
     translate([], c, d, wrap=[src])
@@ -1715,7 +1705,8 @@ def test_wrapped_listener(tmp_path):
     # error logging (log_error): instead of std::fprintf
     assert '    project_log_error("AbstractListener", ("encountered exception in state_changed: " + ' \
            'std::string(e.what())).c_str());' in cpp and "fprintf" not in cpp
-    assert '  catch (...)\n  {\n    project_log_error("AbstractListener", "encountered exception in state_changed");\n' \
+    assert '  catch (...)\n  {\n    project_log_error("AbstractListener", ("encountered exception in state_changed: " + ' \
+           'std::string("unknown exception")).c_str());\n' \
            '    *ierr = -1;' in cpp and "#include <string>" in cpp
     assert '#include "project_log.hpp"' in cpp and "<cstdio>" not in cpp
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
@@ -1797,7 +1788,7 @@ extern "C" void run(project_Thing* h1, project_Thing* h2)
 
 def test_wrapped_handle_member_name(tmp_path):
     """name of the handle member per root type (hand-written base classes); derived classes use it"""
-    (tmp_path / "x.toml").write_text('[wrap_handle_member]\nbody_type = "body_c_"\n')
+    (tmp_path / "x.toml").write_text('[types.body_type]\nhandle_member = "body_c_"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     w = os.path.join(CORPUS, "wrapped")
     translate([], c, str(tmp_path), wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
@@ -1843,7 +1834,7 @@ end module lng_mod
 
 def test_named_elements(tmp_path):
     """non-copyable / non-movable C++ objects: local arrays become one named variable per element"""
-    (tmp_path / "x.toml").write_text('[named_elements]\nVariable_type = ""\n')
+    (tmp_path / "x.toml").write_text('[types.Variable_type]\nnamed_elements = true\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     n = os.path.join(CORPUS, "named")
     translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
@@ -1856,8 +1847,7 @@ def test_named_elements(tmp_path):
     assert "std::vector<Variable>" not in cpp
     assert "not translated (named-elements-index)" in cpp           # vars(i) = ... in a loop
 
-    (tmp_path / "y.toml").write_text('[named_elements]\nVariable_type = ""\n'
-                                     '[named_element_lists]\nVariable_type = "VariableVector"\n')
+    (tmp_path / "y.toml").write_text('[types.Variable_type]\nnamed_elements = true\nelement_list = "VariableVector"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "y.toml")])
     translate([os.path.join(n, "var_mod.F90"), os.path.join(n, "test_var_mod.pf")], c, str(tmp_path))
     cpp = (tmp_path / "test_var_mod.cpp").read_text()
@@ -1889,7 +1879,7 @@ contains
   end subroutine use_vars
 end module vc_mod
 """)
-    (tmp_path / "z.toml").write_text('[named_elements]\nVar_type = ""\n')
+    (tmp_path / "z.toml").write_text('[types.Var_type]\nnamed_elements = true\n')
     translate([str(tmp_path / "vc_mod.F90")], config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "z.toml")]),
               str(tmp_path))
     assert '  Var vs_1("a");' in (tmp_path / "vc_mod.cpp").read_text()
@@ -1930,10 +1920,10 @@ def test_reverse_wrapped_types(tmp_path):
     factory registration, the factory and the things are translated C++ (wrap_reverse, wrap_reverse_factories);
     same output as the pure Fortran program"""
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
-    (tmp_path / "x.toml").write_text('wrap_reverse = ["AbstractThing_type"]\n[wrap_reverse_factories]\n'
-                                     'AbstractThingFactory_type = { register = "register_thing_factory", '
+    (tmp_path / "x.toml").write_text('[types]\nAbstractThing_type.interop = "bidirectional"\n'
+                                     'AbstractThingFactory_type.factory = { register = "register_thing_factory", '
                                      'unregister = "unregister_thing_factory" }\n'
-                                     '[reverse_factory_instances]\nLinearThingFactory_type = "linear"\n')
+                                     'LinearThingFactory_type.instance = "linear"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     wrapped = [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "thing_factory_mod.F90")]
     translate([os.path.join(r, "linear_thing_mod.F90"), os.path.join(r, "test_linear_thing_mod.pf")], c, d, wrap=wrapped)
@@ -1987,7 +1977,7 @@ def test_reverse_wrapped_types(tmp_path):
     assert "  std::unique_ptr<project_AbstractThing> c_;" in th and "#include \"thing_mod.h\"" not in th
     assert "  std::unique_ptr<AbstractThing> owner(static_cast<AbstractThing*>(self->userData));  // deletes it" in tc
     assert '    std::fprintf(stderr, "AbstractThing: encountered exception in evaluate: %s\\n", e.what());' in tc
-    assert '    std::fprintf(stderr, "AbstractThing: encountered exception in evaluate\\n");' in tc
+    assert '    std::fprintf(stderr, "AbstractThing: encountered exception in evaluate: %s\\n", "unknown exception");' in tc
     assert "  explicit AbstractThingFactory(const std::string& name);" in fh
     assert "  virtual void create_thing(const Config& config, std::unique_ptr<AbstractThing>& thing) const = 0;" in fh
     assert "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;\n" \
@@ -2246,7 +2236,7 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     (create_<Thing>_C_from_Fortran, wrap_<method>), used in C++ through <Abstract>_private::CWrapper<Thing>
     (own files <stem>_c_wrapper.hpp / .cpp)"""
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
-    (tmp_path / "x.toml").write_text('wrap_reverse = ["AbstractThing_type"]\n')
+    (tmp_path / "x.toml").write_text('[types.AbstractThing_type]\ninterop = "bidirectional"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([], c, d, wrap=[os.path.join(r, "thing_mod.F90")])
     hpp, cpp = (tmp_path / "thing_mod_c_wrapper.hpp").read_text(), (tmp_path / "thing_mod_c_wrapper.cpp").read_text()
@@ -2372,10 +2362,9 @@ def test_reverse_type_constants(tmp_path):
     """wrap_constants of a reverse type: set by the C++ constructor, in the C struct, const getters in C++ (used by
     the translated default implementation), copied into the Fortran object (project_<Type>_wrap)"""
     d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "convergence_mod.F90")
-    (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
-                                     'wrap_chk_argument = ["PROJECT_CHK_ARGUMENT", "project_macros.h"]\n'
-                                     'wrap_chk_ierr = ["PROJECT_CHK_IERR", "project_macros.h"]\n'
-                                     '[wrap_constants]\nThing_type = ["stateSize", "inputSize", "label"]\n')
+    (tmp_path / "x.toml").write_text('[macros]\ninclude = "project_macros.h"\n'
+                                     '[types.Thing_type]\ninterop = "bidirectional"\n'
+                                     'constants = ["stateSize", "inputSize", "label"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     base = os.path.join(CORPUS, "reverse", "model_base_mod.F90")      # stateSize: inherited (not wrapped)
     translate([], c, d, wrap=[src], interface_only=[base])
@@ -2777,12 +2766,151 @@ def test_config_overrides_are_normalised():
 
 
 
+def test_config_file_format(tmp_path):
+    """sections of the config file -> internal keys; derived macros (prefix, include); errors for unknown / old keys"""
+    (tmp_path / "x.toml").write_text("""
+[project]
+namespace = "Flow::detail"
+[macros]
+include = "flow_macros.inc"
+FLOW_ASSERT_MSG = {fortran = "call flow_assert_msg({0}, {1})", cpp = "if (!({0})) throw std::logic_error({1});"}
+[modules]
+flow_env = {header = ""}
+flow_io = {header = "io.hpp", exclude = ["dump*"]}
+[types.Solver_type]
+cpp = "Eigen::PartialPivLU<mat>"
+bindings.solve.template = "{1} = {self}.solve({0});"
+bindings.apply = {translate = true, sizes = {x = "this%n"}}
+[types.Model_type]
+interop = "bidirectional"
+constants = ["n"]
+translate = true
+[procedures.helper]
+c_name = "flow_helper"
+""")
+    c = config.load(str(tmp_path / "x.toml"))
+    assert c["macros"]["FLOW_CHK_IERR"] == "{0}" and c["macros"]["FLOW_ASSERT_MSG"] == "call flow_assert_msg({0}, {1})"
+    assert c["call_templates"]["flow_assert_msg"] == "if (!({0})) throw std::logic_error({1});"
+    assert c["call_templates"]["flow_chk_argument"].startswith("if (!({0})) throw std::invalid_argument(")
+    assert c["wrap_chk_ierr"] == ["FLOW_CHK_IERR", "flow_macros.inc"] and c["include_map"]["flow_macros.inc"] == ""
+    assert c["wrap_fail"] == ["FLOW_ASSERT(.false., {ierr})", "flow_macros.inc"]
+    assert "flow_env" in c["ignore_modules"] and c["module_headers"]["flow_io"] == "io.hpp"
+    assert c["exclude"] == ["flow_io:dump*"] and c["type_map"]["solver_type"] == "Eigen::PartialPivLU<mat>"
+    assert c["method_templates"] == {"solver_type%solve": "{1} = {self}.solve({0});"}
+    assert c["wrap_sizes"] == {"solver_type%apply": {"x": "this%n"}} and c["c_procedure_names"] == {"helper": "flow_helper"}
+    assert c["wrap_translate"] == ["solver_type%apply", "model_type%*"] and c["wrap_reverse"] == ["model_type"]
+    assert c["c_prefix"] == "flow" and c["wrap_constants"] == {"model_type": ["n"]}
+    # -n changes the C++ namespace, not the macros of the Fortran source
+    assert "FLOW_CHK_IERR" in config.load(str(tmp_path / "x.toml"), namespace="other")["macros"]
+    for text, msg in (("namespace = 'x'\n", "old config format"), ("[project]\nnamspace = 'x'\n", "namspace"),
+                      ("[types.T]\ninterop = 'reverse'\n", "interop"), ("[typs.T]\n", "unknown config section"),
+                      ("style = 's.toml'\n", "s.toml")):
+        (tmp_path / "y.toml").write_text(text)
+        (tmp_path / "s.toml").write_text("[members]\ngetter = '{typ} {name}() const'\n")
+        with pytest.raises((SystemExit, FileNotFoundError), match=msg if msg != "s.toml" else "typ"):
+            config.load(str(tmp_path / "y.toml"))
+
+
+def test_style_file(tmp_path):
+    """style file: templates of member accessors, member names, messages; only the given entries change"""
+    (tmp_path / "s.toml").write_text("""
+[members]
+member = "m_{name}"
+getter_name = "get_{name}"
+setter_name = "set_{name}"
+getter = "{type} {name}() const { return {member}; }  // getter"
+[errors]
+call_message = "{where} failed ({cfunc})"
+""")
+    (tmp_path / "x.toml").write_text('style = "s.toml"\n[types.solver_type]\nmember_accessors = ["n", "tol:set"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    assert c["eigen_placeholders"] == "Eigen" and c["doxygen"] == "//!"           # tests style + defaults
+    d = str(tmp_path)
+    translate([os.path.join(CORPUS, "accessors_mod.F90")], c, d)
+    hpp, cpp = read((d,), "accessors_mod.hpp"), read((d,), "accessors_mod.cpp")
+    assert "  int get_n() const { return m_n; }  // getter\n" in hpp and "  int m_n = 0;" in hpp
+    assert "  void set_tol(scalar value) { m_tol = value; }" in hpp
+    assert "  s.set_tol(0.5);" in cpp and "s.count = s.count + s.get_n();" in cpp and "  m_n = n;" in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "accessors_mod")
+    translate([], c, d, wrap=[os.path.join(CORPUS, "wrapped", "mysolver_mod.F90")])
+    assert 'throw std::runtime_error("MySolver::apply failed (project_MySolver_apply)");' in read((d,), "mysolver_mod.cpp")
+
+
+def test_convert_old_config(tmp_path):
+    """tools/convert_config.py: old flat config -> config + style file; derived entries dropped"""
+    import tomllib
+    (tmp_path / "old.toml").write_text("""
+namespace = "MYPROJECT"
+destructor_bindings = ["finalize"]
+ignore_modules = ["myproject_env"]
+log_error = "myproject_log_error"
+log_error_include = '"myproject_logging.h"'
+wrap_reverse = ["Model_type"]
+wrap_listeners = ["Listener_type"]
+wrap_independent_bases = ["Persistable_type"]
+wrap_translate = ["System_type%get_state", "System_type%*", "Wrapper_type", "helper"]
+wrap_chk_ierr = ["MYPROJECT_CHK_IERR", "myproject_macros.inc"]
+wrap_fail = "MYPROJECT_ASSERT(.false., {ierr})"
+eigen_placeholders = "Eigen"
+member_suffix = "_m"
+closed_hierarchy = false
+[include_map]
+"myproject_macros.inc" = ""
+[macros]
+MYPROJECT_CHK_IERR = "{0}"
+MYPROJECT_ASSERT_MSG = "call myproj_assert_msg({0}, {1})"
+[call_templates]
+MYPROJECT_ASSERT = 'if (!({0})) throw std::logic_error("assertion failed: {0:str}");'
+MYPROJ_ASSERT_MSG = 'if (!({0})) throw std::logic_error({1});'
+sort_rank = "x({0});"
+[exclude]
+"myproject_*_factory" = ["generate_*"]
+[type_map]
+Persistable_type = "Persistable::AbstractPersistable"
+[method_templates]
+"Solver_type%solve" = "{1} = {self}.solve({0});"
+[wrap_sizes]
+"Solver_type%apply" = {x = "this%n"}
+[named_elements]
+Variable_type = ""
+[named_element_lists]
+Variable_type = "VariableVector"
+""")
+    tool = os.path.join(HERE, "..", "tools", "convert_config.py")
+    r = subprocess.run([sys.executable, tool, str(tmp_path / "old.toml"), str(tmp_path / "new.toml")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert "closed_hierarchy = False dropped" in r.stderr and "'Wrapper_type' is a procedure name" in r.stderr
+    new = tomllib.loads((tmp_path / "new.toml").read_text())
+    style = tomllib.loads((tmp_path / "new_style.toml").read_text())
+    assert new["style"] == "new_style.toml" and new["project"] == {"namespace": "MYPROJECT"}
+    assert new["macros"] == {"include": "myproject_macros.inc", "MYPROJECT_ASSERT_MSG": {
+        "fortran": "call myproj_assert_msg({0}, {1})", "cpp": "if (!({0})) throw std::logic_error({1});"}}
+    assert new["map"] == {"calls": {"sort_rank": "x({0});"}}
+    assert new["modules"] == {"myproject_env": {"header": ""}, "myproject_*_factory": {"exclude": ["generate_*"]}}
+    t = new["types"]
+    assert t["Persistable_type"] == {"cpp": "Persistable::AbstractPersistable", "independent": True}
+    assert t["Model_type"] == {"interop": "bidirectional"} and t["Listener_type"] == {"interop": "listener"}
+    assert t["System_type"] == {"bindings": {"get_state": {"translate": True}}, "translate": True}
+    assert t["Solver_type"]["bindings"] == {"solve": {"template": "{1} = {self}.solve({0});"},
+                                            "apply": {"sizes": {"x": "this%n"}}}
+    assert t["Variable_type"] == {"named_elements": True, "element_list": "VariableVector"}
+    assert new["procedures"] == {"Wrapper_type": {"translate": True}, "helper": {"translate": True}}
+    assert style == {"conventions": {"eigen_placeholders": "Eigen"}, "members": {"member": "{name}_m"},
+                     "errors": {"log": 'myproject_log_error("{class}", ("{message}: " + std::string({what})).c_str());',
+                                "log_includes": ["<string>", '"myproject_logging.h"']}}
+    c = config.load(str(tmp_path / "new.toml"))
+    assert c["wrap_fail"] == ["MYPROJECT_ASSERT(.false., {ierr})", "myproject_macros.inc"]
+    assert c["call_templates"]["myproj_assert_msg"] == "if (!({0})) throw std::logic_error({1});"
+
+
 def test_reverse_string_constants_with_project_helpers(tmp_path):
     """wrap_string_out: the project's helpers create / free the C strings of character constants"""
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
-    (tmp_path / "x.toml").write_text('wrap_reverse = ["Thing_type"]\n'
-                                     'wrap_string_out = ["project_str", "copyString", "deleteString"]\n'
-                                     '[wrap_constants]\nThing_type = ["stateSize", "inputSize", "label"]\n')
+    (tmp_path / "x.toml").write_text('[wrap]\nstring_out = ["project_str", "copyString", "deleteString"]\n'
+                                     '[types.Thing_type]\ninterop = "bidirectional"\n'
+                                     'constants = ["stateSize", "inputSize", "label"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     base = os.path.join(r, "model_base_mod.F90")
     translate([], c, d, wrap=[os.path.join(r, "convergence_mod.F90")], interface_only=[base])
@@ -2802,7 +2930,7 @@ def test_reverse_string_constants_with_project_helpers(tmp_path):
 
 def test_wrapped_module_in_a_subdirectory(tmp_path):
     """module_headers with a directory: all outputs of a wrapped module go there (created)"""
-    (tmp_path / "x.toml").write_text('[module_headers]\nmysolver_mod = "solvers/MySolver.hpp"\n')
+    (tmp_path / "x.toml").write_text('[modules.mysolver_mod]\nheader = "solvers/MySolver.hpp"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([], c, str(tmp_path / "out"), wrap=[os.path.join(CORPUS, "wrapped", "mysolver_mod.F90")])
     for f in ("MySolver.hpp", "MySolver.cpp", "MySolver.h", "MySolver_c_binding.F90"):
@@ -2814,8 +2942,7 @@ def test_wrapped_calls_with_error_macro(tmp_path):
     """wrap_chk_ierr: binding calls of wrapped methods inside PROJECT_CHK_IERR (also in the select type of a derived
     class); positional actual arguments"""
     d, w = str(tmp_path), os.path.join(CORPUS, "wrapped")
-    translate([], cfg(wrap_chk_ierr=["PROJECT_CHK_IERR", "project_macros.h"],
-                      wrap_fail=["PROJECT_ASSERT(.false., {ierr})", "project_macros.h"]), d,
+    translate([], cfg(macro_include="project_macros.h"), d,
               wrap=[os.path.join(w, "body_mod.F90"), os.path.join(w, "sphere_mod.F90")])
     sb = read((d,), "sphere_mod_c_binding.F90")
     assert "    select type (obj => wrapper%ptr)\n    class is (sphere_type)\n" \
@@ -2894,8 +3021,9 @@ def test_generated_classes_follow_the_coding_rules(out, tmp_path):
     """every generated class (translated, wrapped, reverse, wrappers, tests) is final or has a virtual destructor
     and declares none or all special members"""
     w, r = os.path.join(CORPUS, "wrapped"), os.path.join(CORPUS, "reverse")
-    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\nwrap_reverse = ["AbstractThing_type", '
-                                     '"StateModel_type", "Thing_type"]\n[wrap_owned]\n')
+    (tmp_path / "x.toml").write_text('[types]\nAbstractListener_type.interop = "listener"\n'
+                                     'AbstractThing_type.interop = "bidirectional"\n'
+                                     'StateModel_type.interop = "bidirectional"\nThing_type.interop = "bidirectional"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([], c, str(tmp_path), wrap=[os.path.join(w, f) for f in ("mysolver_mod.F90", "body_mod.F90",
                                                                          "sphere_mod.F90", "listen_mod.F90",
@@ -2913,7 +3041,7 @@ def test_member_accessors(tmp_path):
     by value; set: + setter overload; ref: + non-const reference); own methods and derived classes use n_; other
     code the accessors; writes to get-only members are TODOs; unlisted members and types stay as they are"""
     d = str(tmp_path)
-    (tmp_path / "x.toml").write_text('[member_accessors]\nsolver_type = ["n", "tol:set", "x:ref"]\n')
+    (tmp_path / "x.toml").write_text('[types.solver_type]\nmember_accessors = ["n", "tol:set", "x:ref"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     report, _ = translate([os.path.join(CORPUS, "accessors_mod.F90")], c, d)
     hpp, cpp = read((d,), "accessors_mod.hpp"), read((d,), "accessors_mod.cpp")

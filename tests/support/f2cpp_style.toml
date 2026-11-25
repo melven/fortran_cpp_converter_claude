@@ -1,0 +1,3 @@
+# style of the tests: only the differences from f2cpp/style.toml
+[conventions]
+eigen_placeholders = "Eigen"          # the test environment has Eigen 3.4

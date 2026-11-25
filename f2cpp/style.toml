@@ -1,0 +1,66 @@
+# f2cpp default style of the generated C++ / C code.
+# A project style file (config: style = "file.toml") overrides single entries of this file.
+# Templates: placeholders {name}; other text is copied (no brace escaping); unknown placeholders are errors.
+
+[names]
+type_suffix = "_type"          # stripped from derived type names
+type_case = "keep"             # "keep" | "camel" (class names)
+header_ext = ".hpp"
+source_ext = ".cpp"
+handle_member = "handle_"      # C++ member holding the C handle of wrapped classes
+c_prefix = ""                  # C names <c_prefix>_<Class>_<method>; "": the outer namespace in lower case
+c_real = ""                    # C type macro of real; "": <NS>_REAL
+c_single_precision = ""        # "": <NS>_SINGLE_PRECISION
+
+[layout]
+include_guard = "ifndef"       # "ifndef": #ifndef FILE_NAME_HPP ... #endif; "pragma": #pragma once
+doxygen = "//!"                # prefix of documentation comments ("//!" or "///")
+brace_style = "allman"         # "allman": { on its own line; "attached": if (...) {
+c_decl_width = 100             # longer C declarations (C header, binding comments): one parameter per line
+
+[types]                        # C++ types (scalar, vec, mat must be provided by an included header)
+scalar = "scalar"
+vec = "vec"
+mat = "mat"
+ivec = "Eigen::VectorXi"
+imat = "Eigen::MatrixXi"
+int = "int"
+
+[conventions]
+# "auto": data members are private; protected if used by methods of derived classes, public if used anywhere
+#         else in the translated files; "fortran": as declared in Fortran
+member_access = "auto"
+# optional intent(in) arrays: "empty": `const vec& w = vec()`, present(w) -> w.size() > 0;
+# "optional": `const std::optional<vec>& w = std::nullopt`
+optional_arrays = "empty"
+# "auto": const vec& / vec&, Eigen::Ref only for out/inout dummies that receive a slice in a translated call;
+# "plain": always const vec& / vec&; "ref": always Eigen::Ref
+array_args = "auto"
+# "auto": rank-1 integer arrays are std::vector<int> unless used in array expressions, sections, as vector
+# subscripts or passed where an Eigen vector is needed; "eigen": always ivec
+int_arrays = "auto"
+# namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen 5) or "Eigen" (Eigen 3.4)
+eigen_placeholders = "Eigen::placeholders"
+size_checks = false            # wrapped methods: check array sizes in the C++ glue before the call
+gtest_assert = "ASSERT"        # pFUnit asserts abort the test -> ASSERT_*; "EXPECT" changes the logic
+gtest_eigen_near = true        # the project provides ASSERT_NEAR / EXPECT_NEAR for Eigen types
+
+[members]                      # accessors of translated types (config: [types.X] member_accessors)
+member = "{name}_"             # the renamed data member ({name}: the component)
+getter_name = "{name}"         # accessor names, used by the generated accessors and their callers
+setter_name = "{name}"
+# {type}: C++ type, {name}: getter_name / setter_name, {member}: the data member
+getter = "{type} {name}() const { return {member}; }"                      # real / integer / logical scalars
+getter_ref = "const {type}& {name}() const { return {member}; }"           # other types
+setter = "void {name}({type} value) { {member} = value; }"
+setter_ref = "void {name}(const {type}& value) { {member} = value; }"
+reference = "{type}& {name}() { return {member}; }"
+
+[errors]
+# C++ statement in the catch blocks of functions called from Fortran (must not throw);
+# {class}: C++ class, {message}: text (no quotes), {what}: C string expression (e.what() / "unknown exception")
+log = 'std::fprintf(stderr, "{class}: {message}: %s\n", {what});'
+log_includes = ["<cstdio>"]
+# exception texts of the C++ glue of wrapped classes: {where}: Class::method, {param}: parameter, {cfunc}: C function
+size_message = "{where}: wrong dimension of parameter {param}!"
+call_message = "Error: calling C function {cfunc} in {where}!"

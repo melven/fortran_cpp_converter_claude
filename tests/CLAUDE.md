@@ -8,13 +8,13 @@ the tests that `return`).
 
 | Path | Content |
 |---|---|
-| `test_f2cpp.py` | all tests (one file, ~2600 lines); helpers `run` (subprocess, asserts rc 0), `cfg` (config with keyword overrides: lower-case names!), `out` (module fixture: whole corpus translated once), `flat` (joins one-parameter-per-line C declarations), `read`, `cxx` (`g++ -Wall -Werror -c`) |
+| `test_f2cpp.py` | all tests (one file, ~2600 lines); helpers `run` (subprocess, asserts rc 0), `cfg` (test config with keyword overrides of internal keys), `out` (module fixture: whole corpus translated once), `flat` (joins one-parameter-per-line C declarations), `read`, `cxx` (`g++ -Wall -Werror -c`) |
 | `corpus/*.F90`, `*.pf` | translated modules and pFUnit tests (`MODULES`); `driver.F90` (Fortran reference program) |
 | `corpus/wrapped/` | modules wrapped with `-W` (Fortran stays, C++ interface) and their users |
 | `corpus/reverse/` | abstract types implemented in C++ (reverse types, factories, constants, `class(*)` state) |
 | `corpus/unwrap/`, `corpus/named/` | `unwrap_types`, `named_elements` |
 | `corpus/project_macros.h` | stand-in for the project's error macros (`PROJECT_CHK_IERR`, `PROJECT_CHK_ARGUMENT`, ...) |
-| `support/` | `f2cpp.toml` (test config), stand-ins for project headers (`project_math.hpp`, `gtest_eigen.hpp`, `lapack_compat.hpp`, `legacy.hpp`, `project_log.hpp`, `project_str.F90`), hand-written C++ drivers (`driver.cpp`, `wrap_driver.cpp`, `body_driver.cpp`) and Fortran factories |
+| `support/` | `f2cpp.toml` + `f2cpp_style.toml` (test config / style), stand-ins for project headers (`project_math.hpp`, `gtest_eigen.hpp`, `lapack_compat.hpp`, `legacy.hpp`, `project_log.hpp`, `project_str.F90`), hand-written C++ drivers (`driver.cpp`, `wrap_driver.cpp`, `body_driver.cpp`) and Fortran factories |
 
 Corpus files (first comment line): `expm_mod` matrix exponential; `block_lu_mod` block-tridiagonal LU;
 `shape_mod` OOP hierarchy; `features_mod` language features (compile-checked); `poly_mod` lower bound 0;
@@ -29,6 +29,7 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 
 ## Tests (one line each)
 
+- `test_config_file_format`, `test_style_file`, `test_convert_old_config`: config / style formats, `tools/convert_config.py`.
 - `test_prepass_macros`, `test_custom_macro_names`: macro expansion. `test_report`: report contents, no source text.
 - `test_expressions`, `test_classes`, `test_features`, `test_pfunit`, `test_options`: string checks of the translated corpus.
 - `test_compiles[name]`: every translated corpus module and test compiles (`-Wall -Werror`).

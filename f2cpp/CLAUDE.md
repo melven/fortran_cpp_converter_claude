@@ -13,7 +13,7 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 |---|---|
 | `__init__.py`, `__main__.py` | package doc; `python -m f2cpp` → `cli.main` |
 | `cli.py` | argument parsing, parse all files, two passes, write all output files (incl. `.h` from the binding) |
-| `config.py` | `DEFAULTS` (all options, documented inline) and `load` (TOML merge, lower-casing, derived defaults) |
+| `config.py` | config file (sections → internal flat keys), style file (`style.toml`: defaults), `load`, derived defaults |
 | `prepass.py` | text level: `pre_patches`, macro expansion, cpp lines / pFUnit `@` lines / blank lines → marker comments |
 | `model.py` | symbol table (`Var`, `Proc`, `Binding`, `TypeDef`, `Module`, `Program`) from the parse tree; pointer classification, callbacks, unwrap types, named elements, int vectors |
 | `translate.py` | `Translator`: expressions (`x_<Node>` → `X`), statements (`s_<Node>`), intrinsics (`i_*`), error-flag removal, pFUnit asserts |
@@ -30,8 +30,14 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 - `main`: command line → `config.load` → `translate` → summary / JSON report.
 
 ### config.py
-- `DEFAULTS`: every option with a comment (the reference documentation of the options).
-- `load`: merge TOML files (unknown keys are errors; dicts updated, some lists appended), normalise names to lower case, derive `c_prefix` / `c_real` / `c_single_precision` / `wrap_string_in` from the namespace.
+- `DEFAULTS`: internal keys (the code uses `cfg["key"]`); file formats: README "Configuration", `style.toml`.
+- `STYLE_KEYS` / `PLACEHOLDERS` / `CHOICES`: style file → internal keys, template placeholders, allowed values.
+- `SECTION_KEYS`, `TYPE_KEYS`, ...: config sections → internal keys; `OLD_KEYS`: old format is an error.
+- `load_style`, `load_config` / `load_type`: one file each (unknown keys are errors); `load`: built-in style,
+  files, keyword overrides (internal keys), `normalise` (lower case, `<PREFIX>_*` macros, macro roles from
+  `macro_include`, `c_prefix` / `c_real` / ... from the namespace). Macro prefix: from the files' namespace, not `-n`.
+- `subst(template, **values)`: style templates (`{name}`, no brace escaping).
+- `tools/convert_config.py`: old flat format → config + style file (one-time).
 
 ### prepass.py
 - `_find_close`: matching parenthesis (strings respected). `split_args`: top-level macro arguments.
@@ -67,7 +73,7 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 - `MappedNames` (configured names, glob aware), `loop_var`, `_One`, `plain_comment`, `pf_role`, `strip_blank`, `squeeze`.
 
 ### wrap.py
-- Names: `lower_camel`, `c_class_name`, `c_class`, `root`, `is_root`, `overrides_wrapped`, `poly`, `wrapper_type`, `c_type_name` (C handle / struct name), `struct_handle`, `struct_type`, `handle_member`, `c_name`, `proc_c_name`, `dllexport`.
+- Names: `lower_camel`, `c_class_name`, `c_class`, `root`, `is_root`, `overrides_wrapped`, `poly`, `wrapper_type`, `c_type_name` (C handle / struct name), `struct_type`, `handle_member`, `c_name`, `proc_c_name`, `dllexport`.
 - Module level: `use_only` (only-lists), `wrapped_types`, `owned` / `owned_type` (`wrap_owned`), `wrap_from_c` (`<Class>_private::wrapFromC`), `object_access` (Fortran object from the handle).
 - Sizes: `doc_sizes` (`dimension (...)` in docs), `array_sizes` (size checks, allocate, explicit shapes, docs), `fortran_size` (`wrap_sizes` first, as binding code).
 - Arguments: `wrappable` (argument kinds or reason), `c_type`, `f_type`.
@@ -94,8 +100,6 @@ Correctness
   hides Python bugs. Only one test checks the absence of `internal:` categories; a corpus-wide check is missing.
 - Broad `except Exception` also in `pick_specific` (argument of unknown kind: "assume it fits"), `known_size`,
   `doc_sizes`: silent fallbacks.
-- `config.load(**overrides)` applies keyword overrides after the lower-casing: `cfg(wrap_reverse=["StateModel_type"])`
-  silently matches nothing (tests pass lower case).
 - `cli.translate` writes the `_c_binding.F90` / c_wrapper file before creating the output subdirectory (only an
   issue with `module_headers` that contain a directory); on a parse error it writes `<file>.f2cpp_prepass` next to
   the *input* file.
@@ -124,6 +128,5 @@ Structure / simplifications
   (fine only because there is one emitter per module).
 - `wrap_constants` means two things: copied at setup (forward types, C struct filled by Fortran) and set by the C++
   constructor (reverse types).
-- `config.load` normalises ~25 keys by hand; a declarative table (key → normaliser) would avoid misses.
 - `translate.py` mixes expression, statement, intrinsic and error-flag logic in one 2500-line class; split along
   these lines (mixins or modules) without changing behaviour.

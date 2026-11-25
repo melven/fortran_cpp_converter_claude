@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from .model import cls, lname, items_of, cname, Var
 from .prepass import CPP_MARK, PF_MARK, BLANK_MARK, ASSERT_PREFIX
+from .config import subst
 
 TODO = "TODO(f2cpp)"
 
@@ -579,7 +580,7 @@ class Translator:
 
     def member(self, obj, name, qual=""):
         """code of member 'name' of obj; 'this->' is omitted unless a local name hides the member"""
-        if obj.raw == "this" and not self.cfg["explicit_this"]:
+        if obj.raw == "this":
             hidden = {v.cname for p in self.scope_chain() for v in p.vars.values() if not v.is_this}
             hidden |= {v.cname for v in self.overrides.values()}
             if qual or name not in hidden:
@@ -700,10 +701,11 @@ class Translator:
                 self.used_member(td, n, comp)
                 mode = self.member_mode(td, n)
                 if on_this and self.in_class_of(td, n):
-                    x = self.var_ref(comp, self.member(cur, comp.cname + self.cfg["member_suffix"], cur.qual))
+                    x = self.var_ref(comp, self.member(cur, subst(self.cfg["member_name"], name=comp.cname), cur.qual))
                     mode = None
                 else:
-                    x = X(self.member(cur, comp.cname, cur.qual) + "()", comp.rank, comp.base, 100, comp,
+                    getter = subst(self.cfg["member_getter_name"], name=comp.cname)
+                    x = X(self.member(cur, getter, cur.qual) + "()", comp.rank, comp.base, 100, comp,
                           comp.tname, whole=True, via_accessor=True, access=mode)
                 if subs is not None:
                     x = self.subscript(x, comp, subs)
@@ -1513,7 +1515,10 @@ class Translator:
             if not lhs.whole:
                 raise Untranslatable("member-setter-element")
             r = self.expr(rhs_n)
-            self.emit(ind, f"{lhs.code[:-2]}({self.matrix(r) if r.rank else r.code});")
+            getter = subst(self.cfg["member_getter_name"], name=lhs.var.cname)
+            obj = lhs.code[:-2 - len(getter)]
+            self.emit(ind, f"{obj}{subst(self.cfg['member_setter_name'], name=lhs.var.cname)}"
+                           f"({self.matrix(r) if r.rank else r.code});")
             return
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
@@ -2129,7 +2134,7 @@ class Translator:
             i = self.expr(var).code
             decl = f"{self.cpp_type(v)} " if n in self.loop_decl and v is not None else ""
             st = self.expr(bounds[2]).code if len(bounds) > 2 else "1"
-            if n in self.loop_local and self.cfg["zero_based_loops"] and st in ("1", "-1"):
+            if n in self.loop_local and st in ("1", "-1"):
                 idx, other, arg = self.index_uses(node, n)
                 shift = 1 if idx > other and not arg else 0
             lo, hi = self.minus(bounds[0], shift), self.expr(bounds[1])

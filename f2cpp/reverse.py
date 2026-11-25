@@ -22,6 +22,7 @@ import re
 
 from .model import lname, items_of
 from .translate import TODO
+from .config import subst
 
 
 def fill(stmt, obj):
@@ -297,15 +298,13 @@ class ReverseMixin:
         if res_v is not None:
             call = f"*{iface.result} = {call}"
         on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
-        log, msg = cfg["log_error"], f"encountered exception in {bd.spelling}"
+        msg = f"encountered exception in {bd.spelling}"
+        log = [subst(cfg["log_stmt"], **{"class": cls, "message": msg, "what": w}) for w in ("e.what()", '"unknown exception"')]
         res["cpp"] = [f"void {cls}::{tramp}({res['cpp_params']}) noexcept", "{"] + \
             ([f"  *{err} = 0;"] if has_err else []) + [f"  {x}" for x in cpp_init] + \
             ["  try", "  {"] + [f"    {x}" for x in cpp_pre + [call] + cpp_post] + ["  }",
              "  catch (const std::exception& e)       // must not unwind through Fortran", "  {",
-             f'    {log}("{cls}", ("{msg}: " + std::string(e.what())).c_str());' if log else
-             f'    std::fprintf(stderr, "{cls}: {msg}: %s\\n", e.what());'] + on_error + \
-            ["  }", "  catch (...)", "  {",
-             f'    {log}("{cls}", "{msg}");' if log else f'    std::fprintf(stderr, "{cls}: {msg}\\n");'] + \
+             f"    {log[0]}"] + on_error + ["  }", "  catch (...)", "  {", f"    {log[1]}"] + \
             on_error + ["  }", "}", ""]
         return res
 
@@ -1016,8 +1015,8 @@ class ReverseMixin:
                     pre.append(f"{a}_f => {a}(1:{known[0].replace('obj%', 'this_c%')})")   # constants in the struct
                     call[key] = f"{a}_f"
                     cpp_pre += [f"{cn}.resize({n});"] if intent == "out" else \
-                        [f"if( {cn}.size() != {n} )",
-                         f'  throw std::invalid_argument("{wcls}::{bd.spelling}: wrong dimension of parameter {cn}!");']
+                        [f"if( {cn}.size() != {n} )", "  throw std::invalid_argument(\"" +
+                         subst(self.cfg["size_message"], where=f"{wcls}::{bd.spelling}", param=cn) + "\");"]
                     cpp_args.append(f"{cn}.data()")
                 else:
                     dummies += [a, f"{a}_n"]
