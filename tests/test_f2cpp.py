@@ -1,4 +1,5 @@
 """End-to-end tests: translate the synthetic corpus, compile it and compare with gfortran."""
+import glob
 import os
 import re
 import shutil
@@ -696,7 +697,15 @@ def test_declarations_at_first_use_and_zero_based_loops(out, tmp_path):
     # merged with the defining assignment / allocate; others right before the first top-level use
     assert "  int m = A.rows();\n" in expm and "  mat As(m, m);\n" in expm
     assert "  scalar nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;\n  int s = 0;\n" in expm
-    assert "  scalar c;\n  for (int k = 2; k <= pade_coeff.size(); ++k)\n" in expm
+    # assigned first in a loop body, not used outside: declared there
+    assert "  for (int k = 2; k <= pade_coeff.size(); ++k)\n  {\n    scalar c = pade_coeff(k - 1);\n" in expm
+    assert "  scalar c;\n" not in expm
+    feat = read(out, "features_mod.cpp")
+    assert "  for (int i = 1; i <= n; ++i)\n  {\n    int a = 2 * i;" in feat
+    assert "  int b = 0;\n" in feat and "    b = b + i;" in feat         # accumulated: outside
+    body = feat.split("int loop_locals(int n)\n{")[1].split("\n}\n")[0]
+    assert "  int c;\n  int d;\n  for" in body                                # conditional / used after: outside
+    assert "      int e = i / 2;" in body and "      int f = 3 * i;" in body      # in the if / else branch
     assert "  int bs = this->bs;\n" in lu                     # local hides the member: still mergeable
     # loop variable used mostly as index: 0-based loop, other uses get + 1
     assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
@@ -2065,13 +2074,18 @@ def test_wrapped_unlimited_polymorphic_state(tmp_path):
     b = (tmp_path / "fstate_mod_c_binding.F90").read_text()
     assert "  void get_state(std::any& state) const;" in hpp and "  void set_state(const std::any& state);" in hpp
     h = (tmp_path / "fstate_mod.h").read_text()
-    assert "class FortranState" in hpp and "#include <any>" in hpp and "struct project_FortranAny;" in hpp
-    assert "void project_Counter_get_state(const project_Counter* counter, project_FortranAny** state, int* ierr);" in flat(h)
-    assert "void project_Counter_set_state(project_Counter* counter, project_FortranAny* state, int* ierr);" in flat(h)
-    assert "  state = f2cpp_any::from_fortran(state_h, &project_fstate_mod_any_release);" in cpp
-    assert "project_Counter_set_state(handle_, f2cpp_any::to_fortran(state), &ierr);" in cpp
-    assert "    call f2cpp_any_from_holder(state, state_f)\n" in b and "    call f2cpp_any_back(state, state_f)" in b
-    assert "CppAny" not in b + hpp and "kind" not in h
+    # one class(*) mechanism: the struct project_<module>_Any (Fortran data: AnyHolder_type, deleted in Fortran)
+    assert "struct project_fstate_mod_Any;" in hpp and "FortranState" not in hpp + cpp and "FortranAny" not in h + b
+    assert "std::any any_from_fortran(project_fstate_mod_Any* c);" in hpp
+    assert "void project_Counter_get_state(const project_Counter* counter, project_fstate_mod_Any** state, " \
+           "int* ierr);" in flat(h)
+    assert "void project_Counter_set_state(project_Counter* counter, const project_fstate_mod_Any* state, " \
+           "int* ierr);" in flat(h)
+    assert "  state = fstate_mod_private::any_from_fortran(state_h);" in cpp
+    assert "project_Counter_set_state(handle_, fstate_mod_private::any_to_fortran(state), &ierr);" in cpp
+    assert "    if (f2cpp_any_holder(state, state_h)) call move_alloc(state_h%p, state_f)\n" \
+           "    call obj%set_state(state_f, ierr)\n    if (associated(state_h)) call move_alloc(state_f, state_h%p)" in b
+    assert "    state = C_NULL_PTR\n" in b and "    state = f2cpp_any_new(state_f)\n" in b
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""program drv
@@ -2114,6 +2128,32 @@ extern "C" void run(project_Counter* h)
   {
     std::printf("caught\n");
   }
+  std::any none;
+  c->empty_state(none);               // unallocated -> empty std::any
+  std::printf("%s\n", none.has_value() ? "value" : "empty");
+  try
+  {
+    c->set_state(none);               // empty -> unallocated in Fortran -> ierr -> exception
+  }
+  catch (const std::runtime_error&)
+  {
+    std::printf("caught empty\n");
+  }
+  std::any r;
+  c->real_state(r);
+  for (int k = 0; k < 2; ++k)         // rejected by Fortran (ierr): the data goes back to its holder each time
+  {
+    try
+    {
+      c->set_state(r);
+    }
+    catch (const std::runtime_error&)
+    {
+      std::printf("caught real\n");
+    }
+  }
+  c->set_state(copy);                 // the first state is still intact
+  std::printf("%d\n", c->n());
 }
 """)
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-ffree-line-length-none", "-Wall", "-Werror",
@@ -2124,7 +2164,8 @@ extern "C" void run(project_Counter* h)
     for f, o in (("fstate_mod.cpp", "glue.o"), ("run.cpp", "run.o")):
         run(gxx + [f, "-o", o], d)
     run(["gfortran", "fstate_mod.o", "fstate_mod_c_binding.o", "drv.o", "glue.o", "run.o", "-lstdc++", "-o", "m"], d)
-    assert run_exe(["./m"], d).split() == ["5", "caught", "5"]
+    assert run_exe(["./m"], d).split("\n")[:8] == ["5", "caught", "empty", "caught empty", "caught real", "caught real",
+                                                  "5", "5"]
     if shutil.which("valgrind"):
         out = subprocess.run(["valgrind", "--error-exitcode=3", "--leak-check=full", "./m"], cwd=d,
                              capture_output=True, text=True)
@@ -2453,7 +2494,7 @@ extern "C" int run_cpp(project_Thing* c)       // the Fortran implementation in 
   }
   return code;
 }
-class MyThing : public project::Thing
+class MyThing final : public project::Thing
 {
 public:
   MyThing() : Thing(2, 1, "cpp") {}
@@ -2492,8 +2533,10 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "  void* userData = nullptr;\n};" in h
     assert "    *state = any_to_c(std::move(state_v));" in cpp and "set_internal_state(any_from_c(state));" in cpp
     assert "  c->userData = new std::any(std::move(a));  // owned by c (destroy_any)" in cpp
-    assert "    allocate(CWrapperAny_type :: state)\n    select type (state)\n    type is (CWrapperAny_type)\n" \
-           "      call c_f_pointer(state_p, state%c)\n    end select" in cw
+    assert "    if (c_associated(state_p)) then      ! NULL: unallocated\n      allocate(CWrapperAny_type :: state)\n" \
+           "      select type (state)\n      type is (CWrapperAny_type)\n        call c_f_pointer(state_p, state%c)\n" \
+           "      end select\n    end if" in cw
+    assert "  if( !a.has_value() )\n    return nullptr;  // unallocated in Fortran" in cpp
     assert "    type is (CWrapperAny_type)\n      if (associated(state%c)) state_p = c_loc(state%c)\n" \
            "    class default\n      ierr = -1\n      return\n    end select" in cw
     assert "public :: CWrapperAny_type" not in cw and "    final :: cwrapperany_final" in cw
@@ -2502,9 +2545,9 @@ def test_reverse_class_star_cpp_data(tmp_path):
            "    state = f2cpp_any_new(state_f)" in b
     assert "    call move_alloc(state_h%p, state_f)\n    call wrapper%ptr%set_internal_state(state_f, ierr_f)\n" \
            "    ierr = ierr_f\n    call move_alloc(state_f, state_h%p)" in b and "public :: f2cpp_any" not in b
-    assert "  state = any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
+    assert "  state = state_model_mod_private::any_from_fortran(state_c);\n  if( ierr != 0 )\n    throw std::runtime_error(\"Error: calling C " \
            "project_StateModel::get_internal_state function pointer in CWrapperStateModel::get_internal_state!\");" in cwc
-    assert "  other_.set_internal_state(&other_, any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
+    assert "  other_.set_internal_state(&other_, state_model_mod_private::any_to_fortran(state), &ierr);" in cwc and "TODO(f2cpp):" not in cwc
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
@@ -2520,6 +2563,7 @@ def test_reverse_class_star_cpp_data(tmp_path):
     procedure :: set_internal_state => fc_set
     procedure :: step => fstep
     procedure :: value => fvalue
+    procedure :: has_state => fhas
   end type FCounter_type
   interface
     function run_cpp(c) result(code) bind(C, name="run_cpp")
@@ -2533,7 +2577,7 @@ contains
     class(FCounter_type), intent(in) :: this
     class(*), allocatable, intent(out) :: state
     integer, intent(out) :: ierr
-    allocate(state, source=this%n)
+    if (this%n /= 0) allocate(state, source=this%n)     ! n == 0: no state (unallocated)
     ierr = 0
   end subroutine fc_get
   subroutine fc_set(this, state, ierr)
@@ -2551,6 +2595,12 @@ contains
     class(FCounter_type), intent(inout) :: this
     this%n = this%n + 1
   end subroutine fstep
+  subroutine fhas(this, state, given)
+    class(FCounter_type), intent(in) :: this
+    class(*), allocatable, intent(in) :: state
+    logical, intent(out) :: given
+    given = allocated(state)
+  end subroutine fhas
   function fvalue(this) result(v)
     class(FCounter_type), intent(in) :: this
     integer :: v
@@ -2563,14 +2613,19 @@ contains
     integer :: ierr
     fw%ptr => fc
     call create_StateModel_C_from_Fortran(fw, ct, ierr)
-    print '(i4)', run_cpp(c_loc(ct))
+    print '(i6)', run_cpp(c_loc(ct))
   end subroutine fortran_side
   subroutine use_model(c) bind(C, name="use_model")
     type(C_PTR), value :: c
     class(StateModel_type), allocatable :: m
     class(*), allocatable :: s, s2
     integer :: ierr
+    class(*), allocatable :: s0
+    logical :: given
     call project_StateModel_wrap(c, m)
+    call m%get_internal_state(s0, ierr)        ! C++: empty std::any -> unallocated
+    call m%has_state(s0, given)                ! unallocated -> empty std::any
+    print '(2l2)', allocated(s0), given
     call m%step()
     call m%get_internal_state(s, ierr)        ! C++ data (value 1)
     call m%step()
@@ -2584,6 +2639,8 @@ contains
     print '(2i3)', ierr, m%value()
     call m%set_internal_state(42, ierr)        ! Fortran data: rejected
     print '(i3)', ierr
+    call m%has_state(s2, given)                ! C++ data -> a non-empty std::any
+    print '(l2)', given
     deallocate(s2)                             ! deletes the C++ data
   end subroutine use_model
 end module drv_mod
@@ -2598,6 +2655,19 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
 {
   project::StateModel_private::CWrapperStateModel w(*c);
   std::any s;
+  bool given = true;
+  w.get_internal_state(s);                       // Fortran: unallocated -> empty std::any
+  int empty = s.has_value() ? 0 : 1;
+  w.has_state(std::any(), given);                // empty -> unallocated (allocatable dummy)
+  empty += given ? 0 : 1;
+  try
+  {
+    w.set_internal_state(std::any());            // empty for a non-allocatable dummy: error
+  }
+  catch (const std::runtime_error&)
+  {
+    empty += 1;
+  }
   w.step();
   w.get_internal_state(s);                       // Fortran data (value 1)
   std::any shared = s;                           // copies share it
@@ -2606,6 +2676,8 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
   int code = 100 * w.value();
   w.set_internal_state(shared);
   code += 10 * w.value();
+  w.has_state(shared, given);                    // Fortran data -> allocated
+  code += given ? 10000 * empty : 0;
   try
   {
     w.set_internal_state(std::any(5));           // C++ data: rejected
@@ -2616,10 +2688,15 @@ extern "C" int run_cpp(project_StateModel* c)   // the Fortran implementation in
   }
   return code;
 }
-class Counter : public project::StateModel
+class Counter final : public project::StateModel
 {
 public:
-  void get_internal_state(std::any& state) const override { state = n_; }
+  void get_internal_state(std::any& state) const override
+  {
+    if( n_ != 0 )                                // 0: no state (empty)
+      state = n_;
+  }
+  void has_state(const std::any& state, bool& given) const override { given = state.has_value(); }
   void set_internal_state(const std::any& state) override { n_ = std::any_cast<int>(state); }
   void step() override { ++n_; }
   int value() const override { return n_; }
@@ -2645,7 +2722,7 @@ int main()
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
     run(["g++", "state_model_mod.o", "state_model_mod_c_binding.o", "project_c_wrapper_state_model_mod.o", "drv.o",
          "state_model_mod_cxx.o", "state_model_mod_c_wrapper_cxx.o", "run_cxx.o", "-lgfortran", "-o", "m"], d)
-    assert run_exe(["./m"], d).split("\n")[:5] == ["  0  3", "  0  1", "  0  1", " -1", " 311"]
+    assert run_exe(["./m"], d).split("\n")[:7] == [" F F", "  0  3", "  0  1", "  0  1", " -1", " T", " 30311"]
 
 
 def test_reverse_any_name_of_a_prefixed_module(tmp_path):
@@ -2793,3 +2870,64 @@ end module two_mod
         ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-Wall", "-Werror", "-Wno-unused-dummy-argument"]
         for f in ("two_mod.F90", "two_mod_c_binding.F90", "project_c_wrapper_two_mod.F90"):
             run(ff + [f], d)
+
+
+def class_rule_violations(texts):
+    """C++ coding rules of generated classes: final or a virtual destructor; rule of five (none or all of the
+    special members declared)"""
+    bad = []
+    for fname, txt in texts:
+        for m in re.finditer(r"^(\s*)class (\w+)( final)?\s*(:[^\n{]*)?\s*\{(.*?)\n\1\};", txt, re.M | re.S):
+            name, final, body = m.group(2), m.group(3), m.group(5)
+            n = re.escape(name)
+            k = sum(bool(re.search(p, body)) for p in (
+                rf"~{n}\s*\(", rf"\b{n}\s*\(\s*const {n}\s*&", rf"operator=\s*\(\s*const {n}\s*&",
+                rf"\b{n}\s*\(\s*{n}\s*&&", rf"operator=\s*\(\s*{n}\s*&&"))
+            if not final and not re.search(rf"virtual ~{n}", body):
+                bad.append(f"{fname}: {name}: neither final nor a virtual destructor")
+            if 0 < k < 5:
+                bad.append(f"{fname}: {name}: {k} of the 5 special members")
+    return bad
+
+
+def test_generated_classes_follow_the_coding_rules(out, tmp_path):
+    """every generated class (translated, wrapped, reverse, wrappers, tests) is final or has a virtual destructor
+    and declares none or all special members"""
+    w, r = os.path.join(CORPUS, "wrapped"), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('wrap_listeners = ["AbstractListener_type"]\nwrap_reverse = ["AbstractThing_type", '
+                                     '"StateModel_type", "Thing_type"]\n[wrap_owned]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path), wrap=[os.path.join(w, f) for f in ("mysolver_mod.F90", "body_mod.F90",
+                                                                         "sphere_mod.F90", "listen_mod.F90",
+                                                                         "fstate_mod.F90")] +
+              [os.path.join(r, f) for f in ("thing_mod.F90", "state_model_mod.F90", "convergence_mod.F90")],
+              interface_only=[os.path.join(r, "model_base_mod.F90")])
+    files = glob.glob(os.path.join(out[0], "*.[ch]pp")) + glob.glob(str(tmp_path / "*.[ch]pp"))
+    assert len(files) > 20
+    assert not class_rule_violations([(os.path.basename(f), open(f).read()) for f in files])
+    assert len(class_rule_violations([("x.hpp", "class A\n{\npublic:\n  A(const A&) = delete;\n};")])) == 2  # the check
+
+
+def test_member_accessors(tmp_path):
+    """member_accessors: listed members become protected <name>_ with public accessors (get: const getter, scalars
+    by value; set: + setter overload; ref: + non-const reference); own methods and derived classes use n_; other
+    code the accessors; writes to get-only members are TODOs; unlisted members and types stay as they are"""
+    d = str(tmp_path)
+    (tmp_path / "x.toml").write_text('[member_accessors]\nsolver_type = ["n", "tol:set", "x:ref"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    report, _ = translate([os.path.join(CORPUS, "accessors_mod.F90")], c, d)
+    hpp, cpp = read((d,), "accessors_mod.hpp"), read((d,), "accessors_mod.cpp")
+    assert "  //! problem size\n  int n() const { return n_; }\n" in hpp
+    assert "  scalar tol() const { return tol_; }\n  //! tolerance (setter)\n  void tol(scalar value) { tol_ = value; }" in hpp
+    assert "  vec& x() { return x_; }\n  //! state (const version)\n  const vec& x() const { return x_; }" in hpp
+    assert "protected:\n  int n_ = 0;  //!< problem size\n  scalar tol_ = 1.0e-6;  //!< tolerance\n  vec x_;" in hpp
+    assert "  int count = 0;  //!< not listed: plain member" in hpp
+    assert "  n_ = n;\n  x_.resize(n);" in cpp and "  x_ = f * x_;" in cpp          # own class, derived class
+    assert "  s.tol(0.5);" in cpp and "  s.x()(0) = 2.0;" in cpp and "s.count = s.count + s.n();" in cpp
+    assert "// TODO(f2cpp): not translated (member-read-only)" in cpp
+    assert report.files[os.path.join(CORPUS, "accessors_mod.F90")]["untranslated"]["member-read-only"] == 1
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "accessors_mod")
+    # not configured: unchanged
+    translate([os.path.join(CORPUS, "accessors_mod.F90")], cfg(), str(tmp_path / "plain"))
+    assert "  int n = 0;" in (tmp_path / "plain" / "accessors_mod.hpp").read_text()

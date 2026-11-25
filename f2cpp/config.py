@@ -23,6 +23,12 @@ DEFAULTS = {
     #         used anywhere else in the translated files (other classes, free functions, tests)
     # "fortran": as declared in Fortran (public unless the type has a private statement)
     "member_access": "auto",
+    # accessors instead of data members of translated types: type -> ["n", "tol:set", "x:ref", "*"]
+    # (component[:mode], "*": all; get (default): const getter (scalars by value), set: + setter overload
+    # tol(value), ref: + non-const reference); the member gets member_suffix (n_), protected (private if final);
+    # writes from other code: get -> TODO, set -> setter (whole member only), ref -> reference
+    "member_accessors": {},
+    "member_suffix": "_",
     # local variables are declared at their first use (merged with the defining assignment,
     # allocate or constructor call where possible); loop variables in the for statement
     "declare_at_first_use": True,
@@ -43,8 +49,8 @@ DEFAULTS = {
     #         sections, as vector subscripts or passed to procedures that need an Eigen vector
     # "eigen": always ivec
     "int_arrays": "auto",
-    # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen >= 3.5 / master,
-    # where Eigen::all is deprecated) or "Eigen" (Eigen 3.4, where the placeholders:: ones are deprecated)
+    # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen 5.0 / master: only there)
+    # or "Eigen" (Eigen 3.4: Eigen::all / Eigen::last; the placeholders:: ones are deprecated there)
     "eigen_placeholders": "Eigen::placeholders",
     "imat": "Eigen::MatrixXi",
     "int": "int",
@@ -259,6 +265,9 @@ def load(path=None, **overrides):
     cfg["exclude"] = [e.lower().replace(" ", "") for e in cfg["exclude"]]
     cfg["wrap_direct_handles"] = [t.lower() for t in cfg["wrap_direct_handles"]]
     cfg["wrap_constants"] = {k.lower(): [c.lower() for c in v] for k, v in cfg["wrap_constants"].items()}
+    cfg["member_accessors"] = {k.lower(): {e.split(":")[0].strip().lower(): (e.split(":")[1].strip().lower()
+                                                                           if ":" in e else "get") for e in v}
+                               for k, v in cfg["member_accessors"].items()}
     cfg["wrap_owned"] = [t.lower() for t in cfg["wrap_owned"]]
     cfg["wrap_translate"] = [t.lower().replace(" ", "") for t in cfg["wrap_translate"]]
     cfg["named_elements"] = {k.lower(): v for k, v in cfg["named_elements"].items()}

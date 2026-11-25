@@ -10,7 +10,7 @@ module features_mod
   public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
   public :: int_arrays, count_marked
   public :: argmax, text_demo, node_type, relink
-  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history
+  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history, loop_locals
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -438,5 +438,30 @@ contains
     if (allocated(this%samples)) deallocate(this%samples)
     if (associated(this%work)) deallocate(this%work)
   end subroutine stats_cleanup
+
+  !> locals of a loop body: declared there only if assigned first and not used outside
+  function loop_locals(n) result(s)
+    integer, intent(in) :: n
+    integer :: s
+    integer :: i, a, b, c, d, e, f
+    s = 0
+    b = 0
+    do i = 1, n
+      a = 2 * i               ! assigned first, only used here: declared in the loop
+      s = s + a
+      if (mod(i, 2) == 0) then
+        e = i / 2             ! only used in this branch: declared there
+        s = s + e
+      else
+        f = 3 * i             ! the same in the other branch
+        s = s - f
+      end if
+      b = b + i               ! accumulated over the iterations: outside
+      if (i > 1) c = i        ! conditional: outside
+      d = s                   ! used after the loop: outside
+    end do
+    s = s + b + d
+    if (n > 1) s = s + c
+  end function loop_locals
 
 end module features_mod

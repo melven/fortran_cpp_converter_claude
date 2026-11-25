@@ -80,7 +80,7 @@ Sizes: translate.py 2550, wrap.py 1680, emit.py 1170, reverse.py 1000, model.py 
 ### reverse.py (`ReverseMixin`)
 - `forward`: one method of a listener / reverse type: Fortran procedure calling the function pointer, abstract interface + C typedef, C++ `<method>_wrapper` (exceptions → `ierr`); arrays (known sizes: no `_n`), logicals, created objects, `class(*)` as C++ data.
 - `abstract_interface` (with C typedef), `imported` (explicit `import` list), `known_size` (constant size expression for both sides), `fortran_decl`, `private_ns`, `use_binding`, `methods_of`, `emit_lines`.
-- `class(*)`: `cpp_any` (per-module `project_<module>_Any` struct, `CWrapperAny_type`), `fortran_any_data` (Fortran holder + destroy), `fortran_any_cpp` (`FortranData` in `std::any`), `cpp_any_helpers` (`any_to_c` / `any_from_c`); older forward-wrapping holder: `any_release_name`, `any_handle`, `any_fortran`, `any_cpp` (`FortranState`).
+- `class(*)` (one mechanism for forward wrapping and reverse types): `any_struct` (per-module `project_<module>_Any`: destroy, userData), `cpp_any` (C++ data in Fortran: `CWrapperAny_type`), `fortran_any_data` (Fortran holder `AnyHolder_type`, `f2cpp_any_new/destroy/holder`), `any_ns`, `fortran_any_decl` / `fortran_any_cpp` (`<module>_private::any_from_fortran` / `any_to_fortran`, `FortranData` in `std::any`), `cpp_any_helpers` (`any_to_c` / `any_from_c`).
 - Listeners: `bridge_name`, `listener`; shared: `pure_virtuals`, `default_methods`.
 - Reverse types: `reverse_constants`, `reverse_types`, `reverse_type` (C struct, C++ base, Fortran `CWrapper<Thing>_type`, factories), `fortran_behind` (Fortran implementation for C++: `wrap_<method>`, `create_<Thing>_C_from_Fortran`, C++ `CWrapper<Thing>`), `fortran_method_c`, `cwrapper_module`.
 
@@ -110,9 +110,6 @@ Correctness
 - Report noise: `unlimited-polymorphic` is counted per signature emission (several times per argument).
 
 Structure / simplifications
-- Two `class(*)` mechanisms: forward wrapping (`project_FortranAny` + `FortranState`, release function per module)
-  and reverse types (`project_<module>_Any` + `CWrapperAny_type` / `FortranData`). The second subsumes the first;
-  unify on the `Any` struct.
 - Listeners (`wrap_listeners`) and reverse types (`wrap_reverse`) are two implementations of the same idea
   (function pointers + user data); listeners could become reverse types with a non-owning bridge.
 - Very long functions: `WrapEmitter.generate` (~300 lines), `WrapEmitter.method` (~230), `ReverseMixin.forward`

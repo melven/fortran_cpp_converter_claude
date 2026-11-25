@@ -660,24 +660,25 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 pre.append(f"if (c_associated({a})) allocate({a}_f, source={self.cfg['wrap_string_in'][1]}({a}))")
                 call.append(f"{a}={a}_f")
                 glue.append(f"{v.cname} ? {v.cname}->c_str() : nullptr")
-            elif kind in ("any-in", "any-out"):     # class(*): Fortran data held by C++ (see f2cpp_any)
-                self.any_used = True
-                cn, ah = v.cname, self.any_handle()
+            elif kind in ("any-in", "any-out"):     # class(*): Fortran data held by C++ (struct <module>_Any)
+                ah, ns = self.any_struct()["ht"], self.any_ns()
+                self.fortran_any_data(fb)
+                cn = v.cname
                 decls += [f"type(C_PTR), {'value' if kind == 'any-in' else 'intent(out)'} :: {a}",
                           f"class(*), allocatable :: {a}_f"]
                 call.append(f"{a}={a}_f")
-                if kind == "any-in":            # moved out of the holder for the call and back
-                    c_args.append(f"{ah}* {a}")
-                    pre.append(f"call f2cpp_any_from_holder({a}, {a}_f)")
-                    post.append(f"call f2cpp_any_back({a}, {a}_f)")
-                    self.any_helpers |= {"f2cpp_any_from_holder", "f2cpp_any_back"}
-                    glue.append(f"f2cpp_any::to_fortran({cn})")
-                else:                           # a new holder (NULL: unallocated)
+                if kind == "any-in":            # moved out of its holder for the call and back (NULL: unallocated)
+                    decls.append(f"type(AnyHolder_type), pointer :: {a}_h")
+                    c_args.append(f"const {ah}* {a}")
+                    pre.append(f"if (f2cpp_any_holder({a}, {a}_h)) call move_alloc({a}_h%p, {a}_f)")
+                    post.insert(0, f"if (associated({a}_h)) call move_alloc({a}_f, {a}_h%p)")
+                    glue.append(f"{ns}::any_to_fortran({cn})")
+                else:                           # a new holder (NULL: unallocated, also on errors)
                     c_args.append(f"{ah}** {a}")
-                    post.append(f"call f2cpp_any_to_holder({a}_f, {a})")
-                    self.any_helpers.add("f2cpp_any_to_holder")
+                    pre.append(f"{a} = C_NULL_PTR")
+                    post.append(f"{a} = f2cpp_any_new({a}_f)")
                     glue += [("pre", f"{ah}* {cn}_h = nullptr;"), f"&{cn}_h",
-                             ("post", f"{cn} = f2cpp_any::from_fortran({cn}_h, &{self.any_release_name()});")]
+                             ("post", f"{cn} = {ns}::any_from_fortran({cn}_h);")]
             elif kind == "listener":           # the C++ listener's Fortran bridge object; user: this C++ object
                 lt = self.prog.find_type(v.tname, self.mod)
                 bridge = f"{self.c_class(lt)}_cpp"
@@ -825,7 +826,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         actuals = ", ".join(positional(call, [a for a in p.args if t is None or a != p.pass_arg]))
         stmt = f"res = {target}({actuals})" if r is not None else f"call {target}({actuals})"
         chk = self.cfg["wrap_chk_ierr"]
-        if has_err and chk and not any("f2cpp_any_back" in x for x in post):     # (data moved back also on errors)
+        if has_err and chk and not any("call move_alloc(" in x for x in post):     # (data moved back also on errors)
             stmt = f"{chk[0]}({stmt}, ierr)"
         body = list(pre) + [stmt] + list(post)
         if t is not None:
@@ -1096,7 +1097,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         fb = []                                     # binding routines
         typedefs, needs_str, wrappers, uses, structs = [], False, [], set(), []
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
-        self.any_used, self.any_helpers = False, set()  # class(*) arguments: holders, f2cpp_any, used helpers
+        self.cpp_data_used, self.fortran_data_used = False, False   # class(*): C++ / Fortran data in the Any struct
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
         self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
@@ -1166,8 +1167,11 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 hpp.emit(1, f"using {parent}::{parent.split('::')[-1]};")
             hpp.emit(1, f"{name}(const {name}&) = delete;  //!< no copies (one C++ object per Fortran object)")
             hpp.emit(1, f"{name}& operator=(const {name}&) = delete;  //!< no copies")
+            if not self.owned(t):              # rule of five; not final: virtual (coding rule)
+                hpp.emit(1, f"~{name}() = default;  //!< the Fortran object is not owned" if final else
+                         f"virtual ~{name}() = default;  //!< base of other wrapped classes")
             if self.owned(t):                  # owns the Fortran object: the moved-from object releases nothing
-                hpp.emit(1, f"~{name}();  //!< frees the Fortran object")
+                hpp.emit(1, f"{'' if final else 'virtual '}~{name}();  //!< frees the Fortran object")
                 hpp.emit(1, f"{name}({name}&& o) noexcept;  //!< takes over the Fortran object of o")
                 hpp.emit(1, f"{name}& operator=({name}&& o) noexcept;  //!< frees its own, takes over the one of o")
             else:
@@ -1291,11 +1295,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                           if t.name not in cfg["unwrap_types"] and t.name not in values})
         if handles:
             h += [""] + [f"struct {ht};  //!< C handle, see {os.path.basename(stem)}.h" for ht in handles]
-        if self.any_used:                           # opaque handle of Fortran data (class(*))
-            h += [f"struct {self.any_handle()};  //!< Fortran data (class(*)), see {os.path.basename(stem)}.h"]
         if self.cppany:                             # C++ data held by Fortran
             h += [f"struct {self.cppany['ht']};  //!< class(*) / std::any data, see {os.path.basename(stem)}.h"]
-        h += ["", self.open_ns(), ""] + ([self.any_cpp(), ""] if self.any_used else [])
+        h += ["", self.open_ns(), ""] + (self.fortran_any_decl() if self.fortran_data_used else [])
         # forward declarations of the classes (they may refer to each other) and std::function aliases of
         # abstract interfaces (procedure arguments), as in the translation
         classes = [t for t in self.wrapped_types() if t.name not in cfg["unwrap_types"]]
@@ -1317,8 +1319,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             [BANNER.format(src=os.path.basename(self.src)) + " (wrapped Fortran)",
              f'#include "{stem}{cfg["header_ext"]}"', "", "#include <stdexcept>", "",
              f'#include "{os.path.basename(stem)}.h"', ""] + self.log_includes() + \
+            (["#include <any>", "#include <memory>", "#include <typeinfo>", ""]
+             if self.cpp_data_used or self.fortran_data_used else []) + \
             [self.open_ns(), ""]
-        c += (self.cpp_any_helpers() if self.cppany else []) + strip_blank(cpp.out) + ["", f"}}  // namespace {self.ns}", ""]
+        c += (self.cpp_any_helpers() if self.cpp_data_used else []) + \
+            (self.fortran_any_cpp() if self.fortran_data_used else []) + strip_blank(cpp.out) + \
+            ["", f"}}  // namespace {self.ns}", ""]
 
         # binding module
         single, real = cfg["c_single_precision"], cfg["c_real"]
@@ -1347,10 +1353,6 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
-        if self.any_used:
-            spec, procs = self.any_fortran()
-            b += spec
-            fb += procs
         b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
         self.finish_module(b)
         cw = None                                   # c_wrapper module: Fortran types implemented in C++
@@ -1382,7 +1384,6 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 strip_blank(self.cwc["hpp"].out) + ["", f"}}  // namespace {self.ns}", ""] + guard[1]
             cc = self.cpp_file_header(cx, brief, "_c_wrapper") + [banner, f'#include "{base}_c_wrapper{hx}"', "",
                                                                   "#include <stdexcept>", ""] + \
-                (["#include <any>", "#include <memory>", "#include <typeinfo>", ""] if self.cwc.get("any") else []) + \
                 [self.open_ns(), ""] + strip_blank(self.cwc["cpp"].out) + \
                 ["", f"}}  // namespace {self.ns}", ""]
             files = {f"_c_wrapper{hx}": "\n".join(self.braces(squeeze(ch))),

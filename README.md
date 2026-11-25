@@ -76,7 +76,8 @@ with less precise output (calls are passed through unchanged).
 | `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
 | array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
-| local variables | declared before the first top-level statement that uses it; merged with a defining assignment (`int m = A.rows();`), `allocate` (`mat As(m, m);`) or constructor call (`block_lu tmp(1, n);`). Loop variables used only in their loops: `for (int i = ...)` (`declare_at_first_use`) |
+| members (`member_accessors`) | `solver_type = ["n", "tol:set", "x:ref"]` (or `"*"`): protected `n_` (private in final classes) with public accessors: `int n() const` (scalars by value, others `const T&`), `set`: + `void tol(scalar value)`, `ref`: + `vec& x()`; own and derived methods use `n_`, other code the accessors; writes to `get` members are TODOs. Unlisted types / members: unchanged |
+| local variables | declared before the first top-level statement that uses it; merged with a defining assignment (`int m = A.rows();`), `allocate` (`mat As(m, m);`) or constructor call (`block_lu tmp(1, n);`). Loop variables used only in their loops: `for (int i = ...)`; scalars used only in one loop body or if / select case branch and assigned first there: declared there (`int a = 2 * i;`) (`declare_at_first_use`) |
 | `do i = 1, n` whose variable is mostly an array index (lower bound 1) | `for (int i = 0; i < n; ++i)` with `a(i)` → `a(i)` and other uses `i + 1` (`zero_based_loops`) |
 | internal procedures (`contains` inside a procedure) | lambdas `auto f = [&](...) -> T { ... };` at the start of the host body (host association by reference capture), ordered by their dependencies; recursive ones stay Fortran comments |
 | `allocate` / `deallocate` / `allocated` | `resize` / `make_unique` / `size() > 0` ... |
@@ -100,8 +101,8 @@ with less precise output (calls are passed through unchanged).
 
 ## Eigen version
 
-Sections use `Eigen::seq` with `Eigen::placeholders::all` / `last` (Eigen ≥ 3.5 / master). For
-Eigen 3.4, where these are deprecated in favour of `Eigen::all` / `Eigen::last`, set
+Sections use `Eigen::seq` with `Eigen::placeholders::all` / `last` (Eigen 5.0 / master, where only these
+exist). For Eigen 3.4, where these are deprecated in favour of `Eigen::all` / `Eigen::last`, set
 `eigen_placeholders = "Eigen"`.
 
 ## Formatting
@@ -351,10 +352,10 @@ an eigenvalue solver (`Eigen::SelfAdjointEigenSolver` / `Eigen::EigenSolver`), a
 such a type is a wrapped class instead (`wrap_owned` for arrays of it passed to / from C++).
 
 `class(*), allocatable` arguments (`intent(out)` / `intent(in)`) of wrapped methods: Fortran data held by
-C++ and passed back, moved and never copied. C: the opaque holder `project_FortranAny*` (NULL: unallocated);
-C++: `std::any` with a `std::shared_ptr<FortranState>` (copies share it, the last one releases the holder in
-Fortran: `project_<module>_any_release`). C++ data in a `std::any` cannot be passed to Fortran
-(`std::invalid_argument`).
+C++ and passed back, moved and never copied. C: the struct `project_<module>_Any` (`destroy`, `userData`: a
+Fortran holder, NULL: unallocated); C++: `std::any` with a shared `FortranData` (copies share it, the last one
+deletes the data in Fortran: `destroy`), helpers `<module>_private::any_from_fortran` / `any_to_fortran`. C++
+data in a `std::any` cannot be passed to Fortran (`std::invalid_argument`).
 `class(*)` arguments of reverse-wrapped methods (`allocatable, intent(out)` / `intent(in)`): data owned by
 the other side, per module in the C struct `project_<module>_Any` (binding: `Any_c`; `destroy`, `userData`); only
 its creator unpacks it. C++ implementations: `userData` is a `std::any`; in Fortran a private `CWrapperAny_type`

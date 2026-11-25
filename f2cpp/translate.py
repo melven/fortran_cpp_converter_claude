@@ -40,6 +40,7 @@ class X:
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
     via_accessor: bool = False   # component through a getter (accessor, wrapped class)
+    access: str = None       # member_accessors mode of a component accessed from outside: get | set | ref
 
 
 P_UNARY, P_MUL, P_ADD, P_REL, P_EQ, P_AND, P_OR, P_TERN = 90, 80, 70, 60, 55, 40, 30, 20
@@ -82,6 +83,7 @@ class Translator:
         self.out = []
         self.loop_local = set()    # loop variables that are only used inside their loops
         self.loop_decl = set()     # ... declared in the for statement
+        self.body_decl = {}        # id(assignment) -> variable declared there (loop body, emit.loop_body_decl)
         self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
         self.notes = []            # soft TODOs of the current statement
         self.last_err_call = None  # (line index, code) of the last call with removed error arg
@@ -603,6 +605,23 @@ class Translator:
                 return (names.get(comp) or spelled) if listed else None
         return None
 
+    def member_mode(self, td, n):
+        """member_accessors mode of component n of type td (declared in td or a base type), or None"""
+        for t in [td, *self.prog.ancestors(td)] if td is not None else []:
+            if n in t.comps:
+                if t.module.name in getattr(self.prog, "wrapped", ()):
+                    return None
+                m = self.cfg["member_accessors"].get(t.name, {})
+                return m.get(n) or m.get("*")
+        return None
+
+    def in_class_of(self, td, n):
+        """the current method belongs to the type that declares component n of td or to a type derived from it"""
+        mp = self.method_proc()
+        t = self.find_type(mp.method_of) if mp is not None and mp.method_of else None
+        owner = next((a for a in [td, *self.prog.ancestors(td)] if n in a.comps), None)
+        return t is not None and owner is not None and owner in [t, *self.prog.ancestors(t)]
+
     def used_member(self, td, name, comp):
         """record from where a component is used: own methods, methods of derived classes, elsewhere"""
         mp = self.method_proc()
@@ -677,6 +696,18 @@ class Translator:
                       self.member(cur, cname(str(pname)), cur.qual))
                 if subs is not None:            # an accessor is data: subscripts are array indices
                     x = self.unknown_ref(x.code, subs, array=bool(acc))
+            elif self.member_mode(td, n):     # member_accessors: n_ in its class, n() elsewhere
+                self.used_member(td, n, comp)
+                mode = self.member_mode(td, n)
+                if on_this and self.in_class_of(td, n):
+                    x = self.var_ref(comp, self.member(cur, comp.cname + self.cfg["member_suffix"], cur.qual))
+                    mode = None
+                else:
+                    x = X(self.member(cur, comp.cname, cur.qual) + "()", comp.rank, comp.base, 100, comp,
+                          comp.tname, whole=True, via_accessor=True, access=mode)
+                if subs is not None:
+                    x = self.subscript(x, comp, subs)
+                    x.access = mode
             else:
                 self.used_member(td, n, comp)
                 acc = self.accessor(cur.tname, n, comp.cname)
@@ -1258,6 +1289,16 @@ class Translator:
     def emit(self, ind, text):
         self.out.append("  " * ind + text if text else "")
 
+    def declare_here(self, v, n0, ind):
+        """the declaration of v merged into its assignment (output from n0 on), else in front of it"""
+        t = self.cpp_type(v)
+        code = [k for k in range(n0, len(self.out)) if self.out[k].strip() and not self.out[k].strip().startswith("//")]
+        m = re.match(rf"(\s*){re.escape(v.cname)} = (.*)$", self.out[code[0]]) if len(code) == 1 else None
+        if m:
+            self.out[code[0]] = f"{m.group(1)}{t} {v.cname} = {m.group(2)}"
+        else:
+            self.out.insert(n0, "  " * ind + f"{t} {v.cname}{{}};")
+
     def internal_error(self, e, node):
         """log an internal error (stderr): where in the Fortran source and in f2cpp"""
         import traceback
@@ -1422,6 +1463,8 @@ class Translator:
                 self.emit(ind, "// F: " + str(node).split("\n")[0])
             n0 = len(self.out)
             m(node, ind)
+            if id(node) in self.body_decl:          # declared at this assignment (loop body)
+                self.declare_here(self.body_decl[id(node)], n0, ind)
             if self.notes and k not in self.CONSTRUCTS and len(self.out) > n0:
                 self.out[n0] += f"  // {TODO}: " + "; ".join(self.notes)
             self.report.add("translated", k)
@@ -1464,6 +1507,14 @@ class Translator:
             self.emit(ind, f"{cpp_cls} {self.new_named_element(v, items_of(lhs_n.items[1]))}({m.group(3)});")
             return
         lhs = self.ref(lhs_n)
+        if lhs.access == "get":                 # member_accessors: read-only from outside
+            raise Untranslatable("member-read-only")
+        if lhs.access == "set":                 # the setter overload (whole member only)
+            if not lhs.whole:
+                raise Untranslatable("member-setter-element")
+            r = self.expr(rhs_n)
+            self.emit(ind, f"{lhs.code[:-2]}({self.matrix(r) if r.rank else r.code});")
+            return
         v = lhs.var
         st = self.storage(v) if v is not None and lhs.whole else None
         if not lhs.whole:
@@ -1907,6 +1958,7 @@ class Translator:
         sub.named, sub.via_getters = self.named, self.via_getters
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
             self.overrides, self.shift, self.loop_local, self.loop_decl
+        sub.body_decl = self.body_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):
             self.emit(ind, f"if ({cond.code}) {sub.out[0]}")

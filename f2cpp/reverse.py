@@ -108,8 +108,9 @@ class ReverseMixin:
                     locals_.append(f"type(C_PTR) :: {a}_p")
                     pre.append(f"{a}_p = C_NULL_PTR")
                     actuals.append(f"{a}_p")
-                    post += [f"allocate({ca['fw']} :: {a})", f"select type ({a})", f"type is ({ca['fw']})",
-                             f"  call c_f_pointer({a}_p, {a}%c)", "end select"]
+                    post += [f"if (c_associated({a}_p)) then      ! NULL: unallocated", f"  allocate({ca['fw']} :: {a})",
+                             f"  select type ({a})", f"  type is ({ca['fw']})", f"    call c_f_pointer({a}_p, {a}%c)",
+                             "  end select", "end if"]
                     cpp_init.append(f"*{a} = nullptr;")
                     cpp_pre.append(f"std::any {a}_v;")
                     cpp_args.append(f"{a}_v")
@@ -389,10 +390,27 @@ class ReverseMixin:
         use): C struct <prefix>_<module>_Any (destroy, userData: std::any created by C++ or AnyHolder_type created
         by Fortran; the creator unpacks it), bind(C) Any_c; C++ data in Fortran: CWrapperAny_type (c_wrapper
         module, private, owns it: move_alloc only), C++ any_to_c / any_from_c (.cpp)"""
-        if getattr(self, "cppany", None) is None:
+        ca = self.any_struct()
+        if not self.cpp_data_used:              # C++ data in Fortran: CWrapperAny_type (c_wrapper module)
+            self.cpp_data_used = True
+            ht, cw = ca["ht"], self.cw
+            cw["binding_names"] += ["Any_c", f"{ht}_destroy"]
+            cw["spec"] += ["  !> C++ data (std::any) in a class(*): owns it (move_alloc only, never copy)",
+                           "  type :: CWrapperAny_type", "    type(Any_c), pointer :: c => null()", "  contains",
+                           "    final :: cwrapperany_final", "  end type CWrapperAny_type", ""]
+            cw["procs"] += ["", "  !> deletes the C++ data", "  subroutine cwrapperany_final(this)",
+                            "    type(CWrapperAny_type), intent(inout) :: this",
+                            f"    procedure({ht}_destroy), pointer :: f", "",
+                            "    if (.not. associated(this%c)) return",
+                            "    if (c_associated(this%c%destroy)) then", "      call c_f_procpointer(this%c%destroy, f)",
+                            "      call f(c_loc(this%c))", "    end if", "  end subroutine cwrapperany_final"]
+        return ca
+
+    def any_struct(self):
+        """the C struct <prefix>_<module>_Any (binding, once): destroy, userData"""
+        if self.cppany is None:
             ht = f"{self.module_c_name()}_Any"
             self.cppany = {"ht": ht, "st": "Any_c", "fw": "CWrapperAny_type", "destroy": f"{ht}_destroy"}
-            cw = self.cw
             self.any_typedefs.append(f"!typedef struct {ht} {ht};")
             self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", "destroy of C++ data (std::any)",
                                                     ["this"], ["type(C_PTR), value :: this"])
@@ -404,16 +422,6 @@ class ReverseMixin:
                              "    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR",
                              "    type(C_PTR) :: userData = C_NULL_PTR  !< std::any (C++) / AnyHolder_type (Fortran)",
                              "  end type Any_c", ""]
-            cw["binding_names"] += ["Any_c", f"{ht}_destroy"]
-            cw["spec"] += ["  !> C++ data (std::any) in a class(*): owns it (move_alloc only, never copy)",
-                           "  type :: CWrapperAny_type", "    type(Any_c), pointer :: c => null()", "  contains",
-                           "    final :: cwrapperany_final", "  end type CWrapperAny_type", ""]
-            cw["procs"] += ["", "  !> deletes the C++ data", "  subroutine cwrapperany_final(this)",
-                            "    type(CWrapperAny_type), intent(inout) :: this",
-                            f"    procedure({ht}_destroy), pointer :: f", "",
-                            "    if (.not. associated(this%c)) return",
-                            "    if (c_associated(this%c%destroy)) then", "      call c_f_procpointer(this%c%destroy, f)",
-                            "      call f(c_loc(this%c))", "    end if", "  end subroutine cwrapperany_final"]
         return self.cppany
 
     def string_to_c(self, v):
@@ -459,10 +467,10 @@ class ReverseMixin:
 
     def fortran_any_data(self, fb):
         """Fortran (binding, once): holder of Fortran data (class(*)) in the struct for C++, its destroy"""
-        if getattr(self, "fortran_any_done", False):
+        if self.fortran_data_used:
             return
-        self.fortran_any_done = True
-        st = self.cppany["st"]
+        self.fortran_data_used = True
+        st = self.any_struct()["st"]
         self.bridges += ["  !> Fortran data (class(*)) for C++ (userData of the struct, created by Fortran)",
                          "  type :: AnyHolder_type", "    class(*), allocatable :: p", "  end type AnyHolder_type", ""]
         fb += ["", "  !> x (moved) into a new struct for C++ (owned by C++; NULL: unallocated)",
@@ -485,26 +493,39 @@ class ReverseMixin:
                "  end function f2cpp_any_holder"]
         self.wrap_routines.add("f2cpp_any_destroy")
 
-    def fortran_any_cpp(self):
-        """C++ (<stem>_c_wrapper.cpp): Fortran data of Fortran implementations in a std::any"""
+    def any_ns(self):
+        """namespace of the module's class(*) helpers: <module>_private"""
+        return f"{self.mod.spelling}_private"
+
+    def fortran_any_decl(self):
+        """C++ (.hpp): Fortran data (class(*)) of calls in a std::any (definitions: fortran_any_cpp)"""
         ht = self.cppany["ht"]
-        return ["namespace", "{", "",
+        return [f"namespace {self.any_ns()}", "{",
+                f"std::any any_from_fortran({ht}* c);  //!< Fortran data (class(*)): in a std::any (copies share it)",
+                f"const {ht}* any_to_fortran(const std::any& a);  //!< back to Fortran (empty: NULL; C++ data throws)",
+                "}", ""]
+
+    def fortran_any_cpp(self):
+        """C++ (module .cpp): Fortran data of calls in a std::any, deleted in Fortran (destroy of the struct)"""
+        ht = self.cppany["ht"]
+        return [f"namespace {self.any_ns()}", "{", "", "namespace", "{", "",
                 "//! Fortran data (class(*)) held by C++: deleted in Fortran (destroy of the struct)",
-                "class FortranData", "{", "public:",
+                "class FortranData final", "{", "public:",
                 f"  explicit FortranData({ht}* c) : c_(c) {{}}  //!< owns c", "  //! deletes the Fortran data",
                 "  ~FortranData()", "  {", "    if( c_ != nullptr && c_->destroy != nullptr )", "      c_->destroy(c_);",
                 "  }", "  FortranData(const FortranData&) = delete;  //!< no copies (shared through std::shared_ptr)",
                 "  FortranData& operator=(const FortranData&) = delete;  //!< no copies",
+                "  FortranData(FortranData&&) = delete;  //!< no moves",
+                "  FortranData& operator=(FortranData&&) = delete;  //!< no moves",
                 f"  {ht}* c_ = nullptr;  //!< the struct (userData: the Fortran holder)", "};", "",
-                "//! from Fortran: empty (NULL) or the Fortran data (copies of the std::any share it)",
+                "}  // namespace", "",
                 f"std::any any_from_fortran({ht}* c)", "{", "  if( c == nullptr )", "    return {};",
                 "  return std::make_shared<FortranData>(c);", "}", "",
-                "//! to Fortran: only Fortran data (created by a Fortran implementation)",
-                f"const {ht}* any_to_fortran(const std::any& a)", "{",
+                f"const {ht}* any_to_fortran(const std::any& a)", "{", "  if( !a.has_value() )", "    return nullptr;",
                 "  if( a.type() != typeid(std::shared_ptr<FortranData>) )",
                 '    throw std::invalid_argument("std::any passed to Fortran: not Fortran data");',
                 "  return std::any_cast<const std::shared_ptr<FortranData>&>(a)->c_;", "}", "",
-                "}  // namespace", ""]
+                f"}}  // namespace {self.any_ns()}", ""]
 
     def cpp_any_helpers(self):
         """C++ (.cpp): std::any <-> C struct (owned by the Fortran object; deleted by its destroy)"""
@@ -514,8 +535,9 @@ class ReverseMixin:
                 f"void destroy_any({ht}* c) noexcept", "{",
                 "  std::unique_ptr<std::any> data(static_cast<std::any*>(c->userData));",
                 f"  std::unique_ptr<{ht}> owner(c);", "}", "",
-                "//! C++ data for Fortran (class(*)): owned by the Fortran object",
-                f"{ht}* any_to_c(std::any a)", "{", f"  auto c = std::make_unique<{ht}>();",
+                "//! C++ data for Fortran (class(*)): owned by the Fortran object (empty: NULL)",
+                f"{ht}* any_to_c(std::any a)", "{", "  if( !a.has_value() )", "    return nullptr;  // unallocated in Fortran",
+                f"  auto c = std::make_unique<{ht}>();",
                 "  c->destroy = &destroy_any;",
                 "  c->userData = new std::any(std::move(a));  // owned by c (destroy_any)",
                 "  return c.release();", "}", "",
@@ -528,89 +550,6 @@ class ReverseMixin:
         """C name of the module: <prefix>_<module>, the module name alone if it starts with <prefix>_"""
         sp, pre = self.mod.spelling, self.cfg["c_prefix"]
         return sp if sp.lower().startswith(pre.lower() + "_") else f"{pre}_{sp}"
-
-    def any_release_name(self):
-        return f"{self.module_c_name()}_any_release"
-
-    def any_handle(self):
-        """opaque C type of the Fortran holder of a class(*) object"""
-        return f"{self.cfg['c_prefix']}_FortranAny"
-
-    def any_fortran(self):
-        """(declarations, procedures) of the binding: the holder of Fortran data (class(*)) held by C++
-        (std::any with a FortranState); NULL: unallocated"""
-        rel, ah = self.any_release_name(), self.any_handle()
-        spec = ["  !> Fortran data (class(*)) held by C++ (FortranState in a std::any)", "  type :: FortranAny_type",
-                "    class(*), allocatable :: p", "  end type FortranAny_type", ""]
-        helpers = {
-            "f2cpp_any_to_holder": [
-                "", "  !> x (moved) into a new holder for C++ (NULL: unallocated)", "  subroutine f2cpp_any_to_holder(x, h)",
-                "    class(*), allocatable, intent(inout) :: x", "    type(C_PTR), intent(out) :: h",
-                "    type(FortranAny_type), pointer :: hp", "", "    h = C_NULL_PTR", "    if (.not. allocated(x)) return",
-                "    allocate(hp)", "    call move_alloc(x, hp%p)", "    h = c_loc(hp)", "  end subroutine f2cpp_any_to_holder"],
-            "f2cpp_any_from_holder": [
-                "", "  !> the object of the holder h (moved out for a call, back with f2cpp_any_back)",
-                "  subroutine f2cpp_any_from_holder(h, x)", "    type(C_PTR), intent(in) :: h",
-                "    class(*), allocatable, intent(inout) :: x", "    type(FortranAny_type), pointer :: hp", "",
-                "    if (.not. c_associated(h)) return", "    call c_f_pointer(h, hp)", "    call move_alloc(hp%p, x)",
-                "  end subroutine f2cpp_any_from_holder"],
-            "f2cpp_any_back": [
-                "", "  subroutine f2cpp_any_back(h, x)", "    type(C_PTR), intent(in) :: h",
-                "    class(*), allocatable, intent(inout) :: x", "    type(FortranAny_type), pointer :: hp", "",
-                "    if (.not. c_associated(h)) return", "    call c_f_pointer(h, hp)", "    call move_alloc(x, hp%p)",
-                "  end subroutine f2cpp_any_back"]}
-        procs = [x for n in sorted(self.any_helpers) for x in helpers.get(n, [])]
-        procs += ["", "!@c_declaration", f"!typedef struct {ah} {ah};", f"!void {rel}({ah}* holder);", "!@end_c_declaration",
-                  "  !> releases Fortran data held by C++ (FortranState)",
-                  f"  subroutine {rel}(holder) bind(C, name=\"{rel}\")"] + self.dllexport(rel) + \
-            ["    type(C_PTR), value :: holder", "    type(FortranAny_type), pointer :: hp", "",
-             "    if (.not. c_associated(holder)) return", "    call c_f_pointer(holder, hp)", "    deallocate(hp)",
-             f"  end subroutine {rel}"]
-        return spec, procs
-
-    def any_cpp(self):
-        ah = self.any_handle()
-        return f"""#ifndef F2CPP_ANY_SUPPORT
-#define F2CPP_ANY_SUPPORT
-//! Fortran data (class(*)) held by C++ in a std::any (as std::shared_ptr<FortranState>); released in Fortran
-class FortranState
-{{
-public:
-  FortranState({ah}* h, void (*r)({ah}*)) : handle(h), release(r) {{}}  //!< holds h, released by r
-  //! releases the Fortran data
-  ~FortranState()
-  {{
-    if( release != nullptr && handle != nullptr )
-      release(handle);
-  }}
-  FortranState(const FortranState&) = delete;  //!< no copies (shared through std::shared_ptr)
-  FortranState& operator=(const FortranState&) = delete;  //!< no copies
-  {ah}* handle = nullptr;                 //!< the Fortran holder
-  void (*release)({ah}*) = nullptr;       //!< Fortran: deallocates it
-}};
-
-//! class(*) objects of Fortran at the C interface
-namespace f2cpp_any
-{{
-//! from Fortran: empty (NULL) or the Fortran data (copies of the std::any share it)
-inline std::any from_fortran({ah}* h, void (*release)({ah}*))
-{{
-  if( h == nullptr )
-    return {{}};
-  return std::make_shared<FortranState>(h, release);
-}}
-
-//! to Fortran: NULL (empty) or the holder of Fortran data; C++ data cannot be passed to Fortran
-inline {ah}* to_fortran(const std::any& v)
-{{
-  if( !v.has_value() )
-    return nullptr;
-  if( v.type() != typeid(std::shared_ptr<FortranState>) )
-    throw std::invalid_argument("C++ data (std::any) passed to Fortran (only Fortran data can be passed back)");
-  return std::any_cast<const std::shared_ptr<FortranState>&>(v)->handle;
-}}
-}}  // namespace f2cpp_any
-#endif"""
 
     # ------------------------------------------------------------------ listeners
     def bridge_name(self, lt):
@@ -651,6 +590,8 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(1, f"virtual ~{cls}();  //!< frees it: unset the listener before")
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to Fortran")
         hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
+        hpp.emit(1, f"{cls}({cls}&&) = delete;  //!< no moves (the address is known to C / Fortran)")
+        hpp.emit(1, f"{cls}& operator=({cls}&&) = delete;  //!< no moves")
         self.pure_virtuals(hpp, methods)
         hpp.emit(0, "")
         hpp.emit(0, "private:")
@@ -812,6 +753,8 @@ inline {ah}* to_fortran(const std::any& v)
         hpp.emit(1, f"virtual ~{cls}();" + ("  //!< frees its C struct" if factory is None else "  //!< unregisters it"))
         hpp.emit(1, f"{cls}(const {cls}&) = delete;  //!< the address is known to C / Fortran")
         hpp.emit(1, f"{cls}& operator=(const {cls}&) = delete;  //!< no copies")
+        hpp.emit(1, f"{cls}({cls}&&) = delete;  //!< no moves (the address is known to C / Fortran)")
+        hpp.emit(1, f"{cls}& operator=({cls}&&) = delete;  //!< no moves")
         all_methods = methods + cpp_only
         for line in const_todo:
             hpp.emit(1, f"// {TODO}: {line}")
@@ -1000,9 +943,6 @@ inline {ah}* to_fortran(const std::any& v)
                                   f"  virtual {ret} {bd.spelling}({params}){const} override;"])
         self.emit_lines(hpp, ["", "private:", f"  {ht} other_{{}};  //!< the struct of the implementation (copy)", "};",
                               "", f"}}  // namespace {ns}", ""])
-        if any(part["any_data"] for _, _, _, part in entries) and not self.cwc.get("any"):
-            self.cwc["any"] = True
-            self.emit_lines(cpp, self.fortran_any_cpp())
         cpp.emit(0, f"namespace {ns}")
         cpp.emit(0, "{")
         cpp.emit(0, "")
@@ -1091,22 +1031,28 @@ inline {ah}* to_fortran(const std::any& v)
                 dummies.append(a)
                 locals_.append(f"class(*), allocatable :: {a}_f")
                 call[key] = f"{a}_f"
-                if intent == "out":             # moved into a new holder (owned by C++)
+                if intent == "out":             # moved into a new holder (owned by C++); NULL on errors
                     decls.append(f"type(C_PTR), intent(out) :: {a}")
+                    pre.append(f"{a} = C_NULL_PTR")
                     post.append(f"{a} = f2cpp_any_new({a}_f)")
                     cpp_pre.append(f"{ca['ht']}* {cn}_c = nullptr;")
                     cpp_args.append(f"&{cn}_c")
-                    cpp_mid.append(f"{cn} = any_from_fortran({cn}_c);")
+                    cpp_mid.append(f"{cn} = {self.any_ns()}::any_from_fortran({cn}_c);")
                 else:                           # moved out of its holder for the call and back
                     decls.append(f"type(C_PTR), value :: {a}")
                     locals_.append(f"type(AnyHolder_type), pointer :: {a}_h")
                     stop = [f"  {x}" for x in self.fail_lines(err)] if has_err else \
                         [f'  error stop "{routine}: {cn} is not Fortran data"']
-                    pre += [f"if (.not. f2cpp_any_holder({a}, {a}_h)) then"] + stop + ["end if",
-                            f"call move_alloc({a}_h%p, {a}_f)"]
-                    post.insert(0, f"call move_alloc({a}_f, {a}_h%p)")
+                    if v.has("allocatable"):    # NULL: unallocated; other (C++) data: error
+                        pre += [f"if (f2cpp_any_holder({a}, {a}_h)) then", f"  call move_alloc({a}_h%p, {a}_f)",
+                                f"else if (c_associated({a})) then"] + stop + ["end if"]
+                        post.insert(0, f"if (associated({a}_h)) call move_alloc({a}_f, {a}_h%p)")
+                    else:                       # must be present: NULL (empty std::any) is an error as well
+                        pre += [f"if (.not. f2cpp_any_holder({a}, {a}_h)) then"] + stop + ["end if",
+                                f"call move_alloc({a}_h%p, {a}_f)"]
+                        post.insert(0, f"call move_alloc({a}_f, {a}_h%p)")
                     keep_ierr = True            # the data goes back to its holder also on errors
-                    cpp_args.append(f"any_to_fortran({cn})")
+                    cpp_args.append(f"{self.any_ns()}::any_to_fortran({cn})")
                 any_data = True
             else:                               # objects / class(*) / created objects: C++ implementations only
                 return {"todo": f"argument {cn}: {self.component_kind(v)}"}

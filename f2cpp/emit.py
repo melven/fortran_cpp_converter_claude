@@ -209,9 +209,15 @@ class ModuleEmitter:
             tr.emit(ind + 1, f"{name}({name}&&) = default;")
             tr.emit(ind + 1, f"{name}& operator=(const {name}&) = default;")
             tr.emit(ind + 1, f"{name}& operator=({name}&&) = default;")
-        base_class = bool(t.children) or t.abstract if closed else poly     # others may derive from it
-        if base_class and not t.parent and not any(p.bind_name == "~" for p in mine):
+        if not final and not has_dtor:          # coding rule: final or a virtual destructor
+            if not any(p.is_ctor for p in mine):    # (declared copy / move suppress the default constructor)
+                tr.emit(ind + 1, f"{name}() = default;")
             tr.emit(ind + 1, f"virtual ~{name}() = default;")
+            # a user-declared destructor suppresses the implicit move operations
+            tr.emit(ind + 1, f"{name}(const {name}&) = default;")
+            tr.emit(ind + 1, f"{name}({name}&&) = default;")
+            tr.emit(ind + 1, f"{name}& operator=(const {name}&) = default;")
+            tr.emit(ind + 1, f"{name}& operator=({name}&&) = default;")
         # flatten: fparser spreads components / comments over several nodes
         comps, binds = [], []
         for part in t.node.content[1:-1]:
@@ -269,7 +275,7 @@ class ModuleEmitter:
                 if p.is_ctor:
                     sig = ("explicit " if sig.count(",") == 0 and not sig.endswith("()") else "") + sig
                 elif p.is_dtor:
-                    sig = "virtual " + sig + " override" if t.parent else "virtual " + sig if base_class else sig
+                    sig = sig if final else "virtual " + sig      # coding rule: final or a virtual destructor
                 elif bd.nopass:
                     sig = "static " + sig
                 elif poly:
@@ -292,6 +298,8 @@ class ModuleEmitter:
             # component name (None: whole statement), comments behind
             # a plain data type (no methods) keeps public members: nothing else could use them
             methods = [b for b in t.bindings if f"{t.name}%{b}" not in self.excluded_names]
+            modes = self.accessor_modes(t)
+            self.emit_accessors(tr, t, modes, ind + 1)
             auto = self.cfg["member_access"] == "auto" and bool(methods or callbacks or t.parent)
             fixed = (1 if t.children else 0) if t.private_comps else 2
             sections, lead, last = {2: [], 1: [], 0: []}, [], None
@@ -313,6 +321,8 @@ class ModuleEmitter:
                 last = []
                 for k, n in enumerate(names):
                     level = (t.comps[n].access_need if auto else fixed) if n is not None else 2
+                    if n in modes:                 # member_accessors: protected (private if final)
+                        level = 0 if final else 1
                     entry = (lead if k == 0 else [], d, n, [])
                     sections[level].append(entry)
                     last.append(entry)
@@ -338,7 +348,10 @@ class ModuleEmitter:
                             not before and not behind:  # unwrapped type: documentation of its component
                         for line in self.member_docs(t, v):
                             tr.emit(ind + 1, f"{self.cfg['doxygen']} {line}".rstrip())
-                    if cls(d) == "Data_Component_Def_Stmt":
+                    if cls(d) == "Data_Component_Def_Stmt" and n in modes:      # renamed: n_
+                        ct, cd = self.var_decl(tr, v, True).split("\0")
+                        tr.emit(ind + 1, f"{ct} {v.cname}{self.cfg['member_suffix']}{cd[len(v.cname):]};")
+                    elif cls(d) == "Data_Component_Def_Stmt":
                         one = type("S", (), {"items": (d.items[0], d.items[1], _One(d, n))})()
                         self.decl_stmt(tr, one, t.comps, ind + 1, member=True, companions=False)
                     elif cls(d) == "Proc_Component_Def_Stmt":       # procedure pointer: callable object
@@ -354,6 +367,37 @@ class ModuleEmitter:
                         ct, cd = self.var_decl(tr, cv, True).split("\0")
                         tr.emit(ind + 1, f"{ct} {cd};")
         tr.emit(ind, "};")
+
+    def accessor_modes(self, t):
+        """{component: get | set | ref} of member_accessors (own components of t)"""
+        m = self.cfg["member_accessors"].get(t.name, {})
+        return {n: m.get(n) or m.get("*") for n, v in t.comps.items()
+                if (m.get(n) or m.get("*")) and v.base != "procedure" and not v.companions and not v.unwrapped}
+
+    def emit_accessors(self, tr, t, modes, ind):
+        """public accessors of the members renamed to <name>_ (member_accessors)"""
+        dox, sfx, docs = self.cfg["doxygen"], self.cfg["member_suffix"], self.component_docs(t)
+        for n, mode in modes.items():
+            v = t.comps[n]
+            ty, m = tr.cpp_type(v), f"{v.cname}{sfx}"
+            plain = v.rank == 0 and v.base in ("real", "integer", "logical") and not v.ptr_like and not v.has("pointer")
+            doc = docs.get(n, []) or [f"component {v.cname}"]
+
+            def emit(decl, suffix="", doc=doc):
+                lines = list(doc)
+                lines[-1] += suffix
+                for line in lines:
+                    tr.emit(ind, f"{dox} {line}".rstrip())
+                tr.emit(ind, decl)
+            if mode == "ref":
+                emit(f"{ty}& {v.cname}() {{ return {m}; }}")
+            emit(f"{ty} {v.cname}() const {{ return {m}; }}" if plain else
+                 f"const {ty}& {v.cname}() const {{ return {m}; }}", " (const version)" if mode == "ref" else "")
+            if mode == "set":
+                emit(f"void {v.cname}({ty} value) {{ {m} = value; }}" if plain else
+                     f"void {v.cname}(const {ty}& value) {{ {m} = value; }}", " (setter)")
+        if modes:
+            tr.emit(0, "")
 
     def component_docs(self, t):
         """{component: [comment text]}: comments before the statement and behind it on the same line"""
@@ -500,6 +544,7 @@ class ModuleEmitter:
                 if tpl and tr.declares_self(tpl) and not v.is_dummy:
                     self.template_declared.add(v.name)
         moved, loop_local = {}, set()
+        tr.body_decl = {}               # id(assignment) -> variable declared there (inside a loop body)
         for n, v in p.vars.items():
             if n in self.template_declared:
                 continue
@@ -514,9 +559,32 @@ class ModuleEmitter:
             if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]) \
                     and moved_ok:
                 loop_local.add(n)
+            elif moved_ok and v.rank == 0 and not v.companions and self.loop_body_decl(tr, n, v, top, uses[n]):
+                pass                            # declared at its first assignment inside a loop body
             elif moved_ok:
                 moved[n] = min(k for k, _ in uses[n])
         return moved, loop_local
+
+    def loop_body_decl(self, tr, n, v, top, uses):
+        """scalar n used only inside one block (loop body, branch of an if / select case: the innermost
+        containing all uses) whose first statement using it assigns it (n = expr without n): declared there
+        (tr.body_decl)"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        if any(nm is None for _, nm in uses) or len({k for k, _ in uses}) != 1:
+            return False
+        ids = {id(nm) for _, nm in uses}
+        blocks = [b for b in inner_blocks(top[uses[0][0]])
+                  if ids <= {id(x) for st in b for x in walk(st, F.Name)}]
+        if not blocks:
+            return False
+        block = min(blocks, key=lambda b: sum(len(walk(x, F.Name)) for x in b))      # the innermost
+        first = next((c for c in block if ids & {id(x) for x in walk(c, F.Name)}), None)
+        if first is None or cls(first) != "Assignment_Stmt" or cls(first.items[0]) != "Name" or \
+                lname(first.items[0]) != n or ids & {id(x) for x in walk(first.items[2], F.Name)}:
+            return False
+        tr.body_decl[id(first)] = v
+        return True
 
     def emit_statement(self, tr, st, ind, prev, declare, comments):
         """top-level statement with the declarations of the locals first used there; a declaration
@@ -622,9 +690,9 @@ class ModuleEmitter:
         tr.loop_local = loop_local
         if self.cfg["declare_at_first_use"]:
             tr.loop_decl = loop_local
-            skip |= set(moved) | loop_local
+            skip |= set(moved) | loop_local | {v.name for v in tr.body_decl.values()}
         else:
-            moved = {}
+            moved, tr.body_decl = {}, {}
         at = {}
         for n, k in moved.items():
             at.setdefault(k, []).append(p.vars[n])
@@ -1096,7 +1164,13 @@ class ModuleEmitter:
         if protos.out:
             c += protos.out + [""]
         if fixture:
-            c += [f"class {mod.spelling or mod.name} : public ::testing::Test {{", "protected:"]
+            c += [f"class {mod.spelling or mod.name} : public ::testing::Test {{", "protected:",
+                  f"  {mod.spelling or mod.name}() = default;",
+                  f"  virtual ~{mod.spelling or mod.name}() = default;  // derived by TEST_F: not final"] + \
+                [f"  {mod.spelling or mod.name}({q}) = delete;" for q in (f"const {mod.spelling or mod.name}&",
+                                                                        f"{mod.spelling or mod.name}&&")] + \
+                [f"  {mod.spelling or mod.name}& operator=({q}) = delete;" for q in (f"const {mod.spelling or mod.name}&",
+                                                                                   f"{mod.spelling or mod.name}&&")]
             for p in mod.procs.values():
                 role = pf_role(p)
                 if role in ("before", "after"):
@@ -1119,6 +1193,28 @@ class MappedNames:
     def __contains__(self, n):
         from .translate import match_name
         return n in self.names or match_name(n, self.cfg["call_templates"]) is not None
+
+
+BLOCK_SEPARATORS = {"If_Construct": ("If_Then_Stmt", "Else_If_Stmt", "Else_Stmt", "End_If_Stmt"),
+                    "Case_Construct": ("Select_Case_Stmt", "Case_Stmt", "End_Select_Stmt"),
+                    "Block_Nonlabel_Do_Construct": ("Nonlabel_Do_Stmt", "End_Do_Stmt")}
+
+
+def inner_blocks(node):
+    """statement lists of the loop bodies and if / select case branches in node (also nested; no comments)"""
+    from fparser.two.utils import walk
+    from fparser.two import Fortran2003 as F
+    res = []
+    for c in walk(node, tuple(getattr(F, k) for k in BLOCK_SEPARATORS)):
+        seps, cur = BLOCK_SEPARATORS[cls(c)], None
+        for x in c.content:
+            if cls(x) in seps:
+                if cur:
+                    res.append(cur)
+                cur = []
+            elif cur is not None and cls(x) != "Comment":
+                cur.append(x)
+    return res
 
 
 def loop_var(do):
