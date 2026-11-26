@@ -46,7 +46,7 @@ entries are printed).
 |---|---|
 | `[project]` | `namespace` (default `project`), `namespace_map` (`[[module-regex, "child"], ...]`: child namespaces), `includes` (in every header; must provide `scalar`, `vec`, `mat`), `constructor_bindings` (`["configure"]`), `destructor_bindings` (`["finalize"]`), `error_arg` (`"ierr"`), `error_success` (`["0"]`), `drop_args` (names of `class(*)` user data dummies), `strict` (internal errors stop the run) |
 | `[macros]` | `prefix` (default: the outer namespace in upper case), `include` (the Fortran include file of the macros: generated Fortran then uses `<P>_CHK_IERR`, `<P>_CHK_ARGUMENT`, `<P>_ASSERT(.false., ierr)`; dropped in C++); `[macros.NAME]`: `fortran` (replacement before parsing), `cpp` (C++ statement of the call it becomes) |
-| `[prepass]` | `patches = [[regex, replacement], ...]` |
+| `[prepass]` | `patches = [[regex, replacement], ...]`; `defined` / `undefined` (macro names, e.g. `["__INTEL_COMPILER"]`): `#if` / `#ifdef` / `#ifndef` / `#elif` blocks that depend only on them are resolved before parsing (other conditionals stay) |
 | `[map]` | `kinds`, `constants`, `includes` (Fortran `#include` → C++, `""`: dropped), `functions` (function / subroutine → C++ function or template), `calls` (call → C++ statement; glob patterns), `interfaces` (abstract interface → C++ type), `headers` (C++ name → include, added to the `.hpp` / `.cpp` whose code uses the name, also from templates; whole words: `Logger = '"project_logging.hpp"'`) |
 | `[tests]` | `extensions` (`[".pf", ".pfunit"]`), `modules` (test framework modules), `includes` |
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
@@ -78,7 +78,7 @@ solve.template = "..."`.
 | Style section | Content |
 |---|---|
 | `[names]` | type suffix / case, file extensions, handle member of wrapped classes, C names (`c_prefix`, `c_real`) |
-| `[layout]` | include guard, doxygen prefix, brace style, width of C declarations |
+| `[layout]` | include guard, doxygen prefix, brace style, width of C declarations; `line_width` (C++ lines longer than this are broken by clang-format, only those lines; 0: off), `clang_format`, `clang_format_style` (`""`: f2cpp's style, `"file"`: the project's `.clang-format`) |
 | `[types]` | `scalar`, `vec`, `mat`, `ivec`, `imat`, `int` |
 | `[conventions]` | member access, optional / array / integer array arguments, Eigen placeholders, size checks of wrapped methods, gtest asserts |
 | `[members]` | templates of the data member name, the accessor names and the accessors |
@@ -149,7 +149,10 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | test module that is used by another module (shared test helpers) | additionally `<module>.hpp` with its types, constants and helper prototypes; the helpers are then not `static` |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see style `gtest_eigen_near`, `tests.includes`), `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
-| comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped |
+| `@assertTrue(.true.)` / `@assertTrue(.false.)` (e.g. the same number of assertions in each path) | dropped / `FAIL();` (`ADD_FAILURE();` with `gtest_assert = "EXPECT"`) |
+| comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped; `#if` / `#else` with identical branches: one copy; empty `#if` blocks: removed |
+| local variables of intrinsic types not used in the C++ body (also after dropped statements) | removed (report info `unused-variable`) |
+| `i == j` of two 0-based loop variables | `i == j` (identical shifts on both sides of a comparison cancel) |
 | doxygen `!>` / `!<` | `//!` / `//!<` (style `doxygen = "///"` for the other style) |
 | `integer, intent(in) :: arg !< text` (also `!>` lines before the declaration) | `//! @param[in] arg text` in the documentation of the function in the header; result: `@return` |
 | file header comment (first comment block) | top of `.hpp` and `.cpp` (and of generated bindings), file name after `@file` replaced, `@date` set to the date of the generation |

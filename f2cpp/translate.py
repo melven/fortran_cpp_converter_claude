@@ -59,6 +59,19 @@ MATH1 = {"sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "at
 EIGEN_ARRAY_FN = {"asin": "asin", "acos": "acos", "atan": "atan"}
 
 
+def cancel_shift(a, b):
+    """integer comparison of two shifted values (i + 1 == j + 1, from 0-based indices): the same top-level
+    constant on both sides cancels"""
+    shift = re.compile(r"(.+) ([+-]) (\d+)")
+    ma, mb = shift.fullmatch(a.code), shift.fullmatch(b.code)
+    if a.prec == P_ADD and b.prec == P_ADD and a.base == b.base == "integer" and ma and mb and \
+            ma.group(2, 3) == mb.group(2, 3):
+        ca, cb = ma.group(1), mb.group(1)
+        return X(ca, 0, "integer", P_ADD if re.search(r"[+-]", ca) else P_MUL), \
+            X(cb, 0, "integer", P_ADD if re.search(r"[+-]", cb) else P_MUL)
+    return a, b
+
+
 def par(x, need=100, strict=False):
     if x.prec < need or (strict and x.prec == need):
         return f"({x.code})"
@@ -1001,6 +1014,7 @@ class Translator:
             c, p = REL_OPS[o], P_EQ if REL_OPS[o] in ("==", "!=") else P_REL
             if rank > 0:
                 return X(f"{self.as_array_p(a, p)} {c} {self.as_array_p(b, p)}", rank, "logical", p, arr=True)
+            a, b = cancel_shift(a, b)
             return X(f"{par(a, p)} {c} {par(b, p, True)}", 0, "logical", p)
         if o in (".and.", ".or.", ".eqv.", ".neqv."):
             c, p = {".and.": ("&&", P_AND), ".or.": ("||", P_OR), ".eqv.": ("==", P_EQ),
@@ -1817,6 +1831,10 @@ class Translator:
         elif name == "relativelyequal" and len(xs) == 2 and xs[0].rank == 0:
             code = f"{A}_NEAR({c[0]}, {c[1]}, {par(self.expr(kw['tolerance']), P_MUL) if 'tolerance' in kw else tol}" \
                    f" * std::abs({c[0]}))"
+        elif name in ("true", "false") and len(xs) == 1 and c[0] in ("true", "false"):
+            if (c[0] == "true") == (name == "true"):        # @assertTrue(.true.): nothing to check
+                return
+            code = ("FAIL()" if A == "ASSERT" else "ADD_FAILURE()")     # @assertTrue(.false.): this path fails
         elif name in simple and len(xs) == (1 if name in ("true", "false") else 2):
             if xs[0].rank > 0 and name in ("true", "false"):
                 c[0] = f"({c[0]}).all()" if name == "true" else f"({c[0]}).any()"

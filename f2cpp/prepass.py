@@ -84,9 +84,83 @@ def expand_macros(text, macros):
         pos = m.start() + len(repl)
 
 
+def cpp_condition(cond, defined, undefined):
+    """value of a #if / #elif condition if it depends only on known macros (defined / undefined), else None"""
+    def known(m):
+        n = m.group(1)
+        return "True" if n in defined else "False" if n in undefined else "None"
+    expr = re.sub(r"\bdefined\s*\(\s*(\w+)\s*\)|\bdefined\s+(\w+)",
+                  lambda m: known(re.match(r"(\w+)", m.group(1) or m.group(2))), cond)
+    expr = re.sub(r"\b(\w+)\b", lambda m: m.group(1) if m.group(1) in ("True", "False", "None") else
+                  ("True" if m.group(1) in defined else "False" if m.group(1) in undefined else
+                   ("True" if m.group(1) != "0" else "False") if m.group(1).isdigit() else "None"), expr)
+    expr = expr.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+    if "None" in expr or not re.fullmatch(r"[\sA-Za-z()]*", expr):
+        return None
+    try:
+        return bool(eval(expr, {"__builtins__": {}}))      # noqa: S307 (only True / False / and / or / not)
+    except SyntaxError:
+        return None
+
+
+def resolve_conditionals(text, defined, undefined):
+    """#if / #ifdef / #ifndef blocks that depend only on known macros: the active branch without the directives;
+    other conditionals stay (also inside an active branch)"""
+    if not defined and not undefined:
+        return text
+    out, stack = [], []         # stack: [known, active, taken] per #if (known: False -> directives kept)
+    for line in text.split("\n"):
+        s = line.strip()
+        m = re.match(r"#\s*(ifdef|ifndef|if|elif|else|endif)\b\s*(.*)", s)
+        live = all(f[1] for f in stack if f[0])
+        if not m:
+            if live:
+                out.append(line)
+            continue
+        d, arg = m.group(1), re.sub(r"/\*.*?\*/|//.*", "", m.group(2)).strip()
+        if d in ("ifdef", "ifndef", "if"):
+            cond = f"defined({arg})" if d == "ifdef" else f"!defined({arg})" if d == "ifndef" else arg
+            v = cpp_condition(cond, defined, undefined) if live else False
+            if not live:
+                stack.append([True, False, True])
+            elif v is None:
+                stack.append([False, True, False])
+                out.append(line)
+            else:
+                stack.append([True, v, v])
+        elif d == "elif" and stack:
+            f = stack[-1]
+            if not f[0]:
+                if live:
+                    out.append(line)
+            else:
+                v = cpp_condition(arg, defined, undefined)
+                if v is None and not f[2]:      # unknown condition after known false branches: keep as #if
+                    f[0], f[1] = False, True
+                    out.append(line.replace("#elif", "#if", 1))
+                else:
+                    f[1] = bool(v) and not f[2]
+                    f[2] = f[2] or bool(v)
+        elif d == "else" and stack:
+            f = stack[-1]
+            if not f[0]:
+                if live:
+                    out.append(line)
+            else:
+                f[1], f[2] = not f[2], True
+        elif d == "endif" and stack:
+            f = stack.pop()
+            if not f[0] and all(g[1] for g in stack if g[0]):
+                out.append(line)
+        elif live:
+            out.append(line)
+    return "\n".join(out)
+
+
 def prepass(text, cfg):
     for pattern, repl in cfg["pre_patches"]:
         text = re.sub(pattern, repl, text, flags=re.MULTILINE | re.IGNORECASE)
+    text = resolve_conditionals(text, set(cfg["cpp_defined"]), set(cfg["cpp_undefined"]))
     text = expand_macros(text, cfg["macros"])
     out, blank, continued = [], False, False
     for line in text.split("\n"):

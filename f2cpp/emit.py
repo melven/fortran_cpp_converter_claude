@@ -561,7 +561,7 @@ class ModuleEmitter:
         if not execs or p.internal or walk(execs[0], (F.Goto_Stmt, F.Computed_Goto_Stmt)):
             return {}, set()
         if any(str(c).startswith(CPP_MARK) for c in walk(p.node, F.Comment)):
-            moved_ok = False            # #ifdef regions: declarations stay at the top (scopes of the regions)
+            moved_ok = False            # #ifdef regions: declarations stay at the top (a branch may define it)
         else:
             moved_ok = True
         top = [c for c in execs[0].content if cls(c) != "Comment"]
@@ -599,9 +599,8 @@ class ModuleEmitter:
             loops = [d for st in top for d in walk(st, F.Block_Nonlabel_Do_Construct)
                      if loop_var(d) == n]
             inside = {id(nm) for d in loops for nm in walk(d, F.Name)}
-            if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]) \
-                    and moved_ok:
-                loop_local.add(n)
+            if loops and v.rank == 0 and all(nm is not None and id(nm) in inside for _, nm in uses[n]):
+                loop_local.add(n)       # also with #ifdef regions: each for statement is its own scope
             elif moved_ok and v.rank == 0 and not v.companions and self.loop_body_decl(tr, n, v, top, uses[n]):
                 pass                            # declared at its first assignment inside a loop body
             elif moved_ok:
@@ -816,8 +815,24 @@ class ModuleEmitter:
             del tr.out[body_start]
         if p.kind == "function" and not tr.out[-1].strip().startswith("return "):
             tr.emit(ind + 1, tr.return_code())
+        self.drop_unused_locals(tr, p, body_start)
         self.balance_preprocessor(tr, body_start)
         tr.emit(ind, close)
+
+    def drop_unused_locals(self, tr, p, start):
+        """declarations of local variables whose names occur nowhere else in the body (outside comments): removed,
+        reported (unused-variable); only plain declarations (no call in the initializer: no side effects lost)"""
+        for v in p.vars.values():
+            if v.name in p.args or v.name == p.result or v.is_dummy or \
+                    v.base not in ("integer", "real", "logical", "character", "complex"):   # objects: constructors
+                continue
+            name = re.escape(v.cname)
+            uses = [i for i in range(start, len(tr.out)) if re.search(rf"\b{name}\b", tr.out[i].split("//")[0])]
+            decl = rf"\s*(?:(?:static|const|mutable)\s+)*[\w:<>,\s*&]+?[\s*&]{name}" \
+                   rf"(?:\s*=\s*[^;()]*|\s*\([^;()]*\)|\s*\{{[^;(){{}}]*\}})?;\s*(?://.*)?"
+            if len(uses) == 1 and re.fullmatch(decl, tr.out[uses[0]]):
+                del tr.out[uses[0]]
+                self.report.add("info", "unused-variable")
 
     # ------------------------------------------------------------------ module
     def includes(self, header_text=None, source_text=""):
@@ -1166,7 +1181,9 @@ class ModuleEmitter:
         return [f"#ifndef {macro}", f"#define {macro}"], [f"#endif // {macro}", ""]
 
     def braces(self, lines):
-        """brace style: put the opening brace of blocks on its own line"""
+        """brace style: put the opening brace of blocks on its own line (also: identical #if / #else branches
+        collapsed, the final pass over every generated C++ file)"""
+        lines = collapse_identical_branches(lines)
         if self.cfg["brace_style"] != "allman":
             return lines
         out = []
@@ -1231,6 +1248,39 @@ class ModuleEmitter:
             c += ["};", ""]
         c += strip_blank(cpp.out) + [""]
         return "\n".join(self.braces(squeeze(c)))
+
+
+def collapse_identical_branches(lines):
+    """#if ... / #else / #endif (also #ifdef / #ifndef) whose two branches are the same lines (no nested
+    directives): only the lines"""
+    lines = list(lines)
+    i = 0
+    while i < len(lines):
+        if not re.match(r"\s*#\s*if", lines[i]):
+            i += 1
+            continue
+        depth, els, end = 0, None, None
+        for k in range(i + 1, len(lines)):
+            d = re.match(r"\s*#\s*(if|elif|else|endif)", lines[k])
+            if not d:
+                continue
+            if d.group(1) == "if":
+                depth += 1
+            elif d.group(1) == "endif" and depth:
+                depth -= 1
+            elif depth == 0 and d.group(1) == "else" and els is None:
+                els = k
+            elif depth == 0 and (d.group(1) == "endif" or d.group(1) == "elif"):
+                end = k if d.group(1) == "endif" else None
+                break
+        a, b = (lines[i + 1:els], lines[els + 1:end]) if els is not None and end is not None else (None, None)
+        if a is not None and a == b and not any(re.match(r"\s*#", x) for x in a):
+            lines[i:end + 1] = a
+        elif i + 1 < len(lines) and re.match(r"\s*#\s*endif", lines[i + 1]):    # empty block (e.g. a removed
+            del lines[i:i + 2]                                                       # unused declaration)
+        else:
+            i += 1
+    return lines
 
 
 class MappedNames:

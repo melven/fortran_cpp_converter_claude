@@ -21,6 +21,8 @@ DEFAULTS = {
     "strict": False,
     "keep_original": False,         # command line only
     "pre_patches": [],
+    "cpp_defined": [],              # preprocessor macros known as defined / undefined: their #if blocks resolved
+    "cpp_undefined": [],
     "macros": {},                   # user macros; the <NS>_* defaults are added by normalise()
     "macro_prefix": None,
     "macro_include": None,
@@ -71,7 +73,8 @@ DEFAULTS = {
 STYLE_KEYS = {
     "names": {k: k for k in ("type_suffix", "type_case", "header_ext", "source_ext", "handle_member", "c_prefix",
                              "c_real", "c_single_precision")},
-    "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width")},
+    "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width", "line_width",
+                              "clang_format", "clang_format_style")},
     "types": {k: k for k in ("scalar", "vec", "mat", "ivec", "imat", "int")},
     "conventions": {**{k: k for k in ("member_access", "optional_arrays", "array_args", "int_arrays",
                                       "eigen_placeholders", "gtest_assert", "gtest_eigen_near")},
@@ -98,7 +101,8 @@ SECTION_KEYS = {
                 "includes": ("extra_includes", "append"), "constructor_bindings": ("constructor_bindings", None),
                 "destructor_bindings": ("destructor_bindings", None), "error_arg": ("error_arg", None),
                 "error_success": ("error_success", None), "drop_args": ("drop_args", None), "strict": ("strict", None)},
-    "prepass": {"patches": ("pre_patches", "append")},
+    "prepass": {"patches": ("pre_patches", "append"), "defined": ("cpp_defined", "append"),
+                "undefined": ("cpp_undefined", "append")},
     "tests": {"extensions": ("test_extensions", None), "modules": ("test_modules", None),
               "includes": ("test_includes", "append")},
     "map": {"kinds": ("kind_map", "update"), "constants": ("constant_map", "update"),

@@ -704,7 +704,8 @@ end module ifd_mod
         lines = [l.strip() for l in text.split("\n")]
         assert sum(l.startswith("#if") for l in lines) == sum(l.startswith("#endif") for l in lines)
     assert "#ifdef WITH_B\nvoid b()\n{\n}\n\n#endif" in cpp and "#ifdef WITH_B\nvoid b();\n#endif" in hpp
-    assert "#ifdef DEBUG\n  scalar dbg;\n#endif\n  int k;\n" in cpp          # declarations stay in their region
+    assert "#ifdef DEBUG\n  scalar dbg;\n#endif\n#ifdef DEBUG\n  dbg = x;\n#endif\n" in cpp   # declarations stay in their region
+    assert "  for (int k = 1; k <= 3; ++k)" in cpp            # loop variable: in the for, also with #ifdef regions
     # Fortran include files: dropped / renamed with include_map
     c = config.load()
     c["include_map"] = {"err_macros.h": ""}
@@ -750,7 +751,8 @@ end module ce_mod
     translate([str(tmp_path / "ce_mod.F90")], cfg(), str(tmp_path))
     cpp = (tmp_path / "ce_mod.cpp").read_text()
     body = cpp[cpp.index("::residual"):]
-    assert body.count("#if") == body.count("#endif") == 2 and "TODO(f2cpp): unbalanced" not in cpp
+    # the #ifdef around the internal procedure became empty (lambda at the top): removed
+    assert body.count("#if") == body.count("#endif") == 1 and "TODO(f2cpp): unbalanced" not in cpp
     assert "auto copyArray = [&](const vec& source, vec& dest)" in cpp
     for d in ("-DUSE_COPY", "-DNONE"):
         run(["g++", "-std=c++17", "-Wall", "-I.", "-I" + SUPPORT, "-I" + EIGEN, d, "-c", "ce_mod.cpp"], str(tmp_path))
@@ -1077,3 +1079,98 @@ def test_non_overridable_bindings(tmp_path):
     assert "  virtual void step();\n  int count() const;" in hpp and "  virtual void step() override final;" in hpp
     if shutil.which("g++") and os.path.isdir(EIGEN):
         cxx((d,), "sealed_mod")
+
+
+def test_cleanups_of_generated_code(tmp_path):
+    """[prepass] defined / undefined: #if blocks of known macros resolved, others kept; identical #if / #else
+    branches: one copy; unused local variables removed (report); shifted comparisons (i + 1 == j + 1) cancelled;
+    @assertTrue(.true.) dropped, @assertTrue(.false.) -> FAIL()"""
+    (tmp_path / "cl_mod.F90").write_text("""module cl_mod
+  implicit none
+contains
+  subroutine eye(a, n)
+    integer, intent(in) :: n
+    real, intent(out) :: a(n, n)
+    integer :: i, j, unused
+#ifdef __INTEL_COMPILER
+    a = 0.0   ! workaround
+#else
+    a = 1.0
+#endif
+#ifdef USE_MPI
+    a = 2.0
+#else
+    a = 2.0
+#endif
+#ifdef OTHER
+    a = 3.0
+#endif
+    do i = 1, n
+      do j = 1, n
+        if (i == j) a(i, j) = a(j, i) + 1.0
+      end do
+    end do
+  end subroutine eye
+end module cl_mod
+""")
+    (tmp_path / "test_cl_mod.pf").write_text("""module test_cl_mod
+  use funit
+  implicit none
+contains
+  @test
+  subroutine test_paths()
+    integer :: k
+    k = 1
+    select case (k)
+    case (1)
+      @assertTrue(.true.)
+    case default
+      @assertTrue(.false.)
+    end select
+  end subroutine test_paths
+end module test_cl_mod
+""")
+    (tmp_path / "x.toml").write_text('[prepass]\nundefined = ["__INTEL_COMPILER"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    src = str(tmp_path / "cl_mod.F90")
+    report, _ = translate([src, str(tmp_path / "test_cl_mod.pf")], c, str(tmp_path / "o"))
+    cpp = read((str(tmp_path / "o"),), "cl_mod.cpp")
+    body = cpp[cpp.index("void eye("):]
+    assert "INTEL" not in body and "a.setConstant(1.0);" in body and "workaround" not in body
+    assert "USE_MPI" not in body and body.count("a.setConstant(2.0);") == 1       # identical branches
+    assert "#ifdef OTHER\n" in body                                               # unknown macro: kept
+    assert "unused" not in body and report.files[src]["info"]["unused-variable"] == 1
+    assert "if (i == j) a(i, j) = a(j, i) + 1.0;" in body and "for (int i = 0; i < n; ++i)" in body   # also with #ifdef
+    t = read((str(tmp_path / "o"),), "test_cl_mod.cpp")
+    assert "ASSERT_TRUE(true)" not in t and "FAIL();" in t
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((str(tmp_path / "o"),), "cl_mod")
+
+
+@pytest.mark.skipif(not shutil.which("clang-format"), reason="clang-format missing")
+def test_long_lines_broken_by_clang_format(tmp_path):
+    """style line_width: only the lines longer than it are formatted by clang-format (--lines), the rest stays"""
+    (tmp_path / "long_mod.F90").write_text("""module long_mod
+  implicit none
+contains
+  subroutine s(a, b, n, ib, ie, jb, je)
+    integer, intent(in) :: n, ib, ie, jb, je
+    real, intent(inout) :: a(n, n), b(n, n)
+    a(1, 1)   =   0.0
+    a(ib:ie, jb:je) = a(ib:ie, jb:je) + 2.0 * b(ib:ie, jb:je) - matmul(transpose(b(ib:ie, jb:je)), a(ib:ie, jb:je))
+  end subroutine s
+end module long_mod
+""")
+    (tmp_path / "s.toml").write_text("[layout]\nline_width = 100\n")
+    (tmp_path / "c.toml").write_text('style = "s.toml"\n')
+    d = str(tmp_path / "o")
+    translate([str(tmp_path / "long_mod.F90")], config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "c.toml")]), d)
+    plain = str(tmp_path / "p")
+    translate([str(tmp_path / "long_mod.F90")], cfg(), plain)
+    cpp, before = read((d,), "long_mod.cpp"), read((plain,), "long_mod.cpp")
+    assert max(len(line) for line in cpp.split("\n")) <= 100 < max(len(line) for line in before.split("\n"))
+    short = [line for line in before.split("\n") if len(line) <= 100]
+    assert all(line in cpp.split("\n") for line in short)        # the other lines are unchanged
+    assert "  a(Eigen::seq(ib - 1, ie - 1), Eigen::seq(jb - 1, je - 1)) =\n" in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "long_mod")

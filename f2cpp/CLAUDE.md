@@ -27,6 +27,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 ### cli.py
 - `parse_file`: prepass + parse one file → modules (marks pFUnit modules).
 - `translate`: whole run (parse, `Program.finish`, analysis pass, emit, write files); returns (report, written files). `prog.translated`: modules translated in the run; `prog.wrapped`: wrapped (`-W`) and wrapped interface (`-w`) modules.
+- `break_long_lines`: C++ lines over style `line_width` through `clang-format --lines` (only those lines).
 - `main`: command line → `config.load` → `translate` → summary / JSON report.
 
 ### config.py
@@ -44,6 +45,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `_find_close`: matching parenthesis (strings respected). `split_args`: top-level macro arguments.
 - `_join_continuations`: joins `&` continuation lines inside macro arguments.
 - `expand_macros`: replaces configured macros (`macros`) by Fortran text, nested, not in comments / cpp lines.
+- `cpp_condition` / `resolve_conditionals`: `#if` blocks of known macros (`[prepass] defined / undefined`) resolved.
 - `prepass`: patches, macros, marker comments for `#` lines (`CPP_MARK`), pFUnit `@` directives (`PF_MARK`, asserts → calls), blank lines (`BLANK_MARK`).
 
 ### model.py
@@ -61,7 +63,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `Translator` core: `lookup`, `lookup_proc`, `pick_specific` (generic resolution), `find_type`, `note` (review note), `elem_type`, `find_iface`, `proc_type`, `expansion` / `expanded_variables` / `expanded_name` (`expand_args`), `dropped` / `is_dropped` (`drop_args`), `scope_chain`, `method_proc`.
 - Types: `storage` (container kind), `extents`, `nest`, `leaf_type`, `nested_ctor`, `eigen_type`, `cpp_type`, `param_type`.
 - Expressions: `expr`, `int_array`, `touch`, `link`, `ref`; `x_Parenthesis`, `x_*_Literal_Constant`, `x_Name`, `var_ref`, `x_Part_Ref`, `x_Function_Reference`, `result_x`, `ref_or_call` (array element vs call), `mapped_call` / `fill_template` / `method_template` / `call_template` / `declares_self` (configured mappings), `unknown_ref`, `member`, `accessor` (getter / setter / mode of a component), `own_member` (translated class: the data member in its methods), `used_member` / `used_binding` (callers: C++ visibility), `x_Proc_Component_Ref`, `x_Data_Ref` (component chains, getters, unwrapped companions).
-- Indexing: `linear`, `minus` (constant folding), `index0` (0-based), `lower_bounds`, `sub_code`, `slice_length` (term cancellation), `named_count` / `named_element` / `new_named_element` (`named_elements`), `subscript`, `subscript_`.
+- Indexing: `cancel_shift` (identical shifts in comparisons), `linear`, `minus` (constant folding), `index0` (0-based), `lower_bounds`, `sub_code`, `slice_length` (term cancellation), `named_count` / `named_element` / `new_named_element` (`named_elements`), `subscript`, `subscript_`.
 - Operators: `unary`, `as_array`, `binary`, `as_array_p`, `power`, `matrix`, `ac_items`, `x_Array_Constructor`.
 - Calls: `split_arg`, `is_err`, `plain_args`, `bound_args` (actuals in dummy order, optionals, error flag removed), `spelled`, `callback_lambda`, `call_code`, `method_call`, `call_on`, `lifetime_call` (ctor/dtor procedures), `intrinsic`.
 - Output: `emit`, `fortran_comment`, `comment_text`, `comment`, `block`.
@@ -71,7 +73,8 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - Intrinsics (`INTRINSICS` table): `i_size`, `i_matmul`, `i_method`, `i_transpose`, `i_reduce` (sum/product/maxval/...), `i_dot`, `i_abs`, `i_math1`, `i_std`, `i_minmax`, `i_mod`, `i_cast`, `i_present`, `i_allocated`, `i_limits`, `i_merge`, `i_reshape`, `i_sign`, `i_len`, `i_identity`, `i_bound`, `i_loc`, `i_null`.
 
 ### emit.py
-- `ModuleEmitter`: `tr` (new Translator), `var_decl`, `decl_stmt`, `warn_lower_bounds`, `signature` (C++ signature of a procedure), `proto`, `warn_name`, `doc` (doxygen from Fortran comments), `emit_type` (class: members, methods, ctors, virtuals; private bindings moved into their section), `binding_level` (section of a private binding), `component_docs`, `member_docs`, `internal_order` / `emit_lambdas` (internal procedures → lambdas), `excluded_names` / `excluded` / `excluded_proc` (`exclude`), `declaration_plan` / `emit_statement` (declaration at first use), `result_decl`, `balance_preprocessor`, `emit_proc`, `includes`, `cpp_names`, `std_includes`, `name_includes` (`[map.headers]`: includes by use), `open_ns`, `using_other_ns`, `generate` (header + source of a module or test), `missing_modules`, `guard`, `braces` (Allman), `file_header`, `assemble_test` (gtest file).
+- `ModuleEmitter`: `tr` (new Translator), `var_decl`, `decl_stmt`, `warn_lower_bounds`, `signature` (C++ signature of a procedure), `proto`, `warn_name`, `doc` (doxygen from Fortran comments), `emit_type` (class: members, methods, ctors, virtuals; private bindings moved into their section), `binding_level` (section of a private binding), `component_docs`, `member_docs`, `internal_order` / `emit_lambdas` (internal procedures → lambdas), `excluded_names` / `excluded` / `excluded_proc` (`exclude`), `declaration_plan` / `emit_statement` (declaration at first use), `result_decl`, `balance_preprocessor`, `emit_proc`, `drop_unused_locals` (intrinsic-type locals not used in the body), `includes`, `cpp_names`, `std_includes`, `name_includes` (`[map.headers]`: includes by use), `open_ns`, `using_other_ns`, `generate` (header + source of a module or test), `missing_modules`, `guard`, `braces` (Allman), `file_header`, `assemble_test` (gtest file).
+- `collapse_identical_branches` (identical `#if` / `#else` branches, empty `#if` blocks; in `braces`, the final pass).
 - `MappedNames` (configured names, glob aware), `loop_var`, `_One`, `plain_comment`, `pf_role`, `strip_blank`, `squeeze`.
 
 ### wrap.py
