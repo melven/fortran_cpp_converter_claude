@@ -588,6 +588,7 @@ class ModuleEmitter:
                     self.template_declared.add(v.name)
         moved, loop_local = {}, set()
         tr.body_decl = {}               # id(assignment) -> variable declared there (inside a loop body)
+        tr.local_loops = set()
         for n, v in p.vars.items():
             if n in self.template_declared:
                 continue
@@ -604,28 +605,53 @@ class ModuleEmitter:
             elif moved_ok and v.rank == 0 and not v.companions and self.loop_body_decl(tr, n, v, top, uses[n]):
                 pass                            # declared at its first assignment inside a loop body
             elif moved_ok:
-                moved[n] = min(k for k, _ in uses[n])
+                rest = uses[n]
+                if v.rank == 0 and v.base == "integer" and n != p.result:
+                    own = self.dead_after_loops(n, top, uses[n])
+                    tr.local_loops |= {id(top[k]) for k in own}
+                    rest = [(k, nm) for k, nm in uses[n] if k not in own]
+                moved[n] = min(k for k, _ in rest)
         return moved, loop_local
 
+    @staticmethod
+    def dead_after_loops(n, top, uses):
+        """indices of top-level loops over n whose final value of n is not used: the next top-level statement
+        using n is another top-level loop over n (or there is none); such a loop declares n itself"""
+        used_in = sorted({k for k, _ in uses})
+        if any(nm is None for _, nm in uses):
+            return set()
+        own = set()
+        for j, k in enumerate(used_in):
+            st = top[k]
+            if cls(st) != "Block_Nonlabel_Do_Construct" or loop_var(st) != n:
+                continue
+            nxt = used_in[j + 1] if j + 1 < len(used_in) else None
+            if nxt is None or (cls(top[nxt]) == "Block_Nonlabel_Do_Construct" and loop_var(top[nxt]) == n):
+                own.add(k)
+        return own if len(own) < len(used_in) else set()
+
     def loop_body_decl(self, tr, n, v, top, uses):
-        """scalar n used only inside one block (loop body, branch of an if / select case: the innermost
-        containing all uses) whose first statement using it assigns it (n = expr without n): declared there
-        (tr.body_decl)"""
+        """scalar n whose uses in each top-level statement lie in one block (loop body, branch of an if / select
+        case: the innermost containing them) whose first statement using it assigns it (n = expr without n):
+        declared there, in each such statement (tr.body_decl)"""
         from fparser.two.utils import walk
         from fparser.two import Fortran2003 as F
-        if any(nm is None for _, nm in uses) or len({k for k, _ in uses}) != 1:
+        if any(nm is None for _, nm in uses):
             return False
-        ids = {id(nm) for _, nm in uses}
-        blocks = [b for b in inner_blocks(top[uses[0][0]])
-                  if ids <= {id(x) for st in b for x in walk(st, F.Name)}]
-        if not blocks:
-            return False
-        block = min(blocks, key=lambda b: sum(len(walk(x, F.Name)) for x in b))      # the innermost
-        first = next((c for c in block if ids & {id(x) for x in walk(c, F.Name)}), None)
-        if first is None or cls(first) != "Assignment_Stmt" or cls(first.items[0]) != "Name" or \
-                lname(first.items[0]) != n or ids & {id(x) for x in walk(first.items[2], F.Name)}:
-            return False
-        tr.body_decl[id(first)] = v
+        firsts = []
+        for k in sorted({k for k, _ in uses}):
+            ids = {id(nm) for kk, nm in uses if kk == k}
+            blocks = [b for b in inner_blocks(top[k]) if ids <= {id(x) for st in b for x in walk(st, F.Name)}]
+            if not blocks:
+                return False
+            block = min(blocks, key=lambda b: sum(len(walk(x, F.Name)) for x in b))      # the innermost
+            first = next((c for c in block if ids & {id(x) for x in walk(c, F.Name)}), None)
+            if first is None or cls(first) != "Assignment_Stmt" or cls(first.items[0]) != "Name" or \
+                    lname(first.items[0]) != n or ids & {id(x) for x in walk(first.items[2], F.Name)}:
+                return False
+            firsts.append(first)
+        for first in firsts:
+            tr.body_decl[id(first)] = v
         return True
 
     def emit_statement(self, tr, st, ind, prev, declare, comments):

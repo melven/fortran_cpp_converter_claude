@@ -145,6 +145,7 @@ class Translator:
         self.overrides = {}
         self.out = []
         self.loop_local = set()    # loop variables that are only used inside their loops
+        self.local_loops = set()   # id of loops that declare their variable (its value after the loop is not used)
         self.loop_decl = set()     # ... declared in the for statement
         self.body_decl = {}        # id(assignment) -> variable declared there (loop body, emit.loop_body_decl)
         self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
@@ -1085,6 +1086,15 @@ class Translator:
                 return X(f"{par(a, P_AND, True)} {c} {par(b, P_AND, True)}", rank, "logical", p, arr=rank > 0,
                          neg=neg)
             return X(f"{par(a, p)} {c} {par(b, p, True)}", rank, "logical", p, arr=rank > 0, neg=neg)
+        if o in "+-" and rank == 0 and a.base == b.base == "integer" and re.fullmatch(r"\d+", b.code):
+            m = re.fullmatch(r"(.+) ([+-]) (\d+)", a.code) if a.prec == P_ADD else None
+            if m:                                   # i + 1 + 1 -> i + 2, i + 1 - 1 -> i (shifted loop variables)
+                c = (int(m.group(3)) if m.group(2) == "+" else -int(m.group(3))) + \
+                    (int(b.code) if o == "+" else -int(b.code))
+                head = m.group(1)
+                if c == 0:
+                    return X(head, 0, "integer", P_ADD if re.search(r"[-+*/]", head) else P_MUL)
+                return X(f"{head} {'+' if c > 0 else '-'} {abs(c)}", 0, "integer", P_ADD)
         if o in "+-":
             if rank > 0 and (a.rank == 0 or b.rank == 0 or a.arr or b.arr):
                 return X(f"{self.as_array_p(a, P_ADD)} {o} {self.as_array_p(b, P_ADD, o == '-')}",
@@ -2150,8 +2160,8 @@ class Translator:
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
         sub.named, sub.via_getters = self.named, self.via_getters
-        sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
-            self.overrides, self.shift, self.loop_local, self.loop_decl
+        sub.overrides, sub.shift, sub.loop_local, sub.loop_decl, sub.local_loops = \
+            self.overrides, self.shift, self.loop_local, self.loop_decl, self.local_loops
         sub.body_decl = self.body_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):
@@ -2322,9 +2332,10 @@ class Translator:
             n = lname(var)
             v = self.lookup(n)
             i = self.expr(var).code
-            decl = f"{self.cpp_type(v)} " if n in self.loop_decl and v is not None else ""
+            local = n in self.loop_local or id(node.node if isinstance(node, _Trimmed) else node) in self.local_loops
+            decl = f"{self.cpp_type(v)} " if (n in self.loop_decl or local) and v is not None else ""
             st = self.expr(bounds[2]).code if len(bounds) > 2 else "1"
-            if n in self.loop_local and st in ("1", "-1"):
+            if local and st in ("1", "-1"):
                 idx, other, arg = self.index_uses(node, n)
                 shift = 1 if idx > other and not arg else 0
             lo, hi = self.minus(bounds[0], shift), self.expr(bounds[1])

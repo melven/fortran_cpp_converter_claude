@@ -10,7 +10,7 @@ module features_mod
   public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
   public :: int_arrays, count_marked
   public :: argmax, text_demo, node_type, relink
-  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history, loop_locals
+  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history, loop_locals, two_loops
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -480,5 +480,33 @@ contains
     s = s + b + d
     if (n > 1) s = s + c
   end function loop_locals
+
+  !> two loops setting the same locals; a loop variable whose value after the loop is not used
+  function two_loops(x, n) result(s)
+    integer, intent(in) :: n
+    real, intent(inout) :: x(n)
+    real :: s
+    integer :: i, j, k
+    real :: t
+    s = 0.0
+    do i = 1, n
+      t = x(i) * 2.0          ! assigned first in both loops: declared in each
+      k = i + 1
+      x(i) = t + k
+    end do
+    do i = 1, n
+      t = x(i) * 3.0
+      k = i - 1
+      x(i) = t - k
+    end do
+    ! the next use of j is the next loop: declared in this for statement
+    do j = 1, n
+      s = s + x(j)
+    end do
+    do j = 1, n
+      if (x(j) > 0.0) exit
+    end do
+    s = s + j                 ! used after this loop: outside
+  end function two_loops
 
 end module features_mod

@@ -516,6 +516,10 @@ def test_declarations_at_first_use_and_zero_based_loops(out):
     body = feat.split("int loop_locals(int n)\n{")[1].split("\n}\n")[0]
     assert "  int c;\n  int d;\n  for" in body                                # conditional / used after: outside
     assert "      int e = i / 2;" in body and "      int f = 3 * i;" in body      # in the if / else branch
+    body = feat.split("scalar two_loops(vec& x, int n)\n{")[1].split("\n}\n")[0]
+    assert body.count("    scalar t = x(i) * ") == 2 and "    int k = i + 2;" in body and "    int k = i;" in body
+    assert "  for (int j = 0; j < n; ++j)\n  {\n    s = s + x(j);" in body          # value not used after
+    assert "  int j;\n  for (j = 1; j <= n; ++j)" in body                           # used after the loop
     assert "  int bs = this->bs;\n" in lu                     # local hides the member: still mergeable
     # loop variable used mostly as index: 0-based loop, other uses get + 1
     assert "for (int i = 0; i < x.size(); ++i)\n" in poly and "p(k, i) = c(k) * std::pow(x(i), k);" in poly
