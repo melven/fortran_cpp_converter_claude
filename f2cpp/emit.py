@@ -719,6 +719,7 @@ class ModuleEmitter:
         """definition of a procedure appended to tr_out.out"""
         tr = self.tr(p)
         tr.out = tr_out.out
+        tr.plain_doc = True             # !< / !> in a body: ordinary comments (doxygen does not document locals)
         if head is None:
             qualify = self.prog.type_name(p.method_of) + "::" if p.method_of else ""
             head = self.proto(tr, p, decl=False, qualify=qualify)

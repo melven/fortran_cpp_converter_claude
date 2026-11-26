@@ -486,7 +486,7 @@ def test_internal_procedures_become_lambdas(out):
     # defined before use (sq before accumulate), capturing the host variables by reference
     assert "  auto sq = [&](scalar v) -> scalar\n  {" in poly
     assert poly.index("auto sq = ") < poly.index("auto accumulate = ") < poly.index("auto scaled = ")
-    assert "  //! adds the weighted square of v\n  auto accumulate = [&](scalar v)\n  {\n" \
+    assert "  // adds the weighted square of v\n  auto accumulate = [&](scalar v)\n  {\n" \
            "    r = r + w * sq(v);\n    calls = calls + 1;\n  };" in poly
     assert "accumulate(x(k - 1));" in poly and "r = std::sqrt(r) + scaled(static_cast<scalar>(calls));" in poly
     # an internal procedure as callback (its user data argument is dropped)
@@ -1092,6 +1092,16 @@ def test_preprocessor_conditions_with_partial_knowledge():
     assert c("defined(INTEL) && defined(X)", set(), {"INTEL"}) is False
     assert c("!defined(INTEL) && (A || !A)", set(), {"INTEL"}) is True
     assert c("0", set(), set()) is False
+
+
+def test_argument_docs_of_procedure_and_dropped_dummies(tmp_path):
+    """!< of a procedure dummy: @param in the header, not a comment in the body; !< of a local: plain comment"""
+    (tmp_path / "dc_mod.F90").write_text('module dc_mod\n  implicit none\n  abstract interface\n    subroutine res_fn(x, f, data)\n      real, intent(in) :: x(:)\n      real, intent(out) :: f(:)\n      class(*), intent(inout) :: data\n    end subroutine\n  end interface\ncontains\n  !> solve\n  subroutine solve(residual, x, data, ierr)\n    procedure(res_fn) :: residual    !< function to calculate the residual\n    real, intent(inout) :: x(:)      !< the vector\n    class(*), intent(inout) :: data  !< user data\n    integer, intent(out) :: ierr     !< error flag\n    real :: f(size(x))               !< residual vector\n    ierr = 0\n    call residual(x, f, data)\n    x = x - f\n  end subroutine\nend module\n')
+    translate([str(tmp_path / "dc_mod.F90")], cfg(), str(tmp_path))
+    hpp, cpp = read((str(tmp_path),), "dc_mod.hpp"), read((str(tmp_path),), "dc_mod.cpp")
+    assert "//! @param[in] residual function to calculate the residual" in hpp
+    assert "residual vector" not in hpp and "calculate" not in cpp
+    assert "vec f(x.size());  // residual vector" in cpp
 
 
 def test_negated_check_conditions(tmp_path):

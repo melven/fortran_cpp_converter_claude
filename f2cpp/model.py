@@ -266,9 +266,12 @@ def collect_param_docs(p, spec):
     for d in spec.content:
         flat += list(d.content) if cls(d) == "Implicit_Part" else [d]
     for i, d in enumerate(flat):
-        if cls(d) != "Type_Declaration_Stmt":
+        if cls(d) == "Type_Declaration_Stmt":
+            names = [lname(e.items[0]) for e in items_of(d.items[2])]
+        elif cls(d) == "Procedure_Declaration_Stmt":       # procedure(iface) :: f  !< ...
+            names = [lname(e.items[0] if cls(e) == "Proc_Decl" else e) for e in items_of(d.items[2])]
+        else:
             continue
-        names = [lname(e.items[0]) for e in items_of(d.items[2])]
         names = [n for n in names if n in p.args or n == p.result]
         if not names:
             continue

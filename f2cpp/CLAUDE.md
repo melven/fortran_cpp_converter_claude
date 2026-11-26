@@ -52,7 +52,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `cls`, `lname`, `items_of`, `cname`: node class name, lower-case name, list children, spelling.
 - `Var` (`has`, `opt_kind`: `std::optional` of value / reference, `ptr_like`), `Proc`, `Binding`, `TypeDef`, `Module` (`is_public`): data classes.
 - `parse_type_spec`, `parse_array_spec`, `parse_decl`, `parse_proc_decl`: declarations → `Var`.
-- `collect_param_docs`: `!<` / `!>` documentation of dummies. `collect_proc`, `collect_type`, `collect_module`: parse tree → symbols.
+- `collect_param_docs`: `!<` / `!>` documentation of dummies (also `procedure(...)` dummies); in bodies `!<` / `!>` become plain `//` (`Translator.plain_doc`). `collect_proc`, `collect_type`, `collect_module`: parse tree → symbols.
 - `_target_name`, `classify_pointers`: Fortran pointers → owned (`unique_ptr`) / references / raw.
 - `leading_doc`: comment lines before a type statement (`TypeDef.doc`).
 - `Program`: `add`, `finish` (cross-module analysis), `inconsistent_case`, `classify_callbacks` (user-data callbacks), `unwrap_types` (wrapper types → wrapped type + companions), `mark_named_elements`, `file_stem`, `decide_int_vectors` (interface of a module: Eigen; inside: by uses and links), `visible`, `find_type`, `ancestors`, `polymorphic`, `find_component` (incl. inherited), `find_binding`, `binding_proc`, `overrides`, `descendants`, `overridden`, `type_name` (C++ name incl. namespace / type_map), `namespace`.

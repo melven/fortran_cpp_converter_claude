@@ -91,6 +91,7 @@ class Translator:
         self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
         self.brace_arrays = False   # array constructors as braced lists
         self.via_getters = False    # translated method of a wrapped class: components are getters
+        self.plain_doc = False      # procedure body: !< / !> become ordinary comments
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -1380,6 +1381,8 @@ class Translator:
 
     def comment_text(self, node):
         text = str(node)[1:]
+        if self.plain_doc:
+            return "//" + (text[1:] if text[:1] in "<>" and text[:1] else text)
         dox = self.cfg["doxygen"]
         return dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
 
