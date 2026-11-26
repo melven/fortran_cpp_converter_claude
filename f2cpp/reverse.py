@@ -215,19 +215,33 @@ class ReverseMixin:
                 cpp_pre.append(f"std::unique_ptr<{xcls}> {a}_w = {self.private_ns(xcls)}::wrapFromC(*{a});")
                 cpp_args.append(f"std::move({a}_w)")
             elif v.base == "type" and not v.rank and v.tname in cfg["type_map"] and \
-                    getattr(prog.find_type(v.tname, self.mod), "bind_c", False):   # C struct data (hand-wrapped)
+                    (v.tname in cfg["c_structs"] or getattr(prog.find_type(v.tname, self.mod), "bind_c", False)):
+                # C struct data (hand-wrapped): a bind(C) object by reference, or the C struct of a Fortran helper
                 if intent != "in" or v.has("pointer") or v.has("allocatable") or v.has("optional"):
-                    todo = f"argument {v.cname}: bind(C) type {v.tname}: only intent(in)"
+                    todo = f"argument {v.cname}: C struct data ({v.tname}): only intent(in)"
                     continue
                 st_c = cfg["type_map"][v.tname]
                 xt = prog.find_type(v.tname, self.mod)
-                hdr = cfg["module_headers"].get(xt.module.name)        # the C struct for the C header
+                hdr = cfg["module_headers"].get(xt.module.name) if xt is not None else None
                 self.c_lines.add(f'!#include "{hdr}"' if hdr else f"!typedef struct {st_c} {st_c};")
                 c_params.append(f"const {st_c}* {a}")
                 f_dummies.append(a)
-                f_decls.append(f"type({xt.spelling or xt.name}), intent(in) :: {a}")     # by reference: a C pointer
-                actuals.append(a)
                 cpp_args.append(f"*{a}")
+                helper = cfg["c_structs"].get(v.tname)
+                if helper is None:              # bind(C): by reference is a C pointer
+                    f_decls.append(f"type({xt.spelling or xt.name}), intent(in) :: {a}")
+                    actuals.append(a)
+                    continue
+                f_decls.append(f"type(C_PTR), value :: {a}")
+                locals_.append(f"type({helper['wrapper']}), target :: {a}_w      ! its C struct (freed with it)")
+                setup = f"call {helper['setup']}({a}_w, {a}, {err if has_err else a + '_ierr'})"
+                if has_err:
+                    pre += [f"{cfg['wrap_chk_ierr'][0]}({setup}, {err})"] if cfg["wrap_chk_ierr"] else \
+                        [setup, f"if ({err} /= 0) return"]
+                else:
+                    locals_.append(f"integer :: {a}_ierr")
+                    pre += [setup, f'if ({a}_ierr /= 0) error stop "{proc}: {helper["setup"]} failed"']
+                actuals.append(f"{a}_w%{helper['ptr']}")
             elif v.base == "type" and not v.rank:                            # temporary handle
                 xt = prog.find_type(v.tname, self.mod)
                 if xt is None or xt.module.name not in getattr(prog, "wrapped", ()) or not self.is_root(xt) or \

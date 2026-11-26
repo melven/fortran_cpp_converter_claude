@@ -51,7 +51,7 @@ entries are printed).
 | `[tests]` | `extensions` (`[".pf", ".pfunit"]`), `modules` (test framework modules), `includes` |
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
 | `[modules.M]` | `header` (header of a module that is not translated, or output name of a translated one; `""`: no include, no missing-module warning), `exclude` (names not emitted, glob patterns; `M` may be a pattern) |
-| `[types.T]` | `cpp` (existing C++ class), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, Fortran implementations also usable in C++; `"cpp"`: only implemented in C++, used from Fortran; `"listener"`), `factory = {register, unregister}`, `instance` |
+| `[types.T]` | `cpp` (existing C++ class), `c_struct` (Fortran helper making its C struct, for bidirectional methods), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, Fortran implementations also usable in C++; `"cpp"`: only implemented in C++, used from Fortran; `"listener"`), `factory = {register, unregister}`, `instance` |
 | `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`), `stored` (`interop = "cpp"`: wrapped object arguments that the C++ object keeps, see below) |
 | `[procedures.P]` | `c_name`, `translate`, `sizes` |
 
@@ -356,7 +356,9 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
 - translated factories get `using Base::Base;` and `<Factory>_private::instance("name")`
 - arguments: wrapped objects (temporary handles), C struct data (`intent(in)` objects of a `bind(C)` type mapped with `cpp`
   to its C struct: passed by reference, C++ `const Struct&`; the C header includes `[modules.M] header` of its module or
-  forward-declares the struct), expanded arguments (`expand`, `intent(in)`: their integer / real /
+  forward-declares the struct; a Fortran type with a hand-written helper: `[types.T] c_struct = {setup = "CWrapperT_setup",
+  wrapper = "CWrapperT_type", ptr = "cPtr()"}`: the bridge calls `setup(w, x, ierr)` on a local wrapper and passes `w%cPtr()`),
+  expanded arguments (`expand`, `intent(in)`: their integer / real /
   logical / character components as C parameters, C++ parameters as in translated code), real / integer / logical scalars (in / out / inout),
   real / integer rank-1 arrays (copied; the size must not change), created objects, scalar results, `ierr`
 - the Fortran library references no symbol of the C++ library (registration at run time); a global

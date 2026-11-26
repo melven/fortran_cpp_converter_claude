@@ -766,11 +766,15 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
     src, counter = os.path.join(r, "sealed_thing_mod.F90"), os.path.join(r, "counter_mod.F90")
     settings = os.path.join(r, "settings_mod.F90")      # bind(C) type, hand-wrapped C struct
+    options = os.path.join(r, "options_mod.F90")        # Fortran type, C struct made by a hand-written helper
     (tmp_path / "x.toml").write_text('[types.SealedThing_type]\ninterop = "cpp"\nbindings.attach.stored = ["counter"]\n'
                                      '[types.ProgramSettings_type]\ncpp = "project_ProgramSettings"\n'
-                                     '[modules.settings_mod]\nheader = "project_settings.h"\n')
+                                     '[modules.settings_mod]\nheader = "project_settings.h"\n'
+                                     '[types.Options_type]\ncpp = "project_Options"\n'
+                                     'c_struct = {setup = "CWrapperOptions_setup", wrapper = "CWrapperOptions_type", '
+                                     'ptr = "cPtr()"}\n[modules.options_mod]\nheader = "project_options.h"\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
-    translate([], c, d, [settings], wrap=[counter, src])
+    translate([], c, d, [settings, options], wrap=[counter, src])
     hpp, b = read((d,), "sealed_thing_mod.hpp"), read((d,), "sealed_thing_mod_c_binding.F90")
     cw = read((d,), "sealed_thing_mod_c_binding.F90")      # interop = "cpp": no c_wrapper module
     assert not (tmp_path / "project_c_wrapper_sealed_thing_mod.F90").exists()
@@ -783,6 +787,11 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
     assert "  virtual void apply_settings(const project_ProgramSettings& settings) = 0;" in hpp
     assert '#include "project_settings.h"' in read((d,), "sealed_thing_mod.h")
     assert "    call f(c_loc(this%c), settings)\n" in cw
+    # C struct of a Fortran helper (c_struct): the wrapper is local (freed after the call), C++ gets the struct
+    assert "  virtual void apply_options(const project_Options& options) = 0;" in hpp
+    assert "    type(CWrapperOptions_type), target :: options_w      ! its C struct (freed with it)\n" in cw
+    assert "    call CWrapperOptions_setup(options_w, options, options_ierr)\n" in cw and \
+        "    call f(c_loc(this%c), options_w%cPtr())\n" in cw
     assert "    sealedThing->attach(std::move(counter_w));" in read((d,), "sealed_thing_mod.cpp")
     assert "  void* attach_counter = nullptr;  //!< Fortran: handle of the stored counter" in read((d,), "sealed_thing_mod.h")
     assert "    counter_old = this%c%attach_counter\n    this%c%attach_counter = project_Counter_setup(counter)" in cw
@@ -790,7 +799,7 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
     assert "    attach_counter = this%c%attach_counter" in cw and \
         "    end if\n    if (c_associated(attach_counter)) call project_Counter_destroy(attach_counter)\n" in cw
     # not stored: the reason in the TODO (here: the module of the stored type only given with -I)
-    translate([], c, str(tmp_path / "i"), [counter, settings], wrap=[src])
+    translate([], c, str(tmp_path / "i"), [counter, settings, options], wrap=[src])
     assert "TODO(f2cpp): stored argument counter: counter_type is not wrapped (give its module with -W or -w)" in \
         read((str(tmp_path / "i"),), "sealed_thing_mod_c_binding.F90")
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
@@ -799,6 +808,7 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
   use, intrinsic :: iso_c_binding, only: C_PTR
   use counter_mod, only: Counter_type
   use settings_mod, only: ProgramSettings_type
+  use options_mod, only: Options_type
   use sealed_thing_mod, only: SealedThing_type
   use sealed_thing_mod_c_binding, only: project_SealedThing_wrap
   implicit none
@@ -812,6 +822,7 @@ contains
   subroutine run_fortran() bind(C, name="run_fortran")
     type(Counter_type), pointer :: counter
     type(ProgramSettings_type) :: settings
+    type(Options_type) :: opts
     class(SealedThing_type), allocatable :: thing
     real :: y
     allocate(counter)                            ! owned by the caller
@@ -820,6 +831,9 @@ contains
     call thing%attach(counter)                   ! replaces the stored handle
     settings%level = 3
     call thing%apply_settings(settings)          ! C struct data: counter%add(level) in C++
+    allocate(opts%name, source="fast")
+    opts%level = 2
+    call thing%apply_options(opts)               ! C struct of a helper: counter%add(level + 10 for "fast")
     y = thing%twice(1.5)                         ! Fortran twice -> C++ value -> counter%add
     print '(f6.2, i3)', y, counter%count
     deallocate(thing)                            ! the C++ object, then the handle
@@ -830,12 +844,17 @@ end module drv_mod
 """)
     (tmp_path / "run.cpp").write_text(r"""#include "sealed_thing_mod.hpp"
 #include <memory>
+#include <string>
 class MySealed final : public project::SealedThing
 {
 public:
   project::scalar value(project::scalar x) const override { counter_->add(1); return x + 1.0; }
   void attach(std::unique_ptr<project::Counter> counter) override { counter_ = std::move(counter); }
   void apply_settings(const project_ProgramSettings& settings) override { counter_->add(settings.level); }
+  void apply_options(const project_Options& options) override
+  {
+    counter_->add(options.level + (std::string(options.name) == "fast" ? 10 : 0));
+  }
 
 private:
   std::unique_ptr<project::Counter> counter_;
@@ -856,16 +875,16 @@ int main()
 """)
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
           "-Wno-unused-dummy-argument", "-I" + CORPUS]
-    for f in (settings, counter, src, "counter_mod_c_binding.F90", "sealed_thing_mod_c_binding.F90",
+    for f in (settings, options, counter, src, "counter_mod_c_binding.F90", "sealed_thing_mod_c_binding.F90",
               "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("counter_mod.cpp", "sealed_thing_mod.cpp", "run.cpp"):
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
-    run(["g++", "settings_mod.o", "counter_mod.o", "sealed_thing_mod.o", "counter_mod_c_binding.o", "sealed_thing_mod_c_binding.o",
+    run(["g++", "settings_mod.o", "options_mod.o", "counter_mod.o", "sealed_thing_mod.o", "counter_mod_c_binding.o", "sealed_thing_mod_c_binding.o",
          "drv.o", "counter_mod_cxx.o", "sealed_thing_mod_cxx.o", "run_cxx.o",
          "-lgfortran", "-o", "m"], d)
-    assert run_exe(["./m"], d).split("\n")[:2] == ["  5.00  4", "  4"]
+    assert run_exe(["./m"], d).split("\n")[:2] == ["  5.00 16", " 16"]
 
 
 def test_reverse_factory_function_with_fortran_base(tmp_path):

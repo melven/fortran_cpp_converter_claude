@@ -62,6 +62,7 @@ DEFAULTS = {
     "wrap_reverse": [],
     "wrap_reverse_cpp": [],         # interop = "cpp": only the C++ implementation used from Fortran
     "wrap_stored": {},              # "type%binding" -> wrapped object arguments kept by the C++ object
+    "c_structs": {},                # type -> {setup, wrapper, ptr}: Fortran helper making its C struct (c_struct)
     "wrap_reverse_factories": {},
     "reverse_factory_instances": {},
 }
@@ -106,7 +107,8 @@ SECTION_KEYS = {
             "headers": ("name_headers", "update")},
     "wrap": {"string_in": ("wrap_string_in", None), "string_out": ("wrap_string_out", None)},
 }
-TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors", "unwrap",
+TYPE_KEYS = {"cpp", "c_struct", "independent", "interop", "factory", "instance", "owned", "constants", "accessors",
+             "unwrap",
              "expand", "named_elements", "element_list", "handle_member", "c_name",
              "translate", "bindings"}
 BINDING_KEYS = {"template", "translate", "sizes", "stored"}
@@ -239,8 +241,8 @@ def load_config(cfg, path, data):
                 load_type(cfg, path, name, ent)
 
 
-TYPE_SIMPLE = {"cpp": "type_map", "constants": "wrap_constants", "accessors": "accessors", "unwrap": "unwrap_types",
-               "expand": "expand_args",
+TYPE_SIMPLE = {"cpp": "type_map", "c_struct": "c_structs", "constants": "wrap_constants", "accessors": "accessors",
+               "unwrap": "unwrap_types", "expand": "expand_args",
                "element_list": "named_element_lists", "handle_member": "wrap_handle_member", "c_name": "c_class_names",
                "factory": "wrap_reverse_factories", "instance": "reverse_factory_instances"}
 
@@ -321,7 +323,7 @@ def normalise(cfg):
     cfg["wrap_stored"] = {k.lower(): [a.lower() for a in v] for k, v in cfg["wrap_stored"].items()}
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map",
                 "module_headers", "kind_map", "c_class_names", "c_procedure_names", "named_elements",
-                "named_element_lists", "wrap_handle_member", "reverse_factory_instances"):    # Fortran names
+                "named_element_lists", "wrap_handle_member", "reverse_factory_instances", "c_structs"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
     for key in ("ignore_modules", "wrap_owned", "wrap_listeners", "wrap_reverse", "wrap_reverse_cpp",
                 "wrap_independent_bases"):

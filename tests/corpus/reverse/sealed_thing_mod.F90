@@ -2,6 +2,7 @@
 module sealed_thing_mod
   use counter_mod, only: Counter_type
   use settings_mod, only: ProgramSettings_type
+  use options_mod, only: Options_type
   implicit none
   private
   public :: SealedThing_type
@@ -11,6 +12,7 @@ module sealed_thing_mod
     procedure(value_iface), deferred :: value
     procedure(attach_iface), deferred :: attach   !< the C++ implementation keeps the counter (stored)
     procedure(apply_iface), deferred :: apply_settings   !< C struct data (bind(C) type, hand-wrapped)
+    procedure(options_iface), deferred :: apply_options   !< C struct made by a Fortran helper (c_struct)
     procedure, non_overridable :: twice           !< Fortran implementation (calls the C++ value)
   end type SealedThing_type
 
@@ -33,6 +35,12 @@ module sealed_thing_mod
       class(SealedThing_type), intent(inout) :: this
       type(ProgramSettings_type), intent(in) :: settings
     end subroutine apply_iface
+
+    subroutine options_iface(this, options)
+      import :: SealedThing_type, Options_type
+      class(SealedThing_type), intent(inout) :: this
+      type(Options_type), intent(in) :: options
+    end subroutine options_iface
   end interface
 
 contains
