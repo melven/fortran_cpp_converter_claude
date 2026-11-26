@@ -157,6 +157,7 @@ class TypeDef:
     children: set = field(default_factory=set)
     node: object = None
     doc: list = field(default_factory=list)     # text of the comment lines right before the type statement
+    bind_c: bool = False                        # type, bind(C): interoperable with a C struct
 
 
 @dataclass(eq=False)     # identity semantics: never compare parse trees
@@ -331,6 +332,8 @@ def collect_type(node, module):
             t.parent = lname(a.items[1])
         elif s == "abstract":
             t.abstract = True
+        elif re.sub(r"\s", "", s) == "bind(c)":
+            t.bind_c = True
     for c in node.content[1:]:
         k = cls(c)
         if k == "Private_Components_Stmt":

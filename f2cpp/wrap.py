@@ -1103,6 +1103,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
         self.cpp_data_used, self.fortran_data_used = False, False   # class(*): C++ / Fortran data in the Any struct
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
+        self.c_lines = set()                        # C header lines for hand-wrapped C structs (bind(C) types)
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
         # factories / interop = "cpp" (cw_merged): no c_wrapper module, all in the binding (one header)
         self.cw_in_binding = self.cw_merged(mod)
@@ -1265,6 +1266,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     hpp.emit(1, f"{prog.type_name(td.name)} {v.cname}_;  //!< C++ copy of the constant {v.cname}")
             hpp.emit(0, "};")
             hpp.emit(0, "")
+        for line in sorted(self.c_lines, reverse=True):     # #include before typedef
+            if line not in typedefs:
+                typedefs.insert(0, line)
         for m in sorted(self.c_includes):              # C headers of other modules (reverse types)
             rstem = prog.modules[m].spelling if m in cfg["module_headers"] else os.path.basename(prog.file_stem(m))
             if f'!#include "{rstem}.h"' not in typedefs:

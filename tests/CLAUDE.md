@@ -32,7 +32,7 @@ Corpus files (first comment line): `expm_mod` matrix exponential; `block_lu_mod`
 reverse types / factories; `const_thing_mod` Fortran implementation used in C++; `convergence_mod` +
 `model_base_mod` reverse constants and known sizes; `state_model_mod` `class(*)` both directions;
 `unwrap/blocks_mod` unwrapped multi-component type; `named/var_mod` named elements; `visibility_mod` private bindings;
-`sealed_mod` non_overridable; `reverse/sealed_thing_mod` + `counter_mod` `interop = "cpp"`, non_overridable, stored argument; `reverse/fn_factory_mod` +
+`sealed_mod` non_overridable; `reverse/sealed_thing_mod` + `counter_mod` + `settings_mod` `interop = "cpp"`, non_overridable, stored argument, C struct data; `reverse/fn_factory_mod` +
 `dict_mod` + `node_mod` factory methods as functions, expanded argument, Fortran-only base.
 
 ## Tests (one line each)

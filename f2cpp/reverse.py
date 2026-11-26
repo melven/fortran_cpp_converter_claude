@@ -214,6 +214,20 @@ class ReverseMixin:
                 post.append(f"if (c_associated({a}_old)) call {destroy}({a}_old)      ! the replaced one")
                 cpp_pre.append(f"std::unique_ptr<{xcls}> {a}_w = {self.private_ns(xcls)}::wrapFromC(*{a});")
                 cpp_args.append(f"std::move({a}_w)")
+            elif v.base == "type" and not v.rank and v.tname in cfg["type_map"] and \
+                    getattr(prog.find_type(v.tname, self.mod), "bind_c", False):   # C struct data (hand-wrapped)
+                if intent != "in" or v.has("pointer") or v.has("allocatable") or v.has("optional"):
+                    todo = f"argument {v.cname}: bind(C) type {v.tname}: only intent(in)"
+                    continue
+                st_c = cfg["type_map"][v.tname]
+                xt = prog.find_type(v.tname, self.mod)
+                hdr = cfg["module_headers"].get(xt.module.name)        # the C struct for the C header
+                self.c_lines.add(f'!#include "{hdr}"' if hdr else f"!typedef struct {st_c} {st_c};")
+                c_params.append(f"const {st_c}* {a}")
+                f_dummies.append(a)
+                f_decls.append(f"type({xt.spelling or xt.name}), intent(in) :: {a}")     # by reference: a C pointer
+                actuals.append(a)
+                cpp_args.append(f"*{a}")
             elif v.base == "type" and not v.rank:                            # temporary handle
                 xt = prog.find_type(v.tname, self.mod)
                 if xt is None or xt.module.name not in getattr(prog, "wrapped", ()) or not self.is_root(xt) or \
