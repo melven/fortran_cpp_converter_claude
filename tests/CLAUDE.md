@@ -32,7 +32,8 @@ Corpus files (first comment line): `expm_mod` matrix exponential; `block_lu_mod`
 reverse types / factories; `const_thing_mod` Fortran implementation used in C++; `convergence_mod` +
 `model_base_mod` reverse constants and known sizes; `state_model_mod` `class(*)` both directions;
 `unwrap/blocks_mod` unwrapped multi-component type; `named/var_mod` named elements; `visibility_mod` private bindings;
-`sealed_mod` non_overridable; `reverse/sealed_thing_mod` + `counter_mod` `interop = "cpp"`, non_overridable, stored argument.
+`sealed_mod` non_overridable; `reverse/sealed_thing_mod` + `counter_mod` `interop = "cpp"`, non_overridable, stored argument; `reverse/fn_factory_mod` +
+`dict_mod` factory method as function, Fortran-only base.
 
 ## Tests (one line each)
 
@@ -59,6 +60,7 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 - `test_reverse_type_fortran_implementation_in_cpp`: Fortran implementation used in C++ (`CWrapperThing`).
 - `test_reverse_type_constants`: reverse constants (inherited), known sizes, macros in generated Fortran (`[macros] include`), both directions, run.
 - `test_reverse_cpp_only_and_non_overridable`, `test_non_overridable_bindings`: `interop = "cpp"`, `non_overridable`, stored argument (run: lifetime under valgrind).
+- `test_reverse_factory_function_with_fortran_base`: factory method as function, base type only in Fortran.
 - `test_reverse_class_star_is_todo`, `test_reverse_class_star_cpp_data`: `class(*)` of reverse types (TODO cases; both directions, run).
 
 ## Conventions and pitfalls

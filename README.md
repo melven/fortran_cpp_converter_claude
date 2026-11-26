@@ -343,7 +343,9 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
   makes one; factories: `CWrapperThingFactory_type` and register / unregister
 - factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
   in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor
-  unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)`: `release()` to Fortran
+  unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)` (Fortran `intent(out)` dummy) or
+  `std::unique_ptr<AbstractThing> create_thing(...)` (Fortran function with an allocatable `class(...)` result): `release()` to
+  Fortran; a Fortran-only base type of the factory (e.g. a dictionary entry) does not appear in C++
 - translated factories get `using Base::Base;` and `<Factory>_private::instance("name")`
 - arguments: wrapped objects (temporary handles), real / integer / logical scalars (in / out / inout),
   real / integer rank-1 arrays (copied; the size must not change), created objects, scalar results, `ierr`

@@ -844,3 +844,35 @@ int main()
          "project_c_wrapper_sealed_thing_mod.o", "drv.o", "counter_mod_cxx.o", "sealed_thing_mod_cxx.o", "run_cxx.o",
          "-lgfortran", "-o", "m"], d)
     assert run_exe(["./m"], d).split("\n")[:2] == ["  5.00  1", "  1"]
+
+
+def test_reverse_factory_function_with_fortran_base(tmp_path):
+    """factory method as a function (class(...), allocatable result -> std::unique_ptr result); a Fortran-only
+    base type of the factory (dictionary entry) does not appear in C++"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('[types]\nAbstractThing_type.interop = "cpp"\n'
+                                     'ThingMaker_type.factory = {register = "register_maker", unregister = "unregister_maker"}\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    srcs = [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "fn_factory_mod.F90")]
+    report, _ = translate([], c, d, [os.path.join(r, "dict_mod.F90")], wrap=srcs)
+    hpp, h = read((d,), "fn_factory_mod.hpp"), read((d,), "fn_factory_mod.h")
+    cw = read((d,), "project_c_wrapper_fn_factory_mod.F90")
+    assert "class ThingMaker\n{" in hpp and "DictEntry" not in hpp
+    assert "  virtual std::unique_ptr<AbstractThing> make(const Config& config) const = 0;" in hpp
+    assert "  project_ThingMaker_make make = nullptr;\n  void* userData = nullptr;" in h
+    assert "    std::unique_ptr<AbstractThing> thing_u = thingMaker->make(*config_w);\n" \
+           "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;" in read((d,), "fn_factory_mod.cpp")
+    assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)\n  end function make" in cw
+    assert not any(report.files[f]["todo"] for f in srcs)
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+              "-Wno-unused-dummy-argument", "-I" + CORPUS]
+        for f in [os.path.join(SUPPORT, "project_str.F90"), os.path.join(r, "dict_mod.F90")] + srcs + [
+                "config_mod_c_binding.F90", "thing_mod_c_binding.F90",
+                                                               "project_c_wrapper_thing_mod.F90", "fn_factory_mod_c_binding.F90",
+                                                               "project_c_wrapper_fn_factory_mod.F90"]:
+            run(ff + [f], d)
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        for f in ("config_mod", "thing_mod", "fn_factory_mod"):
+            run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", f + ".cpp",
+                 "-o", f + "_cxx.o"], d)

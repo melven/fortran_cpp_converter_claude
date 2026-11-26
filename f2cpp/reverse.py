@@ -260,9 +260,28 @@ class ReverseMixin:
             else:
                 todo = f"argument {v.cname}: {self.component_kind(v)}"
         res_v = iface.vars.get(iface.result) if iface.kind == "function" else None
-        if res_v is not None and (res_v.rank or res_v.base not in ("real", "integer", "logical")):
+        created = None
+        if res_v is not None and res_v.base == "type" and not res_v.rank and res_v.tname in self.reverse_types() \
+                and res_v.has("allocatable"):   # created object as function result (factory): owned by Fortran
+            r, rt = iface.result, prog.find_type(res_v.tname, self.mod)
+            rh, rcls = self.c_type_name(rt), prog.type_name(rt.name, self.mod)
+            created = (r, rcls)
+            c_params.append(f"{rh}** {r}")
+            f_dummies.append(r)
+            f_decls.append(f"type(C_PTR), intent(out) :: {r}")
+            locals_.append(f"type(C_PTR) :: {r}_p")
+            pre.append(f"{r}_p = C_NULL_PTR")
+            actuals.append(f"{r}_p")
+            post.append(f"if (c_associated({r}_p)) call {self.c_name(rt, 'wrap')}({r}_p, {r})")
+            if rt.module is not self.mod:
+                self.extra_uses.add(f"  use {self.cwrapper_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
+                self.c_includes.add(rt.module.name)
+            cpp_init.append(f"*{r} = nullptr;")
+            cpp_post += [f"*{r} = {r}_u ? {self.private_ns(rcls)}::toC(*{r}_u) : nullptr;",
+                         f"{r}_u.release(); // NOLINT(bugprone-unused-return-value)"]
+        elif res_v is not None and (res_v.rank or res_v.base not in ("real", "integer", "logical")):
             todo = f"result {res_v.cname}: {self.component_kind(res_v)}"
-        if res_v is not None:                   # the result: by reference
+        elif res_v is not None:                 # the result: by reference
             r = iface.result
             c_params.append(f"{self.c_type(res_v)}* {r}")
             f_dummies.append(r)
@@ -317,7 +336,9 @@ class ReverseMixin:
                                    for c in c_params)       # parameter types (function pointers: without name)
         res["abstract"] = self.abstract_interface(aiface, res["c_types"], f"{cls}::{tramp}", f_dummies, f_decls)
         call = f"{cpp_obj}->{bd.spelling}({', '.join(cpp_args)});"
-        if res_v is not None:
+        if created:
+            call = f"std::unique_ptr<{created[1]}> {created[0]}_u = {call}"
+        elif res_v is not None:
             call = f"*{iface.result} = {call}"
         on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
         msg = f"encountered exception in {bd.spelling}"
