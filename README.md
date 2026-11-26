@@ -152,6 +152,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | `@assertTrue(.true.)` / `@assertTrue(.false.)` (e.g. the same number of assertions in each path) | dropped / `FAIL();` (`ADD_FAILURE();` with `gtest_assert = "EXPECT"`) |
 | comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped; `#if` / `#else` with identical branches: one copy; empty `#if` blocks: removed |
 | local variables of intrinsic types not used in the C++ body (also after dropped statements) | removed (report info `unused-variable`) |
+| `x = expr` to a local scalar of intrinsic type whose value is never read (in the procedure, or in a loop that declares `x` itself) | removed if `expr` surely has no side effects (only operators, variables, components, intrinsics; report info `dead-assignment`); otherwise only `expr` is evaluated (`f(...);`, review note) |
 | `i == j` of two 0-based loop variables | `i == j` (identical shifts on both sides of a comparison cancel) |
 | doxygen `!>` / `!<` | `//!` / `//!<` (style `doxygen = "///"` for the other style) |
 | `integer, intent(in) :: arg !< text` (also `!>` lines before the declaration) | `//! @param[in] arg text` in the documentation of the function in the header; result: `@return` |

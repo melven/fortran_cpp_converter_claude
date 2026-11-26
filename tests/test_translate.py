@@ -322,8 +322,9 @@ def test_tixi_function_map(tmp_path):
     path = str(tmp_path / "t_mod.F90")
     report, _ = translate([path], c, str(tmp_path))
     cpp = (tmp_path / "t_mod.cpp").read_text()
-    assert 'rc = tixiAddTextAttribute(h, std::string(path).c_str(), "type", std::string("x" + path).c_str());' in cpp
-    assert "rc = tixiGetDoubleElement(h, std::string(path).c_str(), &v);" in cpp
+    # rc is never read: only the calls (dead assignments with side effects)
+    assert '  tixiAddTextAttribute(h, std::string(path).c_str(), "type", std::string("x" + path).c_str());' in cpp
+    assert "  tixiGetDoubleElement(h, std::string(path).c_str(), &v);" in cpp and "int rc" not in cpp
     assert "#include <tixi.h>" in (tmp_path / "t_mod.hpp").read_text()
     assert not report.files[path]["missing"] and '"project_math.hpp"' in c["extra_includes"]
 
@@ -1140,6 +1141,47 @@ def test_declarations_next_to_preprocessor_regions(tmp_path):
     assert "      scalar t = x(rb + j - 1);" in body
     if shutil.which("g++") and os.path.isdir(EIGEN):
         cxx((str(tmp_path),), "ifdef_mod")
+
+
+def test_dead_assignments_removed(tmp_path):
+    """assignments whose value is never read: removed if surely without side effects (report), with their trailing
+    comment; a type-bound function call is kept (review note)"""
+    report, _ = translate([os.path.join(CORPUS, "dead_mod.F90")], cfg(), str(tmp_path))
+    cpp = read((str(tmp_path),), "dead_mod.cpp")
+    body = cpp.split("void block_sums(")[1].split("\n}\n")[0]
+    assert "unused" not in body and "removed" not in body and "w =" not in body and "u =" not in body
+    assert body.count("int re = ") == 1 and "int re = offs(i + 1) - 1;  // read here: kept" in body
+    assert "  p.norm1();  // TODO(f2cpp): value of t never read: only the expression is evaluated (possible side " \
+           "effects)" in body and "scalar t" not in body
+    assert report.files[os.path.join(CORPUS, "dead_mod.F90")]["info"]["dead-assignment"] == 4
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((str(tmp_path),), "dead_mod")
+    # an operator overloaded for a type: kept if an operand may be of that type
+    (tmp_path / "op_mod.F90").write_text("""module op_mod
+  implicit none
+  type :: p_type
+    real :: v = 0.0
+  end type
+  interface operator(==)
+    module procedure eq
+  end interface
+contains
+  logical function eq(a, b)
+    type(p_type), intent(in) :: a, b
+    eq = a%v == b%v
+  end function eq
+  subroutine s(a, b, x)
+    type(p_type), intent(in) :: a, b
+    real, intent(in) :: x
+    logical :: same, zero
+    same = a == b
+    zero = x == 0.0
+  end subroutine s
+end module op_mod
+""")
+    translate([str(tmp_path / "op_mod.F90")], cfg(), str(tmp_path))
+    body = read((str(tmp_path),), "op_mod.cpp").split("void s(")[1]
+    assert "a == b" in body and "zero" not in body and "x == 0.0" not in body
 
 
 def test_negated_check_conditions(tmp_path):

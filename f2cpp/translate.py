@@ -146,6 +146,9 @@ class Translator:
         self.out = []
         self.loop_local = set()    # loop variables that are only used inside their loops
         self.local_loops = set()   # id of loops that declare their variable (its value after the loop is not used)
+        self.dead = set()          # id of assignments whose value is never read (emit.dead_assignments): dropped
+        self.dead_kept = set()     # the same with possible side effects: kept, review note
+        self.dead_lines = set()    # source lines of removed assignments (their trailing comments are dropped)
         self.loop_decl = set()     # ... declared in the for statement
         self.body_decl = {}        # id(assignment) -> variable declared there (loop body, emit.loop_body_decl)
         self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
@@ -1463,6 +1466,8 @@ class Translator:
             return
         if s.strip() in FORTRAN_SEPARATORS:
             return
+        if node.item is not None and node.item.span[0] in self.dead_lines:
+            return                          # trailing comment of a removed assignment
         c = self.comment_text(node)
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]
         if trailing and self.out and self.out[-1].strip() and not self.out[-1].lstrip().startswith("//"):
@@ -1566,6 +1571,9 @@ class Translator:
 
     def stmt(self, node, ind):
         k = cls(node)
+        if id(node) in self.dead:           # value never read, no side effects
+            self.dead_lines.add(last_line(node))
+            return
         if k in self.CONSTRUCTS:
             # fparser attaches comments preceding a construct to the construct itself
             n_lead = 0
@@ -1575,6 +1583,9 @@ class Translator:
             node = _Trimmed(node, n_lead) if n_lead else node
         start = len(self.out)
         self.notes = []
+        if id(node) in self.dead_kept:
+            self.note("dead-assignment", f"value of {node.items[0]} never read: only the expression is evaluated "
+                                         "(possible side effects)")
         self.saw_transpose = False
         self.frames.append([ind, []])
         try:
@@ -1599,7 +1610,7 @@ class Translator:
             m(node, ind)
             if k == "Call_Stmt":
                 self.hoist_message(n0, ind)
-            if id(node) in self.body_decl:          # declared at this assignment (loop body)
+            if id(node) in self.body_decl and id(node) not in self.dead_kept:     # declared here (loop body)
                 self.declare_here(self.body_decl[id(node)], n0, ind)
             if self.notes and k not in self.CONSTRUCTS and len(self.out) > n0:
                 self.out[n0] += f"  // {TODO}: " + "; ".join(self.notes)
@@ -1675,6 +1686,11 @@ class Translator:
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
+        if id(node) in self.dead_kept:      # value never read: only the expression (possible side effects)
+            x = self.expr(rhs_n)
+            call = x.prec >= 100 and x.code.endswith(")") and not x.code.startswith("(")     # f(...), a.f(...)
+            self.emit(ind, f"{self.matrix(x)};" if call else f"static_cast<void>({self.matrix(x)});")
+            return
         if self.via_getters and cls(lhs_n) in ("Data_Ref", "Name"):
             lx = self.ref(lhs_n)
             if lx.via_accessor and lx.whole and lx.rank > 0 and self.expr(rhs_n).rank > 0:
@@ -2162,6 +2178,7 @@ class Translator:
         sub.named, sub.via_getters = self.named, self.via_getters
         sub.overrides, sub.shift, sub.loop_local, sub.loop_decl, sub.local_loops = \
             self.overrides, self.shift, self.loop_local, self.loop_decl, self.local_loops
+        sub.dead, sub.dead_kept, sub.dead_lines = self.dead, self.dead_kept, self.dead_lines
         sub.body_decl = self.body_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):

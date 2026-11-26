@@ -617,7 +617,123 @@ class ModuleEmitter:
                     tr.local_loops |= {id(top[k]) for k in own}
                     rest = [(k, nm) for k, nm in uses[n] if k not in own]
                 moved[n] = min(k for k, _ in rest)
+        tr.dead_kept = set()
+        tr.dead = self.dead_assignments(p, tr, execs[0], top, uses, spec_uses)
         return moved, loop_local
+
+    def dead_assignments(self, p, tr, body, top, uses, spec_uses):
+        """ids of assignments x = expr to a local x of intrinsic type whose value is never read: not at all, or
+        (x declared anew in each top-level statement, tr.body_decl) not in that statement; only if expr surely
+        has no side effects (no calls except intrinsics, no constructors / defined operators)"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        lhs = {}                            # id(Name on the left) -> assignment
+        for st in walk(body, F.Assignment_Stmt):
+            if cls(st.items[0]) == "Name":
+                lhs[id(st.items[0])] = st
+        anew = {v.name for v in tr.body_decl.values()}
+        dead = set()
+        for n, v in p.vars.items():
+            if v.is_dummy or n == p.result or n == tr.err or v.rank or v.alias or spec_uses.get(n, 0) > 1 or \
+                    v.base not in ("integer", "real", "logical", "complex", "character") or \
+                    any(v.has(a) for a in ("save", "parameter", "pointer", "target", "allocatable")) or \
+                    n not in uses or any(nm is None for _, nm in uses[n]):
+                continue
+            groups = {}
+            for k, nm in uses[n]:
+                groups.setdefault(k, []).append(nm)
+            read = {k for k, nms in groups.items() if any(id(nm) not in lhs for nm in nms)}
+            for k, nms in groups.items():
+                if k in read or (read and n not in anew):
+                    continue
+                stmts = [lhs[id(nm)] for nm in nms]
+                if all(self.side_effect_free(st.items[2], p) for st in stmts):
+                    dead |= {id(st) for st in stmts}
+                    self.report.add("info", "dead-assignment")
+                else:
+                    tr.dead_kept |= {id(st) for st in stmts}
+        return dead
+
+    def overloads(self):
+        """(bindings and procedure components of all types, overloaded intrinsic operators, assignment(=)
+        overloaded): cached per program"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        cache = self.prog.__dict__.get("overloads_cache")
+        if cache is None:
+            procs, ops, assign = set(), set(), False
+            for m in self.prog.modules.values():
+                for t in m.types.values():
+                    procs |= set(t.bindings) | {c for c, cv in t.comps.items() if cv.base == "procedure"}
+                for g in walk(m.node, F.Generic_Spec):
+                    kind = str(g.items[0]).upper() if g.items and isinstance(g.items[0], str) else ""
+                    if kind == "OPERATOR":
+                        o = str(g.items[1]).lower()
+                        ops.add(OP_ALIAS.get(o, o))
+                    elif kind == "ASSIGNMENT":
+                        assign = True
+            cache = self.prog.__dict__["overloads_cache"] = (procs, ops, assign)
+        return cache
+
+    def may_be_derived(self, x, p):
+        """the expression may be of a derived type (unknown: True)"""
+        k = cls(x)
+        if k.endswith("_Literal_Constant"):
+            return False
+        if k == "Parenthesis":
+            return self.may_be_derived(x.items[1], p)
+        if k in ("Name", "Part_Ref"):
+            v = p.vars.get(lname(x.items[0] if k == "Part_Ref" else x))
+            return v is None or v.base not in INTRINSIC_BASES
+        if k == "Data_Ref":
+            first = x.items[0]
+            v = p.vars.get(lname(first.items[0] if cls(first) == "Part_Ref" else first))
+            for part in x.items[1:]:
+                if v is None or not v.tname:
+                    return True
+                t = self.prog.find_type(v.tname, self.mod)
+                v = self.prog.find_component(t, lname(part.items[0] if cls(part) == "Part_Ref" else part)) \
+                    if t is not None else None
+            return v is None or v.base not in INTRINSIC_BASES
+        if k == "Intrinsic_Function_Reference":
+            return lname(x.items[0]) in ("merge", "transfer", "reshape", "spread", "pack", "unpack", "cshift",
+                                         "eoshift", "max", "min")
+        its = getattr(x, "items", None) or ()
+        operands = [o for o in its if not isinstance(o, str) and o is not None]
+        if operands and any(isinstance(o, str) for o in its):       # operator: derived only via its operands
+            return any(self.may_be_derived(o, p) for o in operands)
+        return True
+
+    def side_effect_free(self, expr, p):
+        """expression without calls of non-intrinsic procedures, constructors or defined operators"""
+        from fparser.two.utils import walk
+        procs, ops, assign = self.overloads()
+        parts = set()                       # components (Part_Ref after the first part of a Data_Ref)
+        top = expr
+        while cls(top) == "Parenthesis":
+            top = top.items[1]
+        if assign and self.may_be_derived(top, p):          # assignment(=) of a derived type to x
+            return False
+        for x in [expr] + walk(expr):
+            k = cls(x)
+            if k in ("Function_Reference", "Structure_Constructor") or "Defined_" in k:
+                return False
+            its = getattr(x, "items", None) or ()
+            if any(isinstance(o, str) and OP_ALIAS.get(o.lower(), o.lower()) in ops for o in its) and \
+                    any(self.may_be_derived(o, p) for o in its if not isinstance(o, str) and o is not None):
+                return False                # operator overloaded for some type, an operand may be of that type
+            if k == "Data_Ref":
+                for part in x.items[1:]:
+                    nm = lname(part.items[0] if cls(part) == "Part_Ref" else part)
+                    if nm in procs:
+                        return False
+                    parts.add(id(part))
+        for x in [expr] + walk(expr):
+            if cls(x) == "Part_Ref" and id(x) not in parts:
+                v = p.vars.get(lname(x.items[0]))
+                if v is None or not v.rank or v.base == "procedure":    # not a local / dummy array: a call
+                    return False
+        return True
 
     @staticmethod
     def cpp_regions(p):
@@ -1374,6 +1490,10 @@ def inner_blocks(node):
             elif cur is not None and cls(x) != "Comment":
                 cur.append(x)
     return res
+
+
+INTRINSIC_BASES = ("integer", "real", "logical", "character", "complex")
+OP_ALIAS = {".eq.": "==", ".ne.": "/=", ".lt.": "<", ".le.": "<=", ".gt.": ">", ".ge.": ">="}
 
 
 def loop_var(do):
