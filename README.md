@@ -334,6 +334,8 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
   (`noexcept`; arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
+- C / C++ names of the methods (struct members, function pointer typedefs, `<method>_wrapper`): the declared spelling of
+  the binding
 - the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions, each with a C
   function pointer typedef of the same name, e.g. `project_AbstractThing_evaluate`, used by the struct); the
   module `project_c_wrapper_<module>` (file of the same name; procedures named like the bindings,
@@ -341,7 +343,8 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
   `CWrapperThing_type`: extends the abstract
   type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
   makes one; factories: `CWrapperThingFactory_type` and register / unregister
-- factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
+- factories: the `register` / `unregister` procedures of `factory = {...}` are not wrapped themselves (only for the generated
+  registration); C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
   in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor
   unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)` (Fortran `intent(out)` dummy) or
   `std::unique_ptr<AbstractThing> create_thing(...)` (Fortran function with an allocatable `class(...)` result): `release()` to

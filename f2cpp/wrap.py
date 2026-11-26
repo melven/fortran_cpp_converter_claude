@@ -1263,6 +1263,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 continue
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
                 continue
+            if p.name in {n.lower() for f in cfg["wrap_reverse_factories"].values() for n in f.values()}:
+                continue        # registration of C++ factories: called by their constructor / destructor only
             if self.translated_here(None, None, p):
                 self.translated_method(None, None, p, hpp, cpp)
                 continue

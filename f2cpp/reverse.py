@@ -70,7 +70,7 @@ class ReverseMixin:
         or "handle" (temporary handle of a wrapped object)"""
         prog, cfg = self.prog, self.cfg
         tr = self.tr(iface)
-        tramp = f"{bd.name}_wrapper"
+        tramp = f"{bd.spelling}_wrapper"
         err = tr.err
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
         this = iface.pass_arg
@@ -197,7 +197,7 @@ class ReverseMixin:
                 xh, xcls = self.c_type_name(xt), prog.type_name(xt.name, self.mod)
                 setup, destroy = self.c_name(xt, "setup"), self.c_name(xt, "destroy")
                 self.use_binding(xt, [setup, destroy])
-                slot = f"{bd.name}_{a}"         # the handle: in the C struct (Fortran only), released by the final
+                slot = f"{bd.spelling}_{a}"         # the handle: in the C struct (Fortran only), released by the final
                 stored.append((slot, destroy, xcls, a))
                 c_params.append(f"{xh}* {a}")
                 f_dummies.append(a)
@@ -642,11 +642,12 @@ class ReverseMixin:
             if bd.non_overridable:          # cannot be overridden by the Fortran bridge: stays Fortran
                 continue
             this = iface.pass_arg
-            m = self.forward(lt, bd, iface, proc=f"{self.c_class(lt).lower()}_cpp_{bd.name}",
-                             aiface=f"{ht}_{bd.name}", funptr=f"{this}%{bd.name}_fn",
+            m = self.forward(lt, bd, iface, proc=f"{self.c_class(lt).lower()}_cpp_{bd.spelling}",
+                             aiface=f"{ht}_{bd.spelling}", funptr=f"{this}%{bd.spelling}_fn",
                              self_c="void* userData", self_dummy="userData", self_actual=f"{this}%userData",
                              cpp_obj=f"static_cast<{cls}*>(userData)", cls=cls, objects="owner")
-            m["fn"], m["proc"], m["typedef"] = f"{bd.name}_fn", f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{ht}_{bd.name}"
+            m["fn"], m["proc"] = f"{bd.spelling}_fn", f"{self.c_class(lt).lower()}_cpp_{bd.spelling}"
+            m["typedef"] = f"{ht}_{bd.spelling}"
             methods.append((bd, iface, m))
         live = [m for m in methods if not m[2]["todo"]]
         # --- C++ class
@@ -791,7 +792,7 @@ class ReverseMixin:
                 continue
             this = iface.pass_arg
             proc = self.cw_proc_name(bridge, bd)
-            m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.name}", funptr=f"{this}%c%{bd.name}",
+            m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.spelling}", funptr=f"{this}%c%{bd.spelling}",
                              self_c=f"{ht}* self", self_dummy="this", self_actual=f"c_loc({this}%c)",
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
             m["proc"] = proc
@@ -803,7 +804,7 @@ class ReverseMixin:
         consts, const_todo = self.reverse_constants(lt)          # C struct: constants, functions, userData
         members = [f"  const char* {v.cname} = nullptr;" if k == "string" else
                    f"  {self.c_type(v)} {v.cname} = " + ("false;" if k == "logical" else "0;") for v, k in consts]
-        members += [f"  {ht}_{bd.name} {bd.name} = nullptr;" for bd, _, m in live]
+        members += [f"  {ht}_{bd.spelling} {bd.spelling} = nullptr;" for bd, _, m in live]
         kept = [s for _, _, m in live for s in m["stored"]]      # handles of stored arguments (Fortran only)
         members += [f"  void* {slot} = nullptr;  //!< Fortran: handle of the stored {a}" for slot, _, _, a in kept]
         if factory is None:
@@ -862,7 +863,7 @@ class ReverseMixin:
         hpp.emit(0, "")
         init = [f"  c_->{v.cname} = {v.cname}_.c_str();" if k == "string" else f"  c_->{v.cname} = {v.cname};"
                 for v, k in consts] + \
-            [f"  c_->{bd.name} = &{m['tramp']};" for bd, _, m in live] + \
+            [f"  c_->{bd.spelling} = &{m['tramp']};" for bd, _, m in live] + \
             (["  c_->destroy = &destroy_wrapper;"] if factory is None else []) + ["  c_->userData = this;"]
         reg, unreg = self.c_name(lt, "register"), self.c_name(lt, "unregister")
         if factory is None:
@@ -887,7 +888,7 @@ class ReverseMixin:
         # --- Fortran binding: interfaces of the functions, bind(C) struct (what C sees)
         for _, _, m in live:
             self.bridges += m["abstract"]
-        cw["binding_names"] += [f"{ht}_{bd.name}" for bd, _, _ in live] + [st]
+        cw["binding_names"] += [f"{ht}_{bd.spelling}" for bd, _, _ in live] + [st]
         if factory is None:
             self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", f"{cls}::destroy_wrapper", ["this"],
                                                     ["type(C_PTR), value :: this"])
@@ -897,7 +898,7 @@ class ReverseMixin:
                          f"  type, bind(C), public :: {st}"] + \
             [f"    type(C_PTR) :: {v.cname} = C_NULL_PTR  !< C string" if k == "string" else
              f"    {self.f_type(v)} :: {v.cname} = " + (".false." if k == "logical" else "0") for v, k in consts] + \
-            [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
+            [f"    type(C_FUNPTR) :: {bd.spelling} = C_NULL_FUNPTR" for bd, _, m in live] + \
             [f"    type(C_PTR) :: {slot} = C_NULL_PTR  !< handle of the stored {a}" for slot, _, _, a in kept] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
             ["    type(C_PTR) :: userData = C_NULL_PTR  !< the implementation (C++ or Fortran object)", f"  end type {st}", ""]
@@ -992,7 +993,7 @@ class ReverseMixin:
             [x for v, k in consts for x in (self.string_to_c(v) if k == "string" else
              [f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else
                                           f"fthing%ptr%{v.cname}")])] + \
-            [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
+            [f"    cthing%{bd.spelling} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
             [f"    ! {TODO}: {bd.spelling} not wrapped ({todo}): C++ {wcls}::{bd.spelling} throws"
              for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
@@ -1037,15 +1038,15 @@ class ReverseMixin:
         for bd, iface, _, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
-                     f"  if( other_.{bd.name} == nullptr )",
+                     f"  if( other_.{bd.spelling} == nullptr )",
                      f'    throw std::logic_error("{wcls}::{bd.spelling}: no implementation");']
             lines += [f"  {x}" for x in part["cpp_pre"]]
-            call = f"other_.{bd.name}(&other_{''.join(', ' + a for a in part['cpp_args'])});"
+            call = f"other_.{bd.spelling}(&other_{''.join(', ' + a for a in part['cpp_args'])});"
             lines.append(f"  {call}")
             lines += [f"  {x}" for x in part["cpp_mid"]]      # owned results first (also on errors)
             if part["has_err"]:
                 lines += ["  if( ierr != 0 )",
-                          f'    throw std::runtime_error("Error: calling C {ht}::{bd.name} function pointer in '
+                          f'    throw std::runtime_error("Error: calling C {ht}::{bd.spelling} function pointer in '
                           f'{wcls}::{bd.spelling}!");']
             lines += [f"  {x}" for x in part["cpp_post"]] + ["}", ""]
             self.emit_lines(cpp, lines)

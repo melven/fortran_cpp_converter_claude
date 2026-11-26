@@ -861,13 +861,17 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
     cw = read((d,), "project_c_wrapper_fn_factory_mod.F90")
     assert "class ThingMaker\n{" in hpp and "DictEntry" not in hpp
     assert "  virtual std::unique_ptr<AbstractThing> make(const Config& config) const = 0;" in hpp
-    assert "  project_ThingMaker_make make = nullptr;\n  project_ThingMaker_make_from_node make_from_node = nullptr;\n" in h
-    assert "  virtual std::unique_ptr<AbstractThing> make_from_node(int tixiHandle, const std::string& xml_path) const = 0;" in hpp
-    assert "typedef void (*project_ThingMaker_make_from_node)(const project_ThingMaker*, int, const char*, " \
+    assert "  project_ThingMaker_make make = nullptr;\n  project_ThingMaker_makeFromNode makeFromNode = nullptr;\n" in h
+    assert "  virtual std::unique_ptr<AbstractThing> makeFromNode(int tixiHandle, const std::string& xml_path) const = 0;" in hpp
+    assert "typedef void (*project_ThingMaker_makeFromNode)(const project_ThingMaker*, int, const char*, " \
            "project_AbstractThing**);" in flat(h)
     assert "    allocate(xml_path_c, source=trim(node%xml_path) // C_NULL_CHAR)\n" in cw and \
         "    call f(c_loc(this%c), node%tixiHandle, xml_path_c, thing_p)\n" in cw
-    assert "thingMaker->make_from_node(tixiHandle, std::string(xml_path));" in read((d,), "fn_factory_mod.cpp")
+    assert "thingMaker->makeFromNode(tixiHandle, std::string(xml_path));" in read((d,), "fn_factory_mod.cpp")
+    assert "  static void makeFromNode_wrapper(" in hpp          # C / C++ names: declared spelling of the binding
+    b = read((d,), "fn_factory_mod_c_binding.F90")
+    assert "register_maker" not in b + hpp and "project_unregister_maker" not in b     # factory registration only
+    assert "subroutine project_ThingMaker_register(" in cw and "call unregister_maker(" in cw
     assert "    std::unique_ptr<AbstractThing> thing_u = thingMaker->make(*config_w);\n" \
            "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;" in read((d,), "fn_factory_mod.cpp")
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)\n  end function make" in cw

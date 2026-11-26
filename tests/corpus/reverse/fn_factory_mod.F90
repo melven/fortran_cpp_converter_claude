@@ -12,7 +12,7 @@ module fn_factory_mod
   type, abstract, extends(DictEntry_type) :: ThingMaker_type
   contains
     procedure(make_iface), deferred :: make
-    procedure(make_from_node_iface), deferred :: make_from_node
+    procedure(make_from_node_iface), deferred :: makeFromNode
   end type ThingMaker_type
 
   abstract interface
