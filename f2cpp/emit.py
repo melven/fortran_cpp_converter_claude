@@ -555,15 +555,19 @@ class ModuleEmitter:
 
         A local is declared before the first top-level statement that uses it (scopes stay intact);
         a loop variable used only inside loops over it is declared in each for statement."""
-        from fparser.two.utils import walk
+        from fparser.two.utils import walk, StmtBase
         from fparser.two import Fortran2003 as F
         execs = [c for c in p.node.content if cls(c) == "Execution_Part"]
         if not execs or p.internal or walk(execs[0], (F.Goto_Stmt, F.Computed_Goto_Stmt)):
             return {}, set()
-        if any(str(c).startswith(CPP_MARK) for c in walk(p.node, F.Comment)):
-            moved_ok = False            # #ifdef regions: declarations stay at the top (a branch may define it)
-        else:
-            moved_ok = True
+        regions = self.cpp_regions(p)
+        moved_ok = regions is not None      # unbalanced #if / #endif in the body: declarations stay at the top
+        in_region = set()                   # variables used or declared inside #if regions: stay at the top
+        if regions:
+            for st in walk(p.node, StmtBase):
+                line = getattr(getattr(st, "item", None), "span", (None,))[0]
+                if line is not None and any(a < line < b for a, b in regions):
+                    in_region |= {lname(nm) for nm in walk(st, F.Name)}
         top = [c for c in execs[0].content if cls(c) != "Comment"]
         uses = {}                       # name -> [(top index, Name node or None for return)]
         for k, st in enumerate(top):
@@ -597,6 +601,8 @@ class ModuleEmitter:
                 continue
             if spec_uses.get(n, 0) > 1:     # used in the declaration of another variable: keep at the top
                 continue
+            if n in in_region:              # a branch of an #if may define it
+                continue
             loops = [d for st in top for d in walk(st, F.Block_Nonlabel_Do_Construct)
                      if loop_var(d) == n]
             inside = {id(nm) for d in loops for nm in walk(d, F.Name)}
@@ -612,6 +618,29 @@ class ModuleEmitter:
                     rest = [(k, nm) for k, nm in uses[n] if k not in own]
                 moved[n] = min(k for k, _ in rest)
         return moved, loop_local
+
+    @staticmethod
+    def cpp_regions(p):
+        """(first line, last line) of the #if ... #endif regions in a procedure (directives before its first
+        statement, e.g. an #endif closing a region around the previous procedure, are ignored); None if they are
+        not balanced inside the procedure"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        first = next((c for c in p.node.content if cls(c) != "Comment"), None)
+        start = getattr(getattr(first, "item", None), "span", (0,))[0]
+        marks = sorted((c.item.span[0], str(c)[len(CPP_MARK):].strip()) for c in walk(p.node, F.Comment)
+                       if str(c).startswith(CPP_MARK) and c.item is not None and c.item.span[0] > start)
+        regions, stack = [], []
+        for line, d in marks:
+            word = re.match(r"#\s*(\w+)", d)
+            word = word.group(1) if word else ""
+            if word in ("if", "ifdef", "ifndef"):
+                stack.append(line)
+            elif word == "endif":
+                if not stack:
+                    return None
+                regions.append((stack.pop(), line))
+        return None if stack else regions
 
     @staticmethod
     def dead_after_loops(n, top, uses):

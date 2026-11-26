@@ -1130,6 +1130,18 @@ def test_long_log_messages_in_a_local_string(tmp_path):
         cxx((str(tmp_path),), "log_mod")
 
 
+def test_declarations_next_to_preprocessor_regions(tmp_path):
+    """#endif before a procedure: ignored; a variable used inside an #if region stays at the top, others move"""
+    translate([os.path.join(CORPUS, "ifdef_mod.F90")], cfg(), str(tmp_path))
+    cpp = read((str(tmp_path),), "ifdef_mod.cpp")
+    body = cpp.split("void block_sums(")[1].split("\n}\n")[0]
+    assert "{\n  int nd;\n" in body                                   # used in #ifdef DEBUG
+    assert "  int nr = x.size() / nb;" in body and "    int rb = (i - 1) * nr;" in body
+    assert "      scalar t = x(rb + j - 1);" in body
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((str(tmp_path),), "ifdef_mod")
+
+
 def test_negated_check_conditions(tmp_path):
     """ASSERT / CHK_ARGUMENT: the negated condition in if and message (n < 0, De Morgan); real comparisons stay
     !(x >= 0.0) (NaN); .true. dropped, .false. throws"""
