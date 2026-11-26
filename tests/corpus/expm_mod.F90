@@ -1,5 +1,6 @@
 !> @file: expm_mod.F90
 !> @brief Matrix exponential (synthetic test corpus)
+!! @date 2020-01-01
 !
 ! Some licence text.
 #include "project_macros.h"

@@ -15,7 +15,7 @@ import re
 from fparser.two.utils import walk
 from fparser.two import Fortran2003 as F
 
-from .emit import ModuleEmitter, BANNER, squeeze, strip_blank
+from .emit import ModuleEmitter, BANNER, squeeze, strip_blank, today
 from .model import cls, lname, items_of
 from .translate import TODO, Untranslatable, FORTRAN_SEPARATORS
 from .reverse import ReverseMixin
@@ -1088,7 +1088,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         for c in self.header_comments():
             line = re.sub(re.escape(os.path.basename(self.src)), name, str(c), flags=re.I)
             line = re.sub(r"(@file:?\s*)\S+\.(f90|f|pfunit|pf)\b", lambda m: m.group(1) + name, line, flags=re.I)
-            lines.append(line)
+            lines.append(today(line))
         return self.brief(lines, prefix)
 
     # ------------------------------------------------------------------ module

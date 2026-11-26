@@ -183,6 +183,10 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
     # file headers: original header, @file renamed, @brief prefixed
     assert hpp.startswith("//! @file thing_mod_c_wrapper.hpp\n//! @brief C++ wrapper of C structs: things evaluated")
+    import datetime
+    today = datetime.date.today().isoformat()       # @date of the file headers: the date of the generation
+    assert f"\n//! @date {today}\n" in hpp and f"\n!! @date {today}\n" in (tmp_path / "thing_mod_c_binding.F90").read_text()
+    assert f"\n!! @date {today}\n" in (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()
     assert cpp.startswith("//! @file thing_mod_c_wrapper.cpp\n//! @brief C++ wrapper of C structs: things evaluated")
     assert (tmp_path / "project_c_wrapper_thing_mod.F90").read_text().startswith(
         "!> @file project_c_wrapper_thing_mod.F90\n!> @brief Fortran types implemented in C++: things evaluated")

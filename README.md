@@ -152,7 +152,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped |
 | doxygen `!>` / `!<` | `//!` / `//!<` (style `doxygen = "///"` for the other style) |
 | `integer, intent(in) :: arg !< text` (also `!>` lines before the declaration) | `//! @param[in] arg text` in the documentation of the function in the header; result: `@return` |
-| file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |
+| file header comment (first comment block) | top of `.hpp` and `.cpp` (and of generated bindings), file name after `@file` replaced, `@date` set to the date of the generation |
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |
 | type, procedure and binding names | spelling of the definition (`Block_LU_type` → `Block_LU`, `myFunction`); TODO if the source is inconsistent |
 
