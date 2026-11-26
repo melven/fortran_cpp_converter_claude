@@ -1104,6 +1104,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.cpp_data_used, self.fortran_data_used = False, False   # class(*): C++ / Fortran data in the Any struct
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
+        # factories only (nothing uses their Fortran part, they are sinks): no c_wrapper module, all in the binding
+        # (its C declarations, register / unregister, in the same header)
+        rev = [t for t in mod.types.values() if t.name in self.reverse_types()]
+        self.cw_in_binding = bool(rev) and all(t.name in cfg["wrap_reverse_factories"] for t in rev)
         self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
         self.cwc = {"hpp": self.tr(), "cpp": self.tr()}     # C++ CWrapper<Thing> (Fortran implementations)
@@ -1352,7 +1356,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
              f"  use {mod.spelling}"]
         if needs_str:
             b.append(f"  use {cfg['wrap_string_in'][0]}, only: {cfg['wrap_string_in'][1]}")
-        b += sorted(uses | self.extra_uses)
+        b += sorted(uses | self.extra_uses | (self.cw["uses"] if self.cw_in_binding else set()))
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
@@ -1369,10 +1373,13 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
-        b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
+        if self.cw_in_binding:                      # the Fortran part of the factories
+            b += self.cw["spec"]
+        b += ["contains"] + short_names(fb + (self.cw["procs"] if self.cw_in_binding else [])) + \
+            ["", f"end module {mod.spelling}_c_binding", ""]
         self.finish_module(b)
         cw = None                                   # c_wrapper module: Fortran types implemented in C++
-        if self.cw["spec"] or self.cw["procs"]:
+        if (self.cw["spec"] or self.cw["procs"]) and not self.cw_in_binding:
             name = self.cwrapper_module(mod)
             what = ", ".join(t.spelling or t.name for t in self.wrapped_types() if t.name in self.reverse_types())
             cw = (self.fortran_file_header(f"{name}.F90", "Fortran types implemented in C++: ") or

@@ -25,7 +25,8 @@ def test_reverse_wrapped_types(tmp_path):
     fh, fc, fb = ((tmp_path / f).read_text() for f in ("thing_factory_mod.hpp", "thing_factory_mod.cpp",
                                                          "thing_factory_mod_c_binding.F90"))
     tw = (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()          # the Fortran types implemented in C++
-    fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
+    fw = fb             # factories only: their Fortran part is in the binding (no c_wrapper module)
+    assert not (tmp_path / "project_c_wrapper_thing_factory_mod.F90").exists()
     # long use statements: "&" also on the continued line, aligned after "only: "
     assert "  use thing_factory_mod, only: AbstractThingFactory_type, register_thing_factory, &\n" \
            "  &                            unregister_thing_factory\n" in fw
@@ -113,12 +114,12 @@ def test_reverse_wrapped_types(tmp_path):
     ref = run_exe(["./ref"], os.path.join(d, "ref"))
     fsrc = [os.path.join(SUPPORT, "project_str.F90")] + wrapped + [os.path.join(r, "thing_user_mod.F90"), "config_mod_c_binding.F90",
             "thing_mod_c_binding.F90", "project_c_wrapper_thing_mod.F90", "thing_factory_mod_c_binding.F90",
-            "project_c_wrapper_thing_factory_mod.F90", os.path.join(r, "mixed_main.F90")]
+            os.path.join(r, "mixed_main.F90")]
     for f in fsrc:
         run(ff + [f], d)
     # the Fortran library references no symbol of the C++ library
     for o in ("thing_mod_c_binding.o", "thing_factory_mod_c_binding.o", "config_mod_c_binding.o",
-              "project_c_wrapper_thing_mod.o", "project_c_wrapper_thing_factory_mod.o"):
+              "project_c_wrapper_thing_mod.o"):
         assert "_Z" not in run(["nm", "-u", o], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod"):
@@ -858,7 +859,7 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
     srcs = [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "fn_factory_mod.F90")]
     report, _ = translate([], c, d, [os.path.join(r, "dict_mod.F90"), os.path.join(r, "node_mod.F90")], wrap=srcs)
     hpp, h = read((d,), "fn_factory_mod.hpp"), read((d,), "fn_factory_mod.h")
-    cw = read((d,), "project_c_wrapper_fn_factory_mod.F90")
+    cw = read((d,), "fn_factory_mod_c_binding.F90")      # factories only: no c_wrapper module
     assert "class ThingMaker\n{" in hpp and "DictEntry" not in hpp
     assert "  virtual std::unique_ptr<AbstractThing> make(const Config& config) const = 0;" in hpp
     assert "  project_ThingMaker_make make = nullptr;\n  project_ThingMaker_makeFromNode makeFromNode = nullptr;\n" in h
@@ -870,7 +871,7 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
     assert "thingMaker->makeFromNode(tixiHandle, std::string(xml_path));" in read((d,), "fn_factory_mod.cpp")
     assert "  static void makeFromNode_wrapper(" in hpp          # C / C++ names: declared spelling of the binding
     b = read((d,), "fn_factory_mod_c_binding.F90")
-    assert "register_maker" not in b + hpp and "project_unregister_maker" not in b     # factory registration only
+    assert "register_maker" not in hpp and "project_unregister_maker" not in b and "project_register_maker" not in b
     assert "subroutine project_ThingMaker_register(" in cw and "call unregister_maker(" in cw
     assert "    std::unique_ptr<AbstractThing> thing_u = thingMaker->make(*config_w);\n" \
            "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;" in read((d,), "fn_factory_mod.cpp")
@@ -882,8 +883,7 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
         for f in [os.path.join(SUPPORT, "project_str.F90"), os.path.join(r, "dict_mod.F90"),
                   os.path.join(r, "node_mod.F90")] + srcs + [
                 "config_mod_c_binding.F90", "thing_mod_c_binding.F90",
-                                                               "project_c_wrapper_thing_mod.F90", "fn_factory_mod_c_binding.F90",
-                                                               "project_c_wrapper_fn_factory_mod.F90"]:
+                                                               "project_c_wrapper_thing_mod.F90", "fn_factory_mod_c_binding.F90"]:
             run(ff + [f], d)
     if shutil.which("g++") and os.path.isdir(EIGEN):
         for f in ("config_mod", "thing_mod", "fn_factory_mod"):
