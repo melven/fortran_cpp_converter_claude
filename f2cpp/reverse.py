@@ -189,10 +189,16 @@ class ReverseMixin:
                         todo = f"argument {v.cname}: expanded component {comp} ({kind})"
             elif v.base == "type" and not v.rank and a in stored_names:     # stored: kept by the C++ object
                 xt = prog.find_type(v.tname, self.mod)
-                if xt is None or xt.module.name not in getattr(prog, "wrapped", ()) or not self.is_root(xt) or \
-                        v.has("allocatable") or objects != "handle" or not bd.deferred or \
-                        lt.name not in cfg["wrap_reverse_cpp"]:
-                    todo = f"stored argument {v.cname}: a wrapped root type in a deferred binding of an interop = cpp type"
+                why = "its type is not parsed (give its module with -W or -w)" if xt is None else \
+                    f"{v.tname} is not wrapped (give its module with -W or -w)" \
+                    if xt.module.name not in getattr(prog, "wrapped", ()) else \
+                    f"{v.tname} is not a root type" if not self.is_root(xt) else \
+                    "allocatable" if v.has("allocatable") else \
+                    "only for bidirectional types" if objects != "handle" else \
+                    f"binding {bd.spelling} is not deferred" if not bd.deferred else \
+                    f'{lt.spelling or lt.name} is not interop = "cpp"' if lt.name not in cfg["wrap_reverse_cpp"] else None
+                if why:
+                    todo = f"stored argument {v.cname}: {why}"
                     continue
                 xh, xcls = self.c_type_name(xt), prog.type_name(xt.name, self.mod)
                 setup, destroy = self.c_name(xt, "setup"), self.c_name(xt, "destroy")

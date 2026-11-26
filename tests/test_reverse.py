@@ -782,6 +782,10 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
     assert "    if (c_associated(counter_old)) call project_Counter_destroy(counter_old)" in cw
     assert "    attach_counter = this%c%attach_counter" in cw and \
         "    end if\n    if (c_associated(attach_counter)) call project_Counter_destroy(attach_counter)\n" in cw
+    # not stored: the reason in the TODO (here: the module of the stored type only given with -I)
+    translate([], c, str(tmp_path / "i"), [counter], wrap=[src])
+    assert "TODO(f2cpp): stored argument counter: counter_type is not wrapped (give its module with -W or -w)" in \
+        read((str(tmp_path / "i"),), "sealed_thing_mod_c_binding.F90")
     if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
         return
     (tmp_path / "drv.F90").write_text("""module drv_mod
