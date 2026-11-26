@@ -121,10 +121,10 @@ def test_features(out):
     # maxloc / minloc: helper lambdas, defined once before the first statement using them (also else if)
     argmax = cpp[cpp.index("int argmax("):]
     argmax = argmax[:argmax.index("\n}")]
-    assert "{\n  auto maxloc = [](const auto& x_) { Eigen::Index i_; x_.maxCoeff(&i_); " \
-           "return static_cast<int>(i_) + 1; };\n  auto minloc = " in argmax
-    assert "  int k = maxloc(x.cwiseAbs()) + minloc(x);\n  auto maxloc2 = " in argmax
-    assert "Eigen::VectorXi idx = maxloc2(a);" in argmax and argmax.count("auto maxloc =") == 1
+    assert "{\n  constexpr auto maxloc = [](const auto& x_) { Eigen::Index i_; x_.maxCoeff(&i_); " \
+           "return static_cast<int>(i_) + 1; };\n  constexpr auto minloc = " in argmax
+    assert "  int k = maxloc(x.cwiseAbs()) + minloc(x);\n  constexpr auto maxloc2 = " in argmax
+    assert "Eigen::VectorXi idx = maxloc2(a);" in argmax and argmax.count("constexpr auto maxloc =") == 1
     assert "Eigen::VectorXi one = (Eigen::VectorXi(1) << minloc(x)).finished();" in argmax
     assert "else if (maxloc(x) > 2)" in argmax
     assert "text = std::to_string(maxloc(x));" in argmax       # size-1 array printed: the scalar
@@ -1108,6 +1108,22 @@ def test_argument_docs_of_procedure_and_dropped_dummies(tmp_path):
     assert "//! @param[in] residual function to calculate the residual" in hpp
     assert "residual vector" not in hpp and "calculate" not in cpp
     assert "vec f(x.size());  // residual vector" in cpp
+
+
+def test_long_log_messages_in_a_local_string(tmp_path):
+    """call longer than line_width: the longest string concatenation argument becomes const std::string msg
+    (msg2, ... if msg is a variable or in scope); short calls unchanged"""
+    c = cfg(line_width=100)
+    c["call_templates"]["log_error"] = "Logger({0}).log_error({1});"
+    c["function_map"]["str"] = "std::to_string"
+    c["name_headers"]["Logger"] = '"project_log.hpp"'
+    translate([os.path.join(CORPUS, "log_mod.F90")], c, str(tmp_path))
+    cpp = read((str(tmp_path),), "log_mod.cpp")
+    assert '  const std::string msg2 = "Iteration " + std::to_string(iter) + ", failures " +\n' in cpp
+    assert '  Logger("solver").log_error(msg2);\n  Logger("solver").log_error("short");' in cpp
+    assert '    const std::string msg3 = "Failures in iteration "' in cpp and "log_error(msg3);" in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((str(tmp_path),), "log_mod")
 
 
 def test_negated_check_conditions(tmp_path):

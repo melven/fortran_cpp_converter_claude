@@ -60,6 +60,48 @@ MATH1 = {"sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "at
 EIGEN_ARRAY_FN = {"asin": "asin", "acos": "acos", "atan": "atan"}
 
 
+def arg_spans(line):
+    """(start, end) of every argument of every call in a C++ line (string literals and a trailing // comment
+    respected)"""
+    spans, stack, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+        elif line.startswith("//", i):
+            break
+        elif c == "(":
+            stack.append(i + 1)
+        elif c == "," and stack:
+            spans.append((stack[-1], i))
+            stack[-1] = i + 1
+        elif c == ")" and stack:
+            spans.append((stack.pop(), i))
+        i += 1
+    return spans
+
+
+def top_level_plus(text):
+    """text contains a + outside of parentheses and string literals"""
+    depth, i, n = 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif text.startswith(" + ", i) and depth == 0:
+            return True
+        i += 1
+    return False
+
+
 def cancel_shift(a, b):
     """integer comparison of two shifted values (i + 1 == j + 1, from 0-based indices): the same top-level
     constant on both sides cancels"""
@@ -1545,6 +1587,8 @@ class Translator:
                 self.emit(ind, "// F: " + str(node).split("\n")[0])
             n0 = len(self.out)
             m(node, ind)
+            if k == "Call_Stmt":
+                self.hoist_message(n0, ind)
             if id(node) in self.body_decl:          # declared at this assignment (loop body)
                 self.declare_here(self.body_decl[id(node)], n0, ind)
             if self.notes and k not in self.CONSTRUCTS and len(self.out) > n0:
@@ -1565,26 +1609,58 @@ class Translator:
             self.fortran_comment(node, ind, f"not translated (f2cpp internal error: {type(e).__name__})")
 
     def helper(self, name, definition):
-        """name of a local helper lambda (auto name = definition;), defined before the current statement unless
-        a definition is visible there (same or enclosing scope); None outside of statements"""
+        """name of a local helper lambda without captures (constexpr auto name = definition;), defined before the
+        current statement unless a definition is visible there (same or enclosing scope); None outside of
+        statements"""
         if not self.frames:
             return None
-        ind, line = self.frames[-1][0], f"auto {name} = {definition};"
+        ind, line = self.frames[-1][0], f"constexpr auto {name} = {definition};"
         for fi, pending in reversed(self.frames):
             if line in pending and fi <= ind:
                 return name
+        if self.visible(lambda s: s == line, ind):
+            return name
+        self.frames[-1][1].append(line)
+        self.helper_lines.add(line)
+        return name
+
+    def visible(self, test, ind):
+        """a line of self.out (stripped) for which test is true is in scope at indentation ind"""
         low = 2 * ind
         for out_line in reversed(self.out):
             s = out_line.split("\n")[0]
             if not s.strip() or s.lstrip().startswith("#"):
                 continue
             depth = len(s) - len(s.lstrip())
-            if s.strip() == line and depth <= low:
-                return name
+            if depth <= low and test(s.strip()):
+                return True
             low = min(low, depth)
-        self.frames[-1][1].append(line)
-        self.helper_lines.add(line)
-        return name
+        return False
+
+    def hoist_message(self, n0, ind):
+        """a call statement longer than line_width: its longest string concatenation argument into a local
+        const std::string msg (msg2, ... if a msg is in scope or a variable)"""
+        width = self.cfg["line_width"]
+        if not width or len(self.out) != n0 + 1 or len(self.out[n0]) <= width or "\n" in self.out[n0]:
+            return
+        line = self.out[n0]
+        best = None
+        for s, e in arg_spans(line):
+            text = line[s:e].strip()
+            if '"' in text and top_level_plus(text) and (best is None or e - s > best[1] - best[0]):
+                best = (s, e)
+        if best is None:
+            return
+        k = 1
+        while True:
+            name = "msg" if k == 1 else f"msg{k}"
+            if self.lookup(name) is None and not self.visible(lambda t, p=f"const std::string {name} = ": t.startswith(p), ind):
+                break
+            k += 1
+        s, e = best
+        lead = line[s:e][:len(line[s:e]) - len(line[s:e].lstrip())]
+        self.out[n0:] = [" " * (2 * ind) + f"const std::string {name} = {line[s:e].strip()};",
+                         line[:s] + lead + name + line[e:]]
 
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
