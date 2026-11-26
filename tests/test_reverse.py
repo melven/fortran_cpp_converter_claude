@@ -6,7 +6,7 @@ import shutil
 
 from f2cpp import config
 from f2cpp.cli import translate
-from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read
+from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read, undocumented
 
 
 def test_reverse_wrapped_types(tmp_path):
@@ -177,7 +177,7 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     hpp, cpp = (tmp_path / "thing_mod_c_wrapper.hpp").read_text(), (tmp_path / "thing_mod_c_wrapper.cpp").read_text()
     assert "Wrapper" not in (tmp_path / "thing_mod.hpp").read_text().replace("_wrapper", "")
     assert '#include "thing_mod.hpp"\n\n#include "thing_mod.h"  // the C struct (internal header)\n\nnamespace project\n{\n\n' \
-           'namespace AbstractThing_private\n{\n' in hpp
+           '//! internals of AbstractThing: its implementations behind a C struct\nnamespace AbstractThing_private\n{\n' in hpp
     assert "  project_AbstractThing other_{};  //!< the struct of the implementation (copy)" in hpp
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
     # file headers: original header, @file renamed, @brief prefixed
@@ -889,3 +889,27 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
         for f in ("config_mod", "thing_mod", "fn_factory_mod"):
             run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", f + ".cpp",
                  "-o", f + "_cxx.o"], d)
+
+
+def test_generated_declarations_are_documented(tmp_path):
+    """every declaration that f2cpp generates for wrapped and bidirectional modules (classes, _private namespaces,
+    toC / wrapFromC, methods, members, factories, listeners, CWrapper classes) has a doxygen comment; class
+    comments: the documentation of the Fortran type, then the role of the class"""
+    w, r = os.path.join(CORPUS, "wrapped"), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('[types]\nAbstractListener_type.interop = "listener"\n'
+                                     'AbstractThing_type.interop = "bidirectional"\nStateModel_type.interop = "bidirectional"\n'
+                                     'ThingMaker_type.factory = {register = "register_maker", unregister = "unregister_maker"}\n'
+                                     'MySolver_type.constants = ["n", "params"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path), [os.path.join(r, "dict_mod.F90"), os.path.join(r, "node_mod.F90")],
+              wrap=[os.path.join(w, f) for f in ("mysolver_mod.F90", "body_mod.F90", "sphere_mod.F90", "listen_mod.F90",
+                                                 "fstate_mod.F90")] +
+              [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "state_model_mod.F90", "fn_factory_mod.F90")])
+    files = glob.glob(str(tmp_path / "*.hpp"))
+    assert len(files) >= 9
+    missing = {os.path.basename(f): undocumented(open(f).read()) for f in files}
+    assert not {f: m for f, m in missing.items() if m}
+    fn = read((str(tmp_path),), "fn_factory_mod.hpp")
+    assert "//! makes things; an entry of the dictionary of makers\n//! factory implemented in C++" in fn
+    assert "//! internals of ThingMaker: its C struct\nnamespace ThingMaker_private" in fn
+    assert "//! iteration parameters\n//! C++ copy of the Fortran type SolverParams_type" in read((str(tmp_path),), "mysolver_mod.hpp")

@@ -570,9 +570,11 @@ class ReverseMixin:
     def fortran_any_decl(self):
         """C++ (.hpp): Fortran data (class(*)) of calls in a std::any (definitions: fortran_any_cpp)"""
         ht = self.cppany["ht"]
-        return [f"namespace {self.any_ns()}", "{",
-                f"std::any any_from_fortran({ht}* c);  //!< Fortran data (class(*)): in a std::any (copies share it)",
-                f"const {ht}* any_to_fortran(const std::any& a);  //!< back to Fortran (empty: NULL; C++ data throws)",
+        return [f"//! internals of {self.mod.spelling}: class(*) data of Fortran in C++", f"namespace {self.any_ns()}", "{",
+                "//! Fortran data (class(*)): in a std::any (copies share it, the last one deletes it in Fortran)",
+                f"std::any any_from_fortran({ht}* c);",
+                "//! back to Fortran (empty std::any: NULL; C++ data throws std::invalid_argument)",
+                f"const {ht}* any_to_fortran(const std::any& a);",
                 "}", ""]
 
     def fortran_any_cpp(self):
@@ -651,11 +653,16 @@ class ReverseMixin:
             methods.append((bd, iface, m))
         live = [m for m in methods if not m[2]["todo"]]
         # --- C++ class
+        hpp.emit(0, f"//! internals of {cls}: its Fortran object")
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"{ht}* toC(const {cls}& l);  //!< the Fortran object of the listener")
+        hpp.emit(0, "//! the Fortran object of the listener l (passed to set_listener in Fortran)")
+        hpp.emit(0, f"{ht}* toC(const {cls}& l);")
         hpp.emit(0, "}")
         hpp.emit(0, "")
+        for line in self.type_doc(lt, f"listener (Fortran type {lt.spelling or lt.name}): implement the methods in "
+                                      "C++, set the object as listener of wrapped objects"):
+            hpp.emit(0, line)
         hpp.emit(0, f"class {name}")
         hpp.emit(0, "{")
         hpp.emit(0, "public:")
@@ -816,11 +823,20 @@ class ReverseMixin:
         strings = [v for v, k in consts if k == "string"]     # C++: held by the object, c_str() in the struct
         cnames = ", ".join(v.cname for v, _ in consts)
         # --- C++ class
+        hpp.emit(0, f"//! internals of {cls}: its C struct")
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"{ht}* toC(const {cls}& x);  //!< the C struct of x")
+        hpp.emit(0, "//! the C struct of x (function pointers, userData: x), passed to Fortran")
+        hpp.emit(0, f"{ht}* toC(const {cls}& x);")
         hpp.emit(0, "}")
         hpp.emit(0, "")
+        ftn = lt.spelling or lt.name
+        role = (f"factory implemented in C++ (Fortran type {ftn}): the constructor registers it under its name in the "
+                "Fortran registration, the destructor unregisters it") if factory is not None else \
+            (f"Fortran type {ftn} implemented in C++: derive from this class; Fortran calls the methods through the "
+             "C struct")
+        for line in self.type_doc(lt, role):
+            hpp.emit(0, line)
         hpp.emit(0, f"class {name}")
         hpp.emit(0, "{")
         hpp.emit(0, "public:")
@@ -1013,7 +1029,7 @@ class ReverseMixin:
         hpp, cpp = self.cwc["hpp"], self.cwc["cpp"]
         ns = self.private_ns(name)
         over = "//! override base class implementation -> call corresponding C function pointer"
-        self.emit_lines(hpp, [f"namespace {ns}", "{", "",
+        self.emit_lines(hpp, [f"//! internals of {cls}: its implementations behind a C struct", f"namespace {ns}", "{", "",
                               f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}): a copy of the struct; "
                               "its implementation (userData) outlives this object",
                               f"class {wcls} final : public {cls}", "{", "public:",

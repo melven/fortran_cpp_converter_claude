@@ -52,6 +52,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `parse_type_spec`, `parse_array_spec`, `parse_decl`, `parse_proc_decl`: declarations → `Var`.
 - `collect_param_docs`: `!<` / `!>` documentation of dummies. `collect_proc`, `collect_type`, `collect_module`: parse tree → symbols.
 - `_target_name`, `classify_pointers`: Fortran pointers → owned (`unique_ptr`) / references / raw.
+- `leading_doc`: comment lines before a type statement (`TypeDef.doc`).
 - `Program`: `add`, `finish` (cross-module analysis), `inconsistent_case`, `classify_callbacks` (user-data callbacks), `unwrap_types` (wrapper types → wrapped type + companions), `mark_named_elements`, `file_stem`, `decide_int_vectors` (interface of a module: Eigen; inside: by uses and links), `visible`, `find_type`, `ancestors`, `polymorphic`, `find_component` (incl. inherited), `find_binding`, `binding_proc`, `overrides`, `descendants`, `overridden`, `type_name` (C++ name incl. namespace / type_map), `namespace`.
 
 ### translate.py
@@ -74,6 +75,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `MappedNames` (configured names, glob aware), `loop_var`, `_One`, `plain_comment`, `pf_role`, `strip_blank`, `squeeze`.
 
 ### wrap.py
+- Docs: `type_doc` (class comment of generated classes: Fortran type doc + role); every generated declaration is documented (test `test_generated_declarations_are_documented`).
 - Names: `lower_camel`, `c_class_name`, `c_class`, `root`, `is_root`, `overrides_wrapped`, `poly`, `wrapper_type`, `c_type_name` (C handle / struct name), `struct_type`, `handle_member`, `c_name`, `proc_c_name`, `dllexport`.
 - Module level: `use_only` (only-lists), `wrapped_types`, `owned` / `owned_type` (`wrap_owned`), `wrap_from_c` (`<Class>_private::wrapFromC`), `object_access` (Fortran object from the handle).
 - Sizes: `doc_sizes` (`dimension (...)` in docs), `array_sizes` (size checks, allocate, explicit shapes, docs), `fortran_size` (`wrap_sizes` first, as binding code).

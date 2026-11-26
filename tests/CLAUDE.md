@@ -60,6 +60,7 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 - `test_reverse_type_fortran_implementation_in_cpp`: Fortran implementation used in C++ (`CWrapperThing`).
 - `test_reverse_type_constants`: reverse constants (inherited), known sizes, macros in generated Fortran (`[macros] include`), both directions, run.
 - `test_reverse_cpp_only_and_non_overridable`, `test_non_overridable_bindings`: `interop = "cpp"`, `non_overridable`, stored argument (run: lifetime under valgrind).
+- `test_generated_declarations_are_documented`: doxygen comment for every generated declaration (`helpers.undocumented`).
 - `test_reverse_factory_function_with_fortran_base`: factory method as function, base type only in Fortran.
 - `test_reverse_class_star_is_todo`, `test_reverse_class_star_cpp_data`: `class(*)` of reverse types (TODO cases; both directions, run).
 

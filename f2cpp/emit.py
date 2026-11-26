@@ -362,6 +362,9 @@ class ModuleEmitter:
                         tr.out.extend(d)
                         continue
                     v = t.comps.get(n) if n is not None else None
+                    if getattr(self, "document_members", False) and v is not None and not before and not behind \
+                            and not v.unwrapped_type:   # generated copies (wrapped modules): every member documented
+                        tr.emit(ind + 1, f"{self.cfg['doxygen']} component {v.cname}")
                     if cls(d) == "Data_Component_Def_Stmt" and v is not None and v.unwrapped_type and \
                             not before and not behind:  # unwrapped type: documentation of its component
                         for line in self.member_docs(t, v):
@@ -1123,7 +1126,7 @@ class ModuleEmitter:
         for t in mod.types.values():
             if t.name in cfg["reverse_factory_instances"]:
                 fac = self.prog.type_name(t.name, mod).split("::")[-1]
-                inst += [f"namespace {fac}_private", "{",
+                inst += [f"//! the global instance of {fac}", f"namespace {fac}_private", "{",
                          f'{fac} instance("{cfg["reverse_factory_instances"][t.name]}");  //!< registers the factory',
                          "}", ""]
         c += strip_blank(cpp.out) + ([""] + inst if inst else []) + ["", f"}}  // namespace {self.ns}", ""]

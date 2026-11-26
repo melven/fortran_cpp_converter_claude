@@ -66,7 +66,8 @@ def test_wrapped_module_end_to_end(tmp_path, translated):
     assert "  // TODO(f2cpp): constant label not wrapped: character" in hpp
     assert "int& n()" not in hpp and "Eigen::Map<vec> diag()" not in hpp
     assert "    call c_f_pointer(mySolver, this_c)\n    call c_f_pointer(this_c%p_impl, obj)" in binding
-    assert "namespace MySolver_private\n{\nstd::unique_ptr<MySolver> wrapFromC(project_MySolver& c);" in hpp
+    assert "namespace MySolver_private\n{\n//! the C++ object of the C object c (a handle of the Fortran object, " \
+           "created in Fortran)\nstd::unique_ptr<MySolver> wrapFromC(project_MySolver& c);" in hpp
     assert "public:\n  MySolver() = default;  //!< empty object\n" in hpp
     assert "protected:\n  explicit MySolver(project_MySolver& c);  //!< the object created in Fortran\n" \
            "  friend std::unique_ptr<MySolver> MySolver_private::wrapFromC(project_MySolver& c);\n" \

@@ -33,6 +33,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
     def c_class_name(self, tname):
         return self.cfg["c_class_names"].get(tname) or self.prog.type_name(tname).split("::")[-1]
 
+    def type_doc(self, t, role):
+        """//! lines before a generated class: the documentation of the Fortran type, then its role"""
+        return [f"//! {line}".rstrip() for line in t.doc] + [f"//! {role}"]
+
     def c_class(self, t):
         return self.c_class_name(t.name)
 
@@ -137,11 +141,14 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
         hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
         cls = name.split("::")[-1]
+        hpp.emit(0, f"//! internals of {cls}: conversion between the C++ object and its C object (handle)")
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"std::unique_ptr<{cls}> wrapFromC({ht}& c);  //!< C++ object of the C object c")
+        hpp.emit(0, "//! the C++ object of the C object c (a handle of the Fortran object, created in Fortran)")
+        hpp.emit(0, f"std::unique_ptr<{cls}> wrapFromC({ht}& c);")
         if self.owned(t):
-            hpp.emit(0, f"{ht}* toC(const {cls}& x);  //!< the C object of x (passed to Fortran)")
+            hpp.emit(0, "//! the C object of x (passed to Fortran)")
+            hpp.emit(0, f"{ht}* toC(const {cls}& x);")
         hpp.emit(0, "}")
         hpp.emit(0, "")
         cpp.emit(0, f"std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c)")
@@ -1113,7 +1120,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 [f"    {line}" for line in self.constants_struct(self.plain_consts(td))[1]] + \
                 [f"  end type {self.c_class(td)}_c", ""]
             if td.module is self.mod:
+                for line in self.type_doc(td, f"C++ copy of the Fortran type {td.spelling or td.name} (constants of "
+                                              "wrapped objects, copied from Fortran)"):
+                    hpp.emit(0, line)
+                self.document_members = True
                 self.emit_type(hpp, td, 0)
+                self.document_members = False
                 hpp.emit(0, "")
             self.report.add("translated", "wrapped-constant-type")
         for t in self.wrapped_types():
@@ -1153,6 +1165,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if self.is_root(t):
                 self.setup_destroy(t, self.consts, fb)
             self.wrap_from_c(t, name, ht, hpp, cpp)
+            for line in self.type_doc(t, f"C++ interface of the Fortran type {t.spelling or t.name} (implemented in "
+                                         "Fortran, called through its C binding)"):
+                hpp.emit(0, line)
             hpp.emit(0, f"class {name}{final}{base}")
             hpp.emit(0, "{")
             hpp.emit(0, "public:")

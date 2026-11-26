@@ -48,3 +48,17 @@ def read(out, name):
 def cxx(out, name):
     run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", name + ".cpp"],
         out[0])
+
+
+def undocumented(text, skip=("namespace project",)):
+    """declarations of a generated header without a doxygen comment (//! line before, //!< behind)"""
+    bad, prev, depth = [], "", 0
+    for line in text.split("\n"):
+        s = line.strip()
+        cont, depth = depth > 0, depth + s.count("(") - s.count(")")
+        if not cont and s and not s.startswith(("#", "//", "{", "}", "public:", "protected:", "private:", "friend ",
+                                                "using ", "extern ")) and not re.match(r"(class|struct) \w+;", s) \
+                and not s.startswith(skip) and "//!<" not in s and not prev.startswith("//!"):
+            bad.append(s)
+        prev = s if s else prev
+    return bad
