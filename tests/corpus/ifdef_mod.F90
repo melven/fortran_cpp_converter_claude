@@ -30,5 +30,6 @@ contains
 #ifdef DEBUG
     print *, 'blocks', nd
 #endif
+    s = s / nd
   end subroutine block_sums
 end module ifdef_mod
