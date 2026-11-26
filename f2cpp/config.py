@@ -134,8 +134,8 @@ def default_macros(prefix):
                             ("CHK_ARGUMENT", "invalid_argument", "invalid argument")):
         macros[f"{p}_{name}"] = f"call {p}_{name}({{0}})"
         macros[f"{p}_{name}_MSG"] = f"call {p}_{name}_MSG({{0}}, {{1}})"
-        calls[f"{low}_{name.lower()}"] = f'if (!({{0}})) throw std::{exc}("{text}: {{0:str}}");'
-        calls[f"{low}_{name.lower()}_msg"] = f"if (!({{0}})) throw std::{exc}({{1}});"
+        calls[f"{low}_{name.lower()}"] = f'if ({{0:not}}) throw std::{exc}("{text}: {{0:notstr}}");'
+        calls[f"{low}_{name.lower()}_msg"] = f"if ({{0:not}}) throw std::{exc}({{1}});"
     return macros, calls
 
 

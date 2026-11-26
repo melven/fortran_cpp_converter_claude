@@ -413,7 +413,7 @@ class Translator:
 
     def x_Parenthesis(self, node):
         x = self.expr(node.items[1])
-        return X(f"({x.code})", x.rank, x.base, 100, tname=x.tname, arr=x.arr)
+        return X(f"({x.code})", x.rank, x.base, 100, tname=x.tname, arr=x.arr, neg=x.neg)
 
     def x_Int_Literal_Constant(self, node):
         return X(str(node.items[0]), 0, "integer")
@@ -423,7 +423,8 @@ class Translator:
         return X(s if "." in s or "e" in s else s + ".0", 0, "real")
 
     def x_Logical_Literal_Constant(self, node):
-        return X("true" if "T" in str(node.items[0]).upper() else "false", 0, "logical")
+        t = "T" in str(node.items[0]).upper()
+        return X("true" if t else "false", 0, "logical", neg=X("false" if t else "true", 0, "logical"))
 
     def x_Char_Literal_Constant(self, node):
         return X(cstring(str(node.items[0])), 0, "character")
@@ -984,19 +985,25 @@ class Translator:
         x = self.expr(operand)
         o = op.lower()
         if o == ".not.":
-            if x.neg is not None:
-                return x.neg
-            return X("!" + par(x, P_UNARY), x.rank, "logical", P_UNARY, arr=x.arr)
+            return self.negation(x)
         if o == "-":
             return X("-" + par(x, P_UNARY), x.rank, x.base, P_UNARY, arr=x.arr)
         return x
+
+    @staticmethod
+    def negation(x):
+        """!x, or the simpler form x.neg (n < 0 for n >= 0, De Morgan)"""
+        return x.neg if x.neg is not None else X("!" + par(x, P_UNARY), x.rank, "logical", P_UNARY, arr=x.arr, neg=x)
 
     def as_array(self, x):
         """operand for an Eigen coefficient-wise (Array) expression"""
         return x.code if x.rank == 0 or x.arr else par(x) + ".array()"
 
     def binary(self, lhs, op, rhs):
-        a, b = self.expr(lhs), self.expr(rhs)
+        return self.binary_x(self.expr(lhs), op, self.expr(rhs))
+
+    def binary_x(self, a, op, b):
+        """binary operation of translated operands"""
         o = op.lower()
         rank = max(a.rank, b.rank)
         base = "real" if "real" in (a.base, b.base) else (a.base if a.base == b.base else "unknown")
@@ -1015,13 +1022,21 @@ class Translator:
             if rank > 0:
                 return X(f"{self.as_array_p(a, p)} {c} {self.as_array_p(b, p)}", rank, "logical", p, arr=True)
             a, b = cancel_shift(a, b)
-            return X(f"{par(a, p)} {c} {par(b, p, True)}", 0, "logical", p)
+            neg = None      # !(a < b) is not a >= b for NaN: negated only for == / != and non-real operands
+            if c in ("==", "!=") or {a.base, b.base} <= {"integer", "character", "logical"}:
+                nc = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}[c]
+                neg = X(f"{par(a, p)} {nc} {par(b, p, True)}", 0, "logical", p)
+            return X(f"{par(a, p)} {c} {par(b, p, True)}", 0, "logical", p, neg=neg)
         if o in (".and.", ".or.", ".eqv.", ".neqv."):
             c, p = {".and.": ("&&", P_AND), ".or.": ("||", P_OR), ".eqv.": ("==", P_EQ),
                     ".neqv.": ("!=", P_EQ)}[o]
+            neg = None      # De Morgan if both parts have a simple negation
+            if rank == 0 and o in (".and.", ".or.") and a.neg is not None and b.neg is not None:
+                neg = self.binary_x(a.neg, ".or." if o == ".and." else ".and.", b.neg)
             if o == ".or.":     # a && b || c is correct, but compilers warn: parenthesise &&
-                return X(f"{par(a, P_AND, True)} {c} {par(b, P_AND, True)}", rank, "logical", p, arr=rank > 0)
-            return X(f"{par(a, p)} {c} {par(b, p, True)}", rank, "logical", p, arr=rank > 0)
+                return X(f"{par(a, P_AND, True)} {c} {par(b, P_AND, True)}", rank, "logical", p, arr=rank > 0,
+                         neg=neg)
+            return X(f"{par(a, p)} {c} {par(b, p, True)}", rank, "logical", p, arr=rank > 0, neg=neg)
         if o in "+-":
             if rank > 0 and (a.rank == 0 or b.rank == 0 or a.arr or b.arr):
                 return X(f"{self.as_array_p(a, P_ADD)} {o} {self.as_array_p(b, P_ADD, o == '-')}",
@@ -1094,6 +1109,20 @@ class Translator:
 
     def is_err(self, node):
         return cls(node) == "Name" and lname(node) == self.err
+
+    def template_args(self, args):
+        """arguments of a call template: X (or code of expanded arguments / keywords)"""
+        res = []
+        for a in args:
+            kw, node = self.split_arg(a)
+            if self.is_err(node) or self.is_dropped(node):
+                continue
+            if self.expanded_name(node):
+                res += [n for _, n, _ in self.expanded_name(node)]
+                continue
+            x = self.expr(node)
+            res.append(f"/*{kw}=*/ " + self.matrix(x) if kw else x)
+        return res
 
     def plain_args(self, args):
         res = []
@@ -1766,14 +1795,22 @@ class Translator:
                 return
             template = self.call_template(n)
             if template is not None:
-                codes = self.plain_args(args)
+                xs = self.template_args(args)
+                template = re.sub(r"!\(\{(\d+)\}\)", r"{\1:not}", template)     # !({0}) -> the negation
 
                 def sub(m):
-                    c = codes[int(m.group(1))]
-                    return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) else c
-                text = re.sub(r"\{(\d+)(:str)?\}", sub, template)
+                    x = xs[int(m.group(1))]
+                    if m.group(2) == ":not" or m.group(2) == ":notstr" and getattr(x, "code", "") != "false":
+                        x = self.negation(x) if isinstance(x, X) else f"!({x})"
+                    c = self.matrix(x) if isinstance(x, X) else x
+                    return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) in (":str", ":notstr") else c
+                text = re.sub(r"\{(\d+)(:str|:not|:notstr)?\}", sub, template)
+                if text.startswith("if (false) "):     # assertion of .true.
+                    text = ""
+                if text.startswith("if (true) "):      # assertion of .false.
+                    text = text[len("if (true) "):]
                 if text.strip():                # an empty template drops the call
-                    self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
+                    self.emit(ind, text)
                 return
             if p is not None:
                 self.spelled(p, desig)

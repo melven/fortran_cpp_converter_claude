@@ -28,7 +28,7 @@ def test_expressions(out):
     assert "P = As * P;" in cpp
     assert "aug.block(0, n, n, p) = B;" in cpp
     assert "nrm = A.cwiseAbs().maxCoeff() * std::abs(t) * m;" in cpp
-    assert 'if (!(s <= max_squarings)) throw std::logic_error("assertion failed: s <= max_squarings");' in cpp
+    assert 'if (s > max_squarings) throw std::logic_error("assertion failed: s > max_squarings");' in cpp
     assert "PROJECT_" not in cpp and "project_macros" not in cpp
     assert "solve_inplace(D, N);" in cpp
     lu = read(out, "block_lu_mod.cpp")
@@ -112,7 +112,7 @@ def test_features(out):
     assert "copy = h.phi;" in cpp
     assert "vec grp_tmp;\n  // TODO(f2cpp): Fortran array pointer 'grp_tmp' is translated as an owning array" in hpp
     assert '    throw std::invalid_argument("Invalid kind");' in cpp
-    assert 'if (!(k < 1000)) throw std::logic_error("kind too large: " + std::to_string(k));' in cpp
+    assert 'if (k >= 1000) throw std::logic_error("kind too large: " + std::to_string(k));' in cpp
     # procedure / binding names: spelling of the definition, warning if inconsistent
     assert "scalar normInf(const vec& x);" in hpp
     assert "// TODO(f2cpp): name is spelled inconsistently in the Fortran source: addValue, addvalue\n" \
@@ -1092,6 +1092,24 @@ def test_preprocessor_conditions_with_partial_knowledge():
     assert c("defined(INTEL) && defined(X)", set(), {"INTEL"}) is False
     assert c("!defined(INTEL) && (A || !A)", set(), {"INTEL"}) is True
     assert c("0", set(), set()) is False
+
+
+def test_negated_check_conditions(tmp_path):
+    """ASSERT / CHK_ARGUMENT: the negated condition in if and message (n < 0, De Morgan); real comparisons stay
+    !(x >= 0.0) (NaN); .true. dropped, .false. throws"""
+    translate([os.path.join(CORPUS, "checks_mod.F90")], cfg(), str(tmp_path))
+    cpp = read((str(tmp_path),), "checks_mod.cpp")
+    for line in ('if (n < 0) throw std::invalid_argument("invalid argument: n < 0");',
+                 'if (n < 0 || (m >= n && f)) throw std::invalid_argument("invalid argument: n < 0 || (m >= n && f)");',
+                 'if (!(x >= 0.0)) throw std::invalid_argument("invalid argument: !(x >= 0.0)");',
+                 'if (x != 0.0 && n == 1) throw',
+                 'if (!f) throw std::logic_error("assertion failed: !f");',
+                 'if (n <= m) throw std::logic_error("n > m");',
+                 'throw std::logic_error("assertion failed: false");'):
+        assert line in cpp, line
+    assert "true" not in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((str(tmp_path),), "checks_mod")
 
 
 def test_cleanups_of_generated_code(tmp_path):

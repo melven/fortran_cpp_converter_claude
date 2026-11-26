@@ -302,7 +302,7 @@ def test_reverse_type_constants(tmp_path):
     assert "  public :: destroy_Thing_C_from_Fortran\n" in b
     assert "  //! size of the state\n  int stateSize() const;" in hpp
     assert "int Thing::stateSize() const\n{\n  return c_->stateSize;\n}" in cpp and "  c_->stateSize = stateSize;" in cpp
-    assert "if (!(state.size() == stateSize()))" in cpp                   # translated default implementation
+    assert "if (state.size() != stateSize())" in cpp                   # translated default implementation
     assert "struct project_Thing\n{\n  int stateSize = 0;\n  int inputSize = 0;\n  const char* label = nullptr;\n" \
            "  project_Thing_check_convergence check_convergence = nullptr;\n" in h      # constants first
     assert "  type, bind(C) :: Thing_c\n    integer(C_INT) :: stateSize = 0\n    integer(C_INT) :: inputSize = 0\n" \

@@ -180,8 +180,8 @@ The macros are named after the prefix (`[macros] prefix`, default: the outer nam
 |---|---|---|
 | `P_CHK_IERR(stmt, ierr)` | `stmt` | plain call, exceptions propagate |
 | `P_ALLOCATE(a(n), ierr)` | `allocate(a(n))` | `resize` / `make_unique` |
-| `P_ASSERT(c, ierr)` | `call P_ASSERT(c)` | `if (!(c)) throw std::logic_error("assertion failed: c");` |
-| `P_CHK_ARGUMENT(c, ierr)` | `call P_CHK_ARGUMENT(c)` | `std::invalid_argument("invalid argument: c")` |
+| `P_ASSERT(c, ierr)` | `call P_ASSERT(c)` | `if (!c) throw std::logic_error("assertion failed: !c");` (`!c`: the negation, `n >= 0` → `n < 0`) |
+| `P_CHK_ARGUMENT(c, ierr)` | `call P_CHK_ARGUMENT(c)` | `std::invalid_argument("invalid argument: !c")` |
 | `P_ASSERT_MSG(c, msg, ierr)`, `P_CHK_ARGUMENT_MSG` | `call P_ASSERT_MSG(c, msg)` | the same with `msg` as text |
 
 Other or changed macros:
@@ -191,8 +191,12 @@ Other or changed macros:
 include = "myproj_macros.h"                # Fortran header of the macros: dropped in C++, used by generated Fortran
 [macros.MYPROJ_CHK_ARGUMENT_MSG]
 fortran = "call myproj_chk_argument_msg({0}, {1})"            # {0}, {1}: macro arguments (without ierr)
-cpp = 'if (!({0})) throw std::invalid_argument({1});'         # C++ of the call; {0:str}: argument as text
+cpp = 'if ({0:not}) throw std::invalid_argument({1});'         # C++ of the call; {0:str}: argument as text
 ```
+
+`{0:not}` / `{0:notstr}`: the negated argument (code / text); `!({0})` means `{0:not}`. Negations are simplified:
+`n >= 0` → `n < 0`, De Morgan for `&&` / `||`, `.not. f` → `f`; real comparisons other than `==` / `!=` stay
+`!(x >= 0.0)` (NaN). A condition `.true.` drops the statement, `.false.` leaves the unconditional `throw`.
 
 `[map.calls]` gives the C++ statement of other calls; keys may be glob patterns (`"log_*" = ""` drops all such
 calls); an exact name takes precedence over a pattern.

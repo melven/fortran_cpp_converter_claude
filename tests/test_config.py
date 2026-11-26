@@ -78,7 +78,7 @@ def test_custom_macro_names(tmp_path):
         "[map.functions]\nstr = \"std::to_string\"\nlog_debug = \"xy_log_debug\"\n")
     translate([str(tmp_path / "m_mod.F90")], config.load(str(tmp_path / "c.toml")), str(tmp_path))
     cpp = (tmp_path / "m_mod.cpp").read_text()
-    assert 'if (!((block_dim.array() >= 0).all())) throw std::invalid_argument(' in cpp
+    assert 'if (!(block_dim.array() >= 0).all()) throw std::invalid_argument(' in cpp
     assert 'xy_log_debug("n = " + std::to_string(block_dim.size()));' in cpp
     assert 'if (!sys.offsets.mask(Eigen::seq(ub - 1, ue - 1)).any()) xy_log_debug("none");' in cpp
     assert "xy_log_debug(std::to_string(ext_fn(sys.handle, sys.path, sys.a.b)));" in cpp
@@ -171,7 +171,7 @@ c_name = "flow_helper"
     c = config.load(str(tmp_path / "x.toml"))
     assert c["macros"]["FLOW_CHK_IERR"] == "{0}" and c["macros"]["FLOW_ASSERT_MSG"] == "call flow_assert_msg({0}, {1})"
     assert c["call_templates"]["flow_assert_msg"] == "if (!({0})) throw std::logic_error({1});"
-    assert c["call_templates"]["flow_chk_argument"].startswith("if (!({0})) throw std::invalid_argument(")
+    assert c["call_templates"]["flow_chk_argument"].startswith("if ({0:not}) throw std::invalid_argument(")
     assert c["wrap_chk_ierr"] == ["FLOW_CHK_IERR", "flow_macros.inc"] and c["include_map"]["flow_macros.inc"] == ""
     assert c["wrap_fail"] == ["FLOW_ASSERT(.false., {ierr})", "flow_macros.inc"]
     assert "flow_env" in c["ignore_modules"] and c["module_headers"]["flow_io"] == "io.hpp"
