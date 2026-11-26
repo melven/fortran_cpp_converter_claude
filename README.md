@@ -52,7 +52,7 @@ entries are printed).
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
 | `[modules.M]` | `header` (header of a module that is not translated, or output name of a translated one; `""`: no include, no missing-module warning), `exclude` (names not emitted, glob patterns; `M` may be a pattern) |
 | `[types.T]` | `cpp` (existing C++ class), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, Fortran implementations also usable in C++; `"cpp"`: only implemented in C++, used from Fortran; `"listener"`), `factory = {register, unregister}`, `instance` |
-| `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`) |
+| `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`), `stored` (`interop = "cpp"`: wrapped object arguments that the C++ object keeps, see below) |
 | `[procedures.P]` | `c_name`, `translate`, `sizes` |
 
 Names are case-insensitive; `T` may be a glob pattern for `template` (`[types."*_config_type".bindings]`).
@@ -312,6 +312,11 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
   with `[macros] include = "project_macros.h"`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`
   with the include right after the `module` statement (it may contain `use` statements); without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
   and resizes outputs; otherwise the size is passed (`x, x_n`)
+- stored arguments (`[types.T.bindings.attach] stored = ["counter"]`, deferred bindings of `interop = "cpp"` types,
+  wrapped root types): C++ gets `std::unique_ptr<Counter> counter` (the wrapper, to keep; not the Fortran object,
+  which the caller owns and which must outlive the C++ object); the bridge keeps the handle in the C struct
+  (`attach_counter`, Fortran only), releases the previous one after the next call and the last one in the final,
+  after the C++ object
 - the other direction: a Fortran implementation behind the struct for C / C++:
   `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function

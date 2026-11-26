@@ -61,6 +61,7 @@ DEFAULTS = {
     "wrap_listeners": [],
     "wrap_reverse": [],
     "wrap_reverse_cpp": [],         # interop = "cpp": only the C++ implementation used from Fortran
+    "wrap_stored": {},              # "type%binding" -> wrapped object arguments kept by the C++ object
     "wrap_reverse_factories": {},
     "reverse_factory_instances": {},
 }
@@ -108,7 +109,7 @@ SECTION_KEYS = {
 TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors", "unwrap",
              "expand", "named_elements", "element_list", "handle_member", "c_name",
              "translate", "bindings"}
-BINDING_KEYS = {"template", "translate", "sizes"}
+BINDING_KEYS = {"template", "translate", "sizes", "stored"}
 PROCEDURE_KEYS = {"c_name", "translate", "sizes"}
 MODULE_KEYS = {"header", "exclude"}
 SECTIONS = set(SECTION_KEYS) | {"style", "macros", "modules", "types", "procedures"}
@@ -267,6 +268,8 @@ def load_type(cfg, path, t, ent):
             cfg["method_templates"][f"{t}%{b}"] = bent["template"]
         if "sizes" in bent:
             cfg["wrap_sizes"][f"{t}%{b}"] = bent["sizes"]
+        if "stored" in bent:
+            cfg["wrap_stored"][f"{t}%{b}"] = bent["stored"]
         _flag(cfg, "wrap_translate", f"{t}%{b}", bent.get("translate"))
 
 
@@ -315,6 +318,7 @@ def normalise(cfg):
                                       (re.match(r"^\s*([^=]*[^=\s])\s+(\w+)\s*(?:=\s*(\w+))?\s*$", e) for e in v) if m]
                           for k, v in cfg["expand_args"].items()}
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
+    cfg["wrap_stored"] = {k.lower(): [a.lower() for a in v] for k, v in cfg["wrap_stored"].items()}
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map",
                 "module_headers", "kind_map", "c_class_names", "c_procedure_names", "named_elements",
                 "named_element_lists", "wrap_handle_member", "reverse_factory_instances"):    # Fortran names

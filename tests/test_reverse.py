@@ -6,7 +6,7 @@ import shutil
 
 from f2cpp import config
 from f2cpp.cli import translate
-from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read, cxx
+from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read
 
 
 def test_reverse_wrapped_types(tmp_path):
@@ -755,20 +755,92 @@ def test_generated_classes_follow_the_coding_rules(out, tmp_path):
 
 def test_reverse_cpp_only_and_non_overridable(tmp_path):
     """interop = "cpp": only the C++ implementation used from Fortran (no create_<Thing>_C_from_Fortran, no C++
-    CWrapper<Thing>); a non_overridable binding is not forwarded (Fortran keeps it, C++: not virtual)"""
-    d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "sealed_thing_mod.F90")
-    (tmp_path / "x.toml").write_text('[types.SealedThing_type]\ninterop = "cpp"\n')
+    CWrapper<Thing>); a non_overridable binding is not forwarded (Fortran keeps it, C++: not virtual); stored
+    argument: the C++ object keeps the wrapper (std::unique_ptr), the Fortran bridge the handle (in the C struct,
+    replaced by the next call, released by the final after the C++ object); the caller owns the Fortran object"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    src, counter = os.path.join(r, "sealed_thing_mod.F90"), os.path.join(r, "counter_mod.F90")
+    (tmp_path / "x.toml").write_text('[types.SealedThing_type]\ninterop = "cpp"\nbindings.attach.stored = ["counter"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
-    translate([], c, d, wrap=[src])
+    translate([], c, d, wrap=[counter, src])
     hpp, b = read((d,), "sealed_thing_mod.hpp"), read((d,), "sealed_thing_mod_c_binding.F90")
     cw = read((d,), "project_c_wrapper_sealed_thing_mod.F90")
     assert "  virtual scalar value(scalar x) const = 0;" in hpp and "  scalar twice(scalar x) const;" in hpp
     assert "C_from_Fortran" not in b + cw and not os.path.exists(tmp_path / "sealed_thing_mod_c_wrapper.hpp")
     assert "procedure :: value" in cw and "twice" not in cw
-    if shutil.which("gfortran"):
-        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
-              "-Wno-unused-dummy-argument", "-I" + CORPUS]
-        for f in (src, "sealed_thing_mod_c_binding.F90", "project_c_wrapper_sealed_thing_mod.F90"):
-            run(ff + [f], d)
-    if shutil.which("g++") and os.path.isdir(EIGEN):
-        cxx((d,), "sealed_thing_mod")
+    # stored argument
+    assert "  virtual void attach(std::unique_ptr<Counter> counter) = 0;" in hpp
+    assert "    sealedThing->attach(std::move(counter_w));" in read((d,), "sealed_thing_mod.cpp")
+    assert "  void* attach_counter = nullptr;  //!< Fortran: handle of the stored counter" in read((d,), "sealed_thing_mod.h")
+    assert "    counter_old = this%c%attach_counter\n    this%c%attach_counter = project_Counter_setup(counter)" in cw
+    assert "    if (c_associated(counter_old)) call project_Counter_destroy(counter_old)" in cw
+    assert "    attach_counter = this%c%attach_counter" in cw and \
+        "    end if\n    if (c_associated(attach_counter)) call project_Counter_destroy(attach_counter)\n" in cw
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""module drv_mod
+  use, intrinsic :: iso_c_binding, only: C_PTR
+  use counter_mod, only: Counter_type
+  use sealed_thing_mod, only: SealedThing_type
+  use project_c_wrapper_sealed_thing_mod, only: project_SealedThing_wrap
+  implicit none
+  interface
+    function make_cpp() result(c) bind(C, name="make_cpp")
+      import :: C_PTR
+      type(C_PTR) :: c
+    end function make_cpp
+  end interface
+contains
+  subroutine run_fortran() bind(C, name="run_fortran")
+    type(Counter_type), pointer :: counter
+    class(SealedThing_type), allocatable :: thing
+    real :: y
+    allocate(counter)                            ! owned by the caller
+    call project_SealedThing_wrap(make_cpp(), thing)
+    call thing%attach(counter)
+    call thing%attach(counter)                   ! replaces the stored handle
+    y = thing%twice(1.5)                         ! Fortran twice -> C++ value -> counter%add
+    print '(f6.2, i3)', y, counter%count
+    deallocate(thing)                            ! the C++ object, then the handle
+    print '(i3)', counter%count
+    deallocate(counter)
+  end subroutine run_fortran
+end module drv_mod
+""")
+    (tmp_path / "run.cpp").write_text(r"""#include "sealed_thing_mod.hpp"
+#include <memory>
+class MySealed final : public project::SealedThing
+{
+public:
+  project::scalar value(project::scalar x) const override { counter_->add(1); return x + 1.0; }
+  void attach(std::unique_ptr<project::Counter> counter) override { counter_ = std::move(counter); }
+
+private:
+  std::unique_ptr<project::Counter> counter_;
+};
+extern "C" project_SealedThing* make_cpp()
+{
+  auto t = std::make_unique<MySealed>();
+  project_SealedThing* c = project::SealedThing_private::toC(*t);
+  t.release(); // NOLINT(bugprone-unused-return-value): owned by the Fortran object
+  return c;
+}
+extern "C" void run_fortran();
+int main()
+{
+  run_fortran();
+  return 0;
+}
+""")
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+          "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    for f in (counter, src, "counter_mod_c_binding.F90", "sealed_thing_mod_c_binding.F90",
+              "project_c_wrapper_sealed_thing_mod.F90", "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f in ("counter_mod.cpp", "sealed_thing_mod.cpp", "run.cpp"):
+        run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
+    run(["g++", "counter_mod.o", "sealed_thing_mod.o", "counter_mod_c_binding.o", "sealed_thing_mod_c_binding.o",
+         "project_c_wrapper_sealed_thing_mod.o", "drv.o", "counter_mod_cxx.o", "sealed_thing_mod_cxx.o", "run_cxx.o",
+         "-lgfortran", "-o", "m"], d)
+    assert run_exe(["./m"], d).split("\n")[:2] == ["  5.00  1", "  1"]
