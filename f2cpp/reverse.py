@@ -159,6 +159,34 @@ class ReverseMixin:
                 checks += [f"if (.not. listener_same({this}%owner, {a})) then"] + [f"  {x}" for x in fail] + ["end if"]
                 actuals.append(f"{this}%user")
                 cpp_args.append(f"*static_cast<const {prog.type_name(v.tname, self.mod)}*>({a})")
+            elif v.base == "type" and not v.rank and v.tname in cfg["expand_args"]:    # expanded: its components
+                if intent != "in":
+                    todo = f"argument {v.cname}: expanded argument (expand) must be intent(in)"
+                    continue
+                td = prog.find_type(v.tname, self.mod)
+                for ctype, pname, comp in cfg["expand_args"][v.tname]:
+                    cv = prog.find_component(td, comp) if td is not None else None
+                    comp = cv.cname if cv is not None else comp       # declared spelling
+                    kind = cv.base if cv is not None and not cv.rank else \
+                        "character" if re.search(r"string|char", ctype) else "real" if re.search(r"double|float|scalar", ctype) \
+                        else "logical" if "bool" in ctype else "integer"
+                    f_dummies.append(pname)
+                    if kind == "character":
+                        c_params.append(f"const char* {pname}")
+                        f_decls.append(f"character(kind=C_CHAR), intent(in) :: {pname}(*)")
+                        locals_.append(f"character(kind=C_CHAR, len=:), allocatable :: {pname}_c")
+                        pre.append(f"allocate({pname}_c, source=trim({a}%{comp}) // C_NULL_CHAR)")
+                        actuals.append(f"{pname}_c")
+                        cpp_args.append(f"std::string({pname})")
+                    elif kind in ("integer", "real", "logical"):
+                        ct = {"integer": "int", "real": cfg["c_real"], "logical": "bool"}[kind]
+                        ft = {"integer": "integer(C_INT)", "real": "real(C_REAL)", "logical": "logical(C_BOOL)"}[kind]
+                        c_params.append(f"{ct} {pname}")
+                        f_decls.append(f"{ft}, value :: {pname}")
+                        actuals.append(f"logical({a}%{comp}, C_BOOL)" if kind == "logical" else f"{a}%{comp}")
+                        cpp_args.append(pname)
+                    else:
+                        todo = f"argument {v.cname}: expanded component {comp} ({kind})"
             elif v.base == "type" and not v.rank and a in stored_names:     # stored: kept by the C++ object
                 xt = prog.find_type(v.tname, self.mod)
                 if xt is None or xt.module.name not in getattr(prog, "wrapped", ()) or not self.is_root(xt) or \

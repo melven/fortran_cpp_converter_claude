@@ -847,19 +847,27 @@ int main()
 
 
 def test_reverse_factory_function_with_fortran_base(tmp_path):
-    """factory method as a function (class(...), allocatable result -> std::unique_ptr result); a Fortran-only
-    base type of the factory (dictionary entry) does not appear in C++"""
+    """factory methods as functions (class(...), allocatable result -> std::unique_ptr result), one with an
+    expanded argument (its components: C parameters, C++ parameters as in translated code); a Fortran-only base
+    type of the factory (dictionary entry) does not appear in C++"""
     d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
     (tmp_path / "x.toml").write_text('[types]\nAbstractThing_type.interop = "cpp"\n'
-                                     'ThingMaker_type.factory = {register = "register_maker", unregister = "unregister_maker"}\n')
+                                     'ThingMaker_type.factory = {register = "register_maker", unregister = "unregister_maker"}\n'
+                                     'ConfigNode_type.expand = ["int tixiHandle", "const std::string& xml_path"]\n')
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     srcs = [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "fn_factory_mod.F90")]
-    report, _ = translate([], c, d, [os.path.join(r, "dict_mod.F90")], wrap=srcs)
+    report, _ = translate([], c, d, [os.path.join(r, "dict_mod.F90"), os.path.join(r, "node_mod.F90")], wrap=srcs)
     hpp, h = read((d,), "fn_factory_mod.hpp"), read((d,), "fn_factory_mod.h")
     cw = read((d,), "project_c_wrapper_fn_factory_mod.F90")
     assert "class ThingMaker\n{" in hpp and "DictEntry" not in hpp
     assert "  virtual std::unique_ptr<AbstractThing> make(const Config& config) const = 0;" in hpp
-    assert "  project_ThingMaker_make make = nullptr;\n  void* userData = nullptr;" in h
+    assert "  project_ThingMaker_make make = nullptr;\n  project_ThingMaker_make_from_node make_from_node = nullptr;\n" in h
+    assert "  virtual std::unique_ptr<AbstractThing> make_from_node(int tixiHandle, const std::string& xml_path) const = 0;" in hpp
+    assert "typedef void (*project_ThingMaker_make_from_node)(const project_ThingMaker*, int, const char*, " \
+           "project_AbstractThing**);" in flat(h)
+    assert "    allocate(xml_path_c, source=trim(node%xml_path) // C_NULL_CHAR)\n" in cw and \
+        "    call f(c_loc(this%c), node%tixiHandle, xml_path_c, thing_p)\n" in cw
+    assert "thingMaker->make_from_node(tixiHandle, std::string(xml_path));" in read((d,), "fn_factory_mod.cpp")
     assert "    std::unique_ptr<AbstractThing> thing_u = thingMaker->make(*config_w);\n" \
            "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;" in read((d,), "fn_factory_mod.cpp")
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)\n  end function make" in cw
@@ -867,7 +875,8 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
     if shutil.which("gfortran"):
         ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
               "-Wno-unused-dummy-argument", "-I" + CORPUS]
-        for f in [os.path.join(SUPPORT, "project_str.F90"), os.path.join(r, "dict_mod.F90")] + srcs + [
+        for f in [os.path.join(SUPPORT, "project_str.F90"), os.path.join(r, "dict_mod.F90"),
+                  os.path.join(r, "node_mod.F90")] + srcs + [
                 "config_mod_c_binding.F90", "thing_mod_c_binding.F90",
                                                                "project_c_wrapper_thing_mod.F90", "fn_factory_mod_c_binding.F90",
                                                                "project_c_wrapper_fn_factory_mod.F90"]:

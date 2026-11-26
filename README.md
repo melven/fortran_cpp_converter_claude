@@ -347,7 +347,8 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
   `std::unique_ptr<AbstractThing> create_thing(...)` (Fortran function with an allocatable `class(...)` result): `release()` to
   Fortran; a Fortran-only base type of the factory (e.g. a dictionary entry) does not appear in C++
 - translated factories get `using Base::Base;` and `<Factory>_private::instance("name")`
-- arguments: wrapped objects (temporary handles), real / integer / logical scalars (in / out / inout),
+- arguments: wrapped objects (temporary handles), expanded arguments (`expand`, `intent(in)`: their integer / real /
+  logical / character components as C parameters, C++ parameters as in translated code), real / integer / logical scalars (in / out / inout),
   real / integer rank-1 arrays (copied; the size must not change), created objects, scalar results, `ierr`
 - the Fortran library references no symbol of the C++ library (registration at run time); a global
   factory instance in a static library is only constructed if its object file is linked

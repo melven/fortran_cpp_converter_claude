@@ -1,8 +1,9 @@
-!> factory with a function as factory method and a Fortran-only base type (dictionary entry)
+!> factory with functions as factory methods (one with an expanded argument) and a Fortran-only base type
 module fn_factory_mod
   use config_mod, only: Config_type
   use thing_mod, only: AbstractThing_type
   use dict_mod, only: DictEntry_type
+  use node_mod, only: ConfigNode_type
   implicit none
   private
   public :: ThingMaker_type, register_maker, unregister_maker, make_thing
@@ -11,6 +12,7 @@ module fn_factory_mod
   type, abstract, extends(DictEntry_type) :: ThingMaker_type
   contains
     procedure(make_iface), deferred :: make
+    procedure(make_from_node_iface), deferred :: make_from_node
   end type ThingMaker_type
 
   abstract interface
@@ -21,6 +23,14 @@ module fn_factory_mod
       type(Config_type), intent(in) :: config
       class(AbstractThing_type), allocatable :: thing
     end function make_iface
+
+    !> a new thing for the configuration node (an expanded argument in C++)
+    function make_from_node_iface(this, node) result(thing)
+      import :: ThingMaker_type, AbstractThing_type, ConfigNode_type
+      class(ThingMaker_type), intent(in) :: this
+      type(ConfigNode_type), intent(in) :: node
+      class(AbstractThing_type), allocatable :: thing
+    end function make_from_node_iface
   end interface
 
   class(ThingMaker_type), allocatable, save :: maker

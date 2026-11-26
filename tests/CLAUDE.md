@@ -33,7 +33,7 @@ reverse types / factories; `const_thing_mod` Fortran implementation used in C++;
 `model_base_mod` reverse constants and known sizes; `state_model_mod` `class(*)` both directions;
 `unwrap/blocks_mod` unwrapped multi-component type; `named/var_mod` named elements; `visibility_mod` private bindings;
 `sealed_mod` non_overridable; `reverse/sealed_thing_mod` + `counter_mod` `interop = "cpp"`, non_overridable, stored argument; `reverse/fn_factory_mod` +
-`dict_mod` factory method as function, Fortran-only base.
+`dict_mod` + `node_mod` factory methods as functions, expanded argument, Fortran-only base.
 
 ## Tests (one line each)
 
