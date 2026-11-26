@@ -204,7 +204,8 @@ def load_config(cfg, path, data):
         _fail(path, f"old config format (keys {', '.join(sorted(old))}): convert it with tools/convert_config.py")
     for sec, vals in data.items():
         if sec not in SECTIONS:
-            _fail(path, f"unknown config section [{sec}]")
+            hint = " (a style file section: move it to the file given by style = ...)" if sec in STYLE_KEYS else ""
+            _fail(path, f"unknown config section [{sec}]{hint}")
         if sec == "style":
             continue
         if not isinstance(vals, dict):

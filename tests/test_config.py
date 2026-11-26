@@ -184,6 +184,7 @@ c_name = "flow_helper"
     assert "FLOW_CHK_IERR" in config.load(str(tmp_path / "x.toml"), namespace="other")["macros"]
     for text, msg in (("namespace = 'x'\n", "old config format"), ("[project]\nnamspace = 'x'\n", "namspace"),
                       ("[types.T]\ninterop = 'reverse'\n", "interop"), ("[typs.T]\n", "unknown config section"),
+                      ("[layout]\nline_width = 100\n", "move it to the file given by style"),
                       ("style = 's.toml'\n", "s.toml")):
         (tmp_path / "y.toml").write_text(text)
         (tmp_path / "s.toml").write_text("[members]\ngetter = '{typ} {name}() const'\n")
