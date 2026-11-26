@@ -1081,6 +1081,19 @@ def test_non_overridable_bindings(tmp_path):
         cxx((d,), "sealed_mod")
 
 
+def test_preprocessor_conditions_with_partial_knowledge():
+    """a condition is decided if it has the same value for all values of the unknown macros"""
+    from f2cpp.prepass import cpp_condition as c
+    e = "defined(PGI) || defined(FLANG) || defined(INTEL)"
+    assert c(e, set(), {"PGI", "FLANG", "INTEL"}) is False
+    assert c(e, {"FLANG"}, set()) is True                     # true || unknown
+    assert c(e, set(), {"PGI", "INTEL"}) is None
+    assert c("defined INTEL && X > 1", set(), {"INTEL"}) is None   # comparison: not evaluated
+    assert c("defined(INTEL) && defined(X)", set(), {"INTEL"}) is False
+    assert c("!defined(INTEL) && (A || !A)", set(), {"INTEL"}) is True
+    assert c("0", set(), set()) is False
+
+
 def test_cleanups_of_generated_code(tmp_path):
     """[prepass] defined / undefined: #if blocks of known macros resolved, others kept; identical #if / #else
     branches: one copy; unused local variables removed (report); shifted comparisons (i + 1 == j + 1) cancelled;

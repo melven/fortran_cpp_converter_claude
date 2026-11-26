@@ -45,7 +45,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `_find_close`: matching parenthesis (strings respected). `split_args`: top-level macro arguments.
 - `_join_continuations`: joins `&` continuation lines inside macro arguments.
 - `expand_macros`: replaces configured macros (`macros`) by Fortran text, nested, not in comments / cpp lines.
-- `cpp_condition` / `resolve_conditionals`: `#if` blocks of known macros (`[prepass] defined / undefined`) resolved.
+- `cpp_condition` / `resolve_conditionals`: `#if` blocks of known macros (`[prepass] defined / undefined`) resolved; decided if the value is the same for all values of the unknown macros (`defined(A) || defined(B)` with `A` defined: true).
 - `prepass`: patches, macros, marker comments for `#` lines (`CPP_MARK`), pFUnit `@` directives (`PF_MARK`, asserts → calls), blank lines (`BLANK_MARK`).
 
 ### model.py

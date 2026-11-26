@@ -5,6 +5,7 @@
 - preprocessor directives and blank lines are hidden in marker comments
 - pFUnit directives: @assertX(...) -> call f2cpp_assertX(...), @test etc. -> marker comments
 """
+import itertools
 import re
 
 CPP_MARK = "!F2CPP_CPP "
@@ -85,22 +86,34 @@ def expand_macros(text, macros):
 
 
 def cpp_condition(cond, defined, undefined):
-    """value of a #if / #elif condition if it depends only on known macros (defined / undefined), else None"""
-    def known(m):
-        n = m.group(1)
-        return "True" if n in defined else "False" if n in undefined else "None"
+    """value of a #if / #elif condition, or None if it depends on macros that are neither defined nor undefined:
+    decided if it has the same value for all values of the unknown macros (e.g. true || unknown)"""
+    unknown = []
+
+    def name(n, as_defined):
+        if n in defined:
+            return "True" if as_defined else "1"
+        if n in undefined:
+            return "False" if as_defined else "0"
+        if n.isdigit():
+            return "True" if n != "0" else "False"
+        if n not in unknown:
+            unknown.append(n)
+        return f"_u{unknown.index(n)}"
     expr = re.sub(r"\bdefined\s*\(\s*(\w+)\s*\)|\bdefined\s+(\w+)",
-                  lambda m: known(re.match(r"(\w+)", m.group(1) or m.group(2))), cond)
-    expr = re.sub(r"\b(\w+)\b", lambda m: m.group(1) if m.group(1) in ("True", "False", "None") else
-                  ("True" if m.group(1) in defined else "False" if m.group(1) in undefined else
-                   ("True" if m.group(1) != "0" else "False") if m.group(1).isdigit() else "None"), expr)
+                  lambda m: " " + name(m.group(1) or m.group(2), True) + " ", cond)
+    expr = re.sub(r"\b(?!_u\d)(?!True\b|False\b)(\w+)\b", lambda m: name(m.group(1), False), expr)
     expr = expr.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
-    if "None" in expr or not re.fullmatch(r"[\sA-Za-z()]*", expr):
+    names = sorted(set(re.findall(r"_u\d+", expr)))
+    if len(names) > 8 or not re.fullmatch(r"[\s\w()]*", expr) or \
+            set(re.findall(r"[A-Za-z_]\w*", expr)) - {"True", "False", "and", "or", "not", *names}:
         return None
     try:
-        return bool(eval(expr, {"__builtins__": {}}))      # noqa: S307 (only True / False / and / or / not)
+        values = {bool(eval(expr, {"__builtins__": {}}, dict(zip(names, combo, strict=True))))     # noqa: S307
+                  for combo in itertools.product((True, False), repeat=len(names))}
     except SyntaxError:
         return None
+    return values.pop() if len(values) == 1 else None
 
 
 def resolve_conditionals(text, defined, undefined):
