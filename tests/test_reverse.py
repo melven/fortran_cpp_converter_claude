@@ -765,7 +765,8 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([], c, d, wrap=[counter, src])
     hpp, b = read((d,), "sealed_thing_mod.hpp"), read((d,), "sealed_thing_mod_c_binding.F90")
-    cw = read((d,), "project_c_wrapper_sealed_thing_mod.F90")
+    cw = read((d,), "sealed_thing_mod_c_binding.F90")      # interop = "cpp": no c_wrapper module
+    assert not (tmp_path / "project_c_wrapper_sealed_thing_mod.F90").exists()
     assert "  virtual scalar value(scalar x) const = 0;" in hpp and "  scalar twice(scalar x) const;" in hpp
     assert "C_from_Fortran" not in b + cw and not os.path.exists(tmp_path / "sealed_thing_mod_c_wrapper.hpp")
     assert "procedure :: value" in cw and "twice" not in cw
@@ -783,7 +784,7 @@ def test_reverse_cpp_only_and_non_overridable(tmp_path):
   use, intrinsic :: iso_c_binding, only: C_PTR
   use counter_mod, only: Counter_type
   use sealed_thing_mod, only: SealedThing_type
-  use project_c_wrapper_sealed_thing_mod, only: project_SealedThing_wrap
+  use sealed_thing_mod_c_binding, only: project_SealedThing_wrap
   implicit none
   interface
     function make_cpp() result(c) bind(C, name="make_cpp")
@@ -836,13 +837,13 @@ int main()
     ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
           "-Wno-unused-dummy-argument", "-I" + CORPUS]
     for f in (counter, src, "counter_mod_c_binding.F90", "sealed_thing_mod_c_binding.F90",
-              "project_c_wrapper_sealed_thing_mod.F90", "drv.F90"):
+              "drv.F90"):
         run(ff + [f], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("counter_mod.cpp", "sealed_thing_mod.cpp", "run.cpp"):
         run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
     run(["g++", "counter_mod.o", "sealed_thing_mod.o", "counter_mod_c_binding.o", "sealed_thing_mod_c_binding.o",
-         "project_c_wrapper_sealed_thing_mod.o", "drv.o", "counter_mod_cxx.o", "sealed_thing_mod_cxx.o", "run_cxx.o",
+         "drv.o", "counter_mod_cxx.o", "sealed_thing_mod_cxx.o", "run_cxx.o",
          "-lgfortran", "-o", "m"], d)
     assert run_exe(["./m"], d).split("\n")[:2] == ["  5.00  1", "  1"]
 
@@ -876,6 +877,7 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
     assert "    std::unique_ptr<AbstractThing> thing_u = thingMaker->make(*config_w);\n" \
            "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;" in read((d,), "fn_factory_mod.cpp")
     assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)\n  end function make" in cw
+    assert "  use thing_mod_c_binding, only: project_AbstractThing_wrap" in cw      # interop = "cpp": merged
     assert not any(report.files[f]["todo"] for f in srcs)
     if shutil.which("gfortran"):
         ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
@@ -883,7 +885,7 @@ def test_reverse_factory_function_with_fortran_base(tmp_path):
         for f in [os.path.join(SUPPORT, "project_str.F90"), os.path.join(r, "dict_mod.F90"),
                   os.path.join(r, "node_mod.F90")] + srcs + [
                 "config_mod_c_binding.F90", "thing_mod_c_binding.F90",
-                                                               "project_c_wrapper_thing_mod.F90", "fn_factory_mod_c_binding.F90"]:
+                                                               "fn_factory_mod_c_binding.F90"]:
             run(ff + [f], d)
     if shutil.which("g++") and os.path.isdir(EIGEN):
         for f in ("config_mod", "thing_mod", "fn_factory_mod"):

@@ -342,9 +342,11 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
   `procedure :: evaluate`, prefixed for a second type with the same name or names of intrinsics) has
   `CWrapperThing_type`: extends the abstract
   type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
-  makes one; factories: `CWrapperThingFactory_type` and register / unregister. A module whose bidirectional types are
-  all factories has no c_wrapper module: this part is in its binding module (nothing else uses it), so all C
-  declarations of the module (also `project_<Factory>_register` / `_unregister`) come from one file
+  makes one; factories: `CWrapperThingFactory_type` and register / unregister. No c_wrapper module (this part in the
+  binding module, all C declarations of the module from one file) for modules whose bidirectional types are all
+  factories, or all factories / `interop = "cpp"` types without other public types in the module (else a dependency
+  cycle is possible: other modules use the bindings of forward-wrapped types); `project_<Thing>_wrap` is then in
+  `<module>_c_binding`
 - factories: the `register` / `unregister` procedures of `factory = {...}` are not wrapped themselves (only for the generated
   registration); C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
   in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor

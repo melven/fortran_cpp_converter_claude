@@ -145,7 +145,7 @@ class ReverseMixin:
                 actuals.append(f"{a}_p")
                 post.append(f"if (c_associated({a}_p)) call {self.c_name(rt, 'wrap')}({a}_p, {a})")
                 if rt.module is not self.mod:   # its c_wrapper module (and its C header for the struct)
-                    self.extra_uses.add(f"  use {self.cwrapper_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
+                    self.extra_uses.add(f"  use {self.wrap_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
                     self.c_includes.add(rt.module.name)
                 cpp_init.append(f"*{a} = nullptr;")
                 cpp_pre.append(f"std::unique_ptr<{rcls}> {a}_u;")
@@ -302,7 +302,7 @@ class ReverseMixin:
             actuals.append(f"{r}_p")
             post.append(f"if (c_associated({r}_p)) call {self.c_name(rt, 'wrap')}({r}_p, {r})")
             if rt.module is not self.mod:
-                self.extra_uses.add(f"  use {self.cwrapper_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
+                self.extra_uses.add(f"  use {self.wrap_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
                 self.c_includes.add(rt.module.name)
             cpp_init.append(f"*{r} = nullptr;")
             cpp_post += [f"*{r} = {r}_u ? {self.private_ns(rcls)}::toC(*{r}_u) : nullptr;",
@@ -1195,6 +1195,19 @@ class ReverseMixin:
         return {"fortran": fortran, "cpp_pre": cpp_pre, "cpp_args": cpp_args, "cpp_post": cpp_post,
                 "cpp_mid": cpp_mid, "any_data": any_data,
                 "has_err": has_err}
+
+    def cw_merged(self, m):
+        """the Fortran part of module m's reverse types is in its binding module (no c_wrapper module): all are
+        factories (nothing uses them), or all are factories / interop = "cpp" and m has no other public types
+        (whose bindings other modules use; a dependency cycle otherwise)"""
+        rev = [t for t in m.types.values() if t.name in self.reverse_types()]
+        rest = [t for t in rev if t.name not in self.cfg["wrap_reverse_factories"]]
+        others = [t for t in m.types.values() if t.name not in self.reverse_types() and m.is_public(t.name)]
+        return bool(rev) and (not rest or (all(t.name in self.cfg["wrap_reverse_cpp"] for t in rest) and not others))
+
+    def wrap_module(self, m):
+        """the Fortran module with project_<Thing>_wrap of the reverse types of module m"""
+        return f"{m.spelling or m.name}_c_binding" if self.cw_merged(m) else self.cwrapper_module(m)
 
     def cwrapper_module(self, m):
         """name of the c_wrapper module of module m: project_thing -> project_c_wrapper_thing"""

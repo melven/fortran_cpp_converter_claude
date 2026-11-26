@@ -75,7 +75,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `MappedNames` (configured names, glob aware), `loop_var`, `_One`, `plain_comment`, `pf_role`, `strip_blank`, `squeeze`.
 
 ### wrap.py
-- `cw_in_binding`: modules whose reverse types are all factories: the c_wrapper part goes into the binding module.
+- `cw_in_binding` (`ReverseMixin.cw_merged`): the c_wrapper part in the binding module (factories; `interop = "cpp"` without other public types); `wrap_module`: where `project_<Thing>_wrap` is.
 - Docs: `type_doc` (class comment of generated classes: Fortran type doc + role); every generated declaration is documented (test `test_generated_declarations_are_documented`).
 - Names: `lower_camel`, `c_class_name`, `c_class`, `root`, `is_root`, `overrides_wrapped`, `poly`, `wrapper_type`, `c_type_name` (C handle / struct name), `struct_type`, `handle_member`, `c_name`, `proc_c_name`, `dllexport`.
 - Module level: `use_only` (only-lists), `wrapped_types`, `owned` / `owned_type` (`wrap_owned`), `wrap_from_c` (`<Class>_private::wrapFromC`), `object_access` (Fortran object from the handle).

@@ -1104,10 +1104,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.cpp_data_used, self.fortran_data_used = False, False   # class(*): C++ / Fortran data in the Any struct
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
-        # factories only (nothing uses their Fortran part, they are sinks): no c_wrapper module, all in the binding
-        # (its C declarations, register / unregister, in the same header)
-        rev = [t for t in mod.types.values() if t.name in self.reverse_types()]
-        self.cw_in_binding = bool(rev) and all(t.name in cfg["wrap_reverse_factories"] for t in rev)
+        # factories / interop = "cpp" (cw_merged): no c_wrapper module, all in the binding (one header)
+        self.cw_in_binding = self.cw_merged(mod)
         self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
         self.cwc = {"hpp": self.tr(), "cpp": self.tr()}     # C++ CWrapper<Thing> (Fortran implementations)
