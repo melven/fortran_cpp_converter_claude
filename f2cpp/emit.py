@@ -291,7 +291,7 @@ class ModuleEmitter:
                     sig = "static " + sig
                 elif poly:
                     if prog.overrides(t, bd.name):        # style: virtual ... override
-                        sig = "virtual " + sig + " override"
+                        sig = "virtual " + sig + " override" + (" final" if bd.non_overridable and not final else "")
                     elif prog.overridden(t, bd.name):
                         sig = "virtual " + sig
                 tr.emit(ind + 1, sig + ";")

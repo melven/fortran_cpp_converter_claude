@@ -6,7 +6,7 @@ import shutil
 
 from f2cpp import config
 from f2cpp.cli import translate
-from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read
+from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read, cxx
 
 
 def test_reverse_wrapped_types(tmp_path):
@@ -751,3 +751,24 @@ def test_generated_classes_follow_the_coding_rules(out, tmp_path):
     assert len(files) > 20
     assert not class_rule_violations([(os.path.basename(f), open(f).read()) for f in files])
     assert len(class_rule_violations([("x.hpp", "class A\n{\npublic:\n  A(const A&) = delete;\n};")])) == 2  # the check
+
+
+def test_reverse_cpp_only_and_non_overridable(tmp_path):
+    """interop = "cpp": only the C++ implementation used from Fortran (no create_<Thing>_C_from_Fortran, no C++
+    CWrapper<Thing>); a non_overridable binding is not forwarded (Fortran keeps it, C++: not virtual)"""
+    d, src = str(tmp_path), os.path.join(CORPUS, "reverse", "sealed_thing_mod.F90")
+    (tmp_path / "x.toml").write_text('[types.SealedThing_type]\ninterop = "cpp"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, d, wrap=[src])
+    hpp, b = read((d,), "sealed_thing_mod.hpp"), read((d,), "sealed_thing_mod_c_binding.F90")
+    cw = read((d,), "project_c_wrapper_sealed_thing_mod.F90")
+    assert "  virtual scalar value(scalar x) const = 0;" in hpp and "  scalar twice(scalar x) const;" in hpp
+    assert "C_from_Fortran" not in b + cw and not os.path.exists(tmp_path / "sealed_thing_mod_c_wrapper.hpp")
+    assert "procedure :: value" in cw and "twice" not in cw
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+              "-Wno-unused-dummy-argument", "-I" + CORPUS]
+        for f in (src, "sealed_thing_mod_c_binding.F90", "project_c_wrapper_sealed_thing_mod.F90"):
+            run(ff + [f], d)
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "sealed_thing_mod")

@@ -51,7 +51,7 @@ entries are printed).
 | `[tests]` | `extensions` (`[".pf", ".pfunit"]`), `modules` (test framework modules), `includes` |
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
 | `[modules.M]` | `header` (header of a module that is not translated, or output name of a translated one; `""`: no include, no missing-module warning), `exclude` (names not emitted, glob patterns; `M` may be a pattern) |
-| `[types.T]` | `cpp` (existing C++ class), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, `"listener"`), `factory = {register, unregister}`, `instance` |
+| `[types.T]` | `cpp` (existing C++ class), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, Fortran implementations also usable in C++; `"cpp"`: only implemented in C++, used from Fortran; `"listener"`), `factory = {register, unregister}`, `instance` |
 | `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`) |
 | `[procedures.P]` | `c_name`, `translate`, `sizes` |
 
@@ -95,6 +95,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `override` / `= 0`, destructor |
 | type without derived type in the run | `class xyz final` |
 | binding that is overridden in a derived type / root of a hierarchy | `virtual` method / virtual destructor; other methods are not virtual |
+| `procedure, non_overridable` | `virtual ... override final` if it overrides a base binding, else not virtual; bidirectional types / listeners: not forwarded (the Fortran implementation stays, C++: the translated default, not virtual) |
 | `procedure, private :: f`, `private` after `contains` (module-private) | `private:` if only methods of the type call it, `protected:` if methods of derived types do, else public (style `member_access = "fortran"`: `private:`); constructors / destructors stay public |
 | binding `configure` with `intent(out)` passed object (`project.constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`project.destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
@@ -286,7 +287,8 @@ is destroyed.
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
 
-Abstract types implemented in C++ (Fortran dependents stay, the implementations are translated):
+Abstract types implemented in C++ (Fortran dependents stay, the implementations are translated; `interop = "cpp"`: without the
+other direction, i.e. no `create_<Thing>_C_from_Fortran` / C++ `CWrapper<Thing>`):
 
 ```toml
 [types]

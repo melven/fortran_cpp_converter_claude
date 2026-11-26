@@ -1065,3 +1065,13 @@ def test_includes_by_name(tmp_path):
     assert '#include "quad.hpp"' in hpp and "project_log.hpp" not in hpp
     assert cpp.count('#include "project_log.hpp"') == 1 and '"quad.hpp"' not in cpp and "never.hpp" not in hpp + cpp
     assert '  if (x < 0.0) Logger("lg").log_error("negative");' in cpp
+
+
+def test_non_overridable_bindings(tmp_path):
+    """non_overridable: an overriding binding is final; one that overrides nothing stays non-virtual"""
+    d = str(tmp_path)
+    translate([os.path.join(CORPUS, "sealed_mod.F90")], cfg(), d)
+    hpp = read((d,), "sealed_mod.hpp")
+    assert "  virtual void step();\n  int count() const;" in hpp and "  virtual void step() override final;" in hpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((d,), "sealed_mod")

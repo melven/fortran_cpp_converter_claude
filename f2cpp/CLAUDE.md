@@ -90,7 +90,7 @@ Sizes: translate.py 2640, wrap.py 1800, emit.py 1310, reverse.py 1100, model.py 
 - `abstract_interface` (with C typedef), `imported` (explicit `import` list), `known_size` (constant size expression for both sides), `fortran_decl`, `private_ns`, `use_binding`, `methods_of`, `emit_lines`.
 - `class(*)` (one mechanism for forward wrapping and reverse types): `any_struct` (per-module `project_<module>_Any`: destroy, userData), `cpp_any` (C++ data in Fortran: `CWrapperAny_type`), `fortran_any_data` (Fortran holder `AnyHolder_type`, `f2cpp_any_new/destroy/holder`), `any_ns`, `fortran_any_decl` / `fortran_any_cpp` (`<module>_private::any_from_fortran` / `any_to_fortran`, `FortranData` in `std::any`), `cpp_any_helpers` (`any_to_c` / `any_from_c`).
 - Listeners: `bridge_name`, `listener`; shared: `pure_virtuals`, `default_methods`.
-- Reverse types: `reverse_constants`, `reverse_types`, `reverse_type` (C struct, C++ base, Fortran `CWrapper<Thing>_type`, factories), `fortran_behind` (Fortran implementation for C++: `wrap_<method>`, `create_<Thing>_C_from_Fortran`, C++ `CWrapper<Thing>`), `fortran_method_c`, `cwrapper_module`.
+- Reverse types: `reverse_constants`, `reverse_types`, `reverse_type` (C struct, C++ base, Fortran `CWrapper<Thing>_type`, factories), `fortran_behind` (Fortran implementation for C++: `wrap_<method>`, `create_<Thing>_C_from_Fortran`, C++ `CWrapper<Thing>`; not for factories and `interop = "cpp"`); `non_overridable` bindings are not forwarded, `fortran_method_c`, `cwrapper_module`.
 
 ### report.py
 - `Report`: `start` (current file; `Report.CONFIG`: pseudo file of `--check-config`), `add(kind, category)`, `summary`, `write_json`.

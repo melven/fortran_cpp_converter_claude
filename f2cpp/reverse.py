@@ -568,6 +568,8 @@ class ReverseMixin:
         typedefs.append(f"!typedef struct {ht} {ht};")
         methods = []
         for bd, iface in self.methods_of(lt):
+            if bd.non_overridable:          # cannot be overridden by the Fortran bridge: stays Fortran
+                continue
             this = iface.pass_arg
             m = self.forward(lt, bd, iface, proc=f"{self.c_class(lt).lower()}_cpp_{bd.name}",
                              aiface=f"{ht}_{bd.name}", funptr=f"{this}%{bd.name}_fn",
@@ -647,7 +649,8 @@ class ReverseMixin:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
             hpp.emit(0, "")
             self.doc(hpp, iface, 1, bd.spelling)
-            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const}" + (" = 0;" if bd.deferred else ";"))
+            virtual = "" if bd.non_overridable else "virtual "
+            hpp.emit(1, f"{virtual}{ret} {bd.spelling}({params}){const}" + (" = 0;" if bd.deferred else ";"))
 
     def default_methods(self, cpp, methods):
         """translated Fortran default implementations of the non-deferred bindings"""
@@ -708,7 +711,8 @@ class ReverseMixin:
         saved_uses, self.extra_uses = self.extra_uses, cw["uses"]
         methods, cpp_only = [], []
         for bd, iface in self.methods_of(lt):
-            if not bd.deferred and self.translated_here(lt, bd, iface):      # wrap_translate: C++ only
+            if not bd.deferred and (bd.non_overridable or self.translated_here(lt, bd, iface)):
+                # C++ only (translate; non_overridable: Fortran keeps its implementation, the C++ one is not virtual)
                 cpp_only.append((bd, iface, None))
                 continue
             this = iface.pass_arg
@@ -866,7 +870,7 @@ class ReverseMixin:
                  f"  subroutine {unreg}(name) bind(C, name=\"{unreg}\")"] + self.dllexport(unreg) + \
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]
-        if factory is None:                     # the other direction: Fortran implementations used in C++
+        if factory is None and lt.name not in cfg["wrap_reverse_cpp"]:     # the other direction: Fortran in C++
             self.fortran_behind(lt, [(bd, iface, m["todo"]) for bd, iface, m in methods], fb)
         self.report.add("translated", "wrapped-reverse")
 

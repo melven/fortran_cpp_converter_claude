@@ -60,6 +60,7 @@ DEFAULTS = {
     "wrap_handle_member": {},
     "wrap_listeners": [],
     "wrap_reverse": [],
+    "wrap_reverse_cpp": [],         # interop = "cpp": only the C++ implementation used from Fortran
     "wrap_reverse_factories": {},
     "reverse_factory_instances": {},
 }
@@ -252,9 +253,10 @@ def load_type(cfg, path, t, ent):
     if ne is not None and ne is not False:
         cfg["named_elements"][t] = "" if ne is True else ne
     interop = ent.get("interop")
-    if interop not in (None, "bidirectional", "listener"):
-        _fail(path, f"types.{t}.interop = {interop!r}: \"bidirectional\" or \"listener\"")
-    _flag(cfg, "wrap_reverse", t, interop == "bidirectional")
+    if interop not in (None, "bidirectional", "cpp", "listener"):
+        _fail(path, f"types.{t}.interop = {interop!r}: \"bidirectional\", \"cpp\" or \"listener\"")
+    _flag(cfg, "wrap_reverse", t, interop in ("bidirectional", "cpp"))
+    _flag(cfg, "wrap_reverse_cpp", t, interop == "cpp")
     _flag(cfg, "wrap_listeners", t, interop == "listener")
     _flag(cfg, "wrap_independent_bases", t, ent.get("independent"))
     _flag(cfg, "wrap_owned", t, ent.get("owned"))
@@ -317,7 +319,8 @@ def normalise(cfg):
                 "module_headers", "kind_map", "c_class_names", "c_procedure_names", "named_elements",
                 "named_element_lists", "wrap_handle_member", "reverse_factory_instances"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
-    for key in ("ignore_modules", "wrap_owned", "wrap_listeners", "wrap_reverse", "wrap_independent_bases"):
+    for key in ("ignore_modules", "wrap_owned", "wrap_listeners", "wrap_reverse", "wrap_reverse_cpp",
+                "wrap_independent_bases"):
         cfg[key] = [t.lower() for t in cfg[key]]
     for key in ("exclude", "wrap_translate"):
         cfg[key] = [e.lower().replace(" ", "") for e in cfg[key]]

@@ -131,6 +131,7 @@ class Binding:
     iface: str = None
     deferred: bool = False
     nopass: bool = False
+    non_overridable: bool = False
     pass_arg: str = None
     access: str = None
     access_need: int = 0         # 0 called by own methods only, 1 by methods of derived types, 2 from elsewhere
@@ -352,6 +353,8 @@ def collect_type(node, module):
                             bd.deferred = True
                         elif s == "nopass":
                             bd.nopass = True
+                        elif s == "non_overridable":
+                            bd.non_overridable = True
                         elif s.startswith("pass("):
                             bd.pass_arg = s[5:-1]
                         elif s in ("public", "private"):
