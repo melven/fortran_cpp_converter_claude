@@ -39,6 +39,7 @@ class X:
     res_var: Var = None      # result variable of the called function
     fwd: str = None          # optional dummy: the std::optional object itself
     neg: object = None       # the negated expression, if it has a simpler form than !(...)
+    one: object = None       # array of size 1 (maxloc of a vector): the scalar element
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
@@ -92,6 +93,8 @@ class Translator:
         self.brace_arrays = False   # array constructors as braced lists
         self.via_getters = False    # translated method of a wrapped class: components are getters
         self.plain_doc = False      # procedure body: !< / !> become ordinary comments
+        self.frames = []            # statements being translated: [indent, helper definitions to insert before]
+        self.helper_lines = set()   # definitions of helper lambdas (helper)
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -526,6 +529,8 @@ class Translator:
         if "{" not in fn:
             xs = [self.expr(node) for _, node in map(self.split_arg, args)
                   if not self.is_err(node) and not self.is_dropped(node)]
+            if fn.startswith("std::"):      # size-1 array (str(maxloc(v)) prints one number): the scalar
+                xs = [x.one if x.one is not None else x for x in xs]
             if fn.startswith("std::") and any(x.rank > 0 for x in xs):
                 fn = fn[5:]         # Eigen argument: the project's overload, not the std function
             return f"{fn}({', '.join(self.matrix(x) for x in xs)})"
@@ -1519,6 +1524,15 @@ class Translator:
         start = len(self.out)
         self.notes = []
         self.saw_transpose = False
+        self.frames.append([ind, []])
+        try:
+            self.stmt_(node, ind, k, start)
+        finally:
+            _, helpers = self.frames.pop()
+        if helpers:
+            self.out[start:start] = [" " * (2 * ind) + h for h in helpers]
+
+    def stmt_(self, node, ind, k, start):
         k = cls(node.node) if cls(node) == "_Trimmed" else k
         heads = [c for c in node.content if cls(c) in self.HEADERS] if k in self.CONSTRUCTS else [node]
         try:
@@ -1538,15 +1552,39 @@ class Translator:
             self.report.add("translated", k)
         except Untranslatable as e:
             del self.out[start:]
+            self.frames[-1][1].clear()
             self.report.add("untranslated", e.category)
             self.fortran_comment(node, ind, f"not translated ({e.category})")
         except Exception as e:      # a bug of f2cpp (not an unsupported construct): logged, reported as error
             if self.cfg["strict"]:
                 raise
             del self.out[start:]
+            self.frames[-1][1].clear()
             self.report.add("error", f"internal:{type(e).__name__}:{k}")
             self.internal_error(e, node)
             self.fortran_comment(node, ind, f"not translated (f2cpp internal error: {type(e).__name__})")
+
+    def helper(self, name, definition):
+        """name of a local helper lambda (auto name = definition;), defined before the current statement unless
+        a definition is visible there (same or enclosing scope); None outside of statements"""
+        if not self.frames:
+            return None
+        ind, line = self.frames[-1][0], f"auto {name} = {definition};"
+        for fi, pending in reversed(self.frames):
+            if line in pending and fi <= ind:
+                return name
+        low = 2 * ind
+        for out_line in reversed(self.out):
+            s = out_line.split("\n")[0]
+            if not s.strip() or s.lstrip().startswith("#"):
+                continue
+            depth = len(s) - len(s.lstrip())
+            if s.strip() == line and depth <= low:
+                return name
+            low = min(low, depth)
+        self.frames[-1][1].append(line)
+        self.helper_lines.add(line)
+        return name
 
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
@@ -2088,6 +2126,7 @@ class Translator:
             return
         parts = []                                          # internal write: build a std::string
         for p in pieces:
+            p = p.one if p.one is not None else p
             if p.base not in ("character", "integer", "real", "logical") or (p.rank > 0 and p.base == "character"):
                 raise Untranslatable("write:internal-item")
             parts.append(par(p, P_ADD, True) if p.base == "character" else
@@ -2660,15 +2699,24 @@ def i_loc(tr, n, pos, kw):
     if set(kw) - {"dim"} or len(pos) > 2 or x.rank not in (1, 2) or (dim is not None and x.rank != 1):
         raise Untranslatable(f"intrinsic:{n}(mask/dim)")
     fn = "maxCoeff" if n == "maxloc" else "minCoeff"
-    obj = f"({tr.matrix(x)})" if x.arr else par(x)
     i, iv = tr.cfg["int"], tr.cfg["ivec"]
     if x.rank == 2:
+        name = tr.helper(n + "2", f"[](const auto& x_) {{ Eigen::Index r_, c_; x_.{fn}(&r_, &c_); "
+                                  f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}")
+        if name is not None:
+            return X(f"{name}({tr.matrix(x)})", 1, "integer")
+        obj = f"({tr.matrix(x)})" if x.arr else par(x)
         return X(f"[&] {{ Eigen::Index r_, c_; {obj}.{fn}(&r_, &c_); "
                  f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}()", 1, "integer")
-    scalar = f"[&] {{ Eigen::Index i_; {obj}.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}()"
+    name = tr.helper(n, f"[](const auto& x_) {{ Eigen::Index i_; x_.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}")
+    if name is not None:
+        scalar = f"{name}({tr.matrix(x)})"
+    else:
+        obj = f"({tr.matrix(x)})" if x.arr else par(x)
+        scalar = f"[&] {{ Eigen::Index i_; {obj}.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}()"
     if dim is not None:
         return X(scalar, 0, "integer")
-    return X(f"({iv}(1) << {scalar}).finished()", 1, "integer")
+    return X(f"({iv}(1) << {scalar}).finished()", 1, "integer", one=X(scalar, 0, "integer"))
 
 
 def i_null(tr, n, pos, kw):

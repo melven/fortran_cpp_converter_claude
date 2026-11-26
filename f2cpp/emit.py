@@ -636,7 +636,8 @@ class ModuleEmitter:
         tr.block([st], ind, prev)
         new = tr.out[n0:]
         del tr.out[n0:]
-        code = [k for k, line in enumerate(new) if line.strip() and not line.strip().startswith("//")]
+        code = [k for k, line in enumerate(new) if line.strip() and not line.strip().startswith("//")
+                and line.strip() not in tr.helper_lines]
         merged = None
         simple = len(code) == 1 and cls(st) in ("Assignment_Stmt", "Allocate_Stmt", "Call_Stmt")
         for v in declare if simple else []:

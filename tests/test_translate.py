@@ -118,10 +118,16 @@ def test_features(out):
     assert "// TODO(f2cpp): name is spelled inconsistently in the Fortran source: addValue, addvalue\n" \
            "  void addValue(scalar x);" in hpp
     assert "s.addValue(x);" in cpp and "h.owned->addValue(x);" in cpp and "void stats::addValue(scalar x)" in cpp
-    assert "k = [&] { Eigen::Index i_; x.cwiseAbs().maxCoeff(&i_); return static_cast<int>(i_) + 1; }() + " \
-           "[&] { Eigen::Index i_; x.minCoeff(&i_); return static_cast<int>(i_) + 1; }();" in cpp
-    assert "idx = [&] { Eigen::Index r_, c_; a.maxCoeff(&r_, &c_); " \
-           "return (Eigen::VectorXi(2) << r_ + 1, c_ + 1).finished(); }();" in cpp
+    # maxloc / minloc: helper lambdas, defined once before the first statement using them (also else if)
+    argmax = cpp[cpp.index("int argmax("):]
+    argmax = argmax[:argmax.index("\n}")]
+    assert "{\n  auto maxloc = [](const auto& x_) { Eigen::Index i_; x_.maxCoeff(&i_); " \
+           "return static_cast<int>(i_) + 1; };\n  auto minloc = " in argmax
+    assert "  int k = maxloc(x.cwiseAbs()) + minloc(x);\n  auto maxloc2 = " in argmax
+    assert "Eigen::VectorXi idx = maxloc2(a);" in argmax and argmax.count("auto maxloc =") == 1
+    assert "Eigen::VectorXi one = (Eigen::VectorXi(1) << minloc(x)).finished();" in argmax
+    assert "else if (maxloc(x) > 2)" in argmax
+    assert "text = std::to_string(maxloc(x));" in argmax       # size-1 array printed: the scalar
     assert "if (samples.size() == 0)\n" in cpp and "if (samples.size() > 0) samples.resize(0);" in cpp
     assert "if (h.owned == nullptr)\n" in cpp
     assert "tmp = (tmp.setRandom().array() + 1.0) / 2.0;" in cpp

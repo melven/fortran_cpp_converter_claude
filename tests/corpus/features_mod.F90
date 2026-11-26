@@ -244,10 +244,17 @@ contains
     real, intent(in) :: x(:), a(:, :)
     integer :: k
     integer :: idx(2), one(1)
+    character(len=20) :: text
     k = maxloc(abs(x), 1) + minloc(x, dim=1)
     idx = maxloc(a)
     one = minloc(x)
     k = k + idx(1) + idx(2) + one(1)
+    if (k > 100) then
+      k = 0
+    else if (maxloc(x, 1) > 2) then
+      write(text, *) maxloc(x)
+      k = k + len_trim(text)
+    end if
   end function argmax
 
   function normInf(x) result(r)

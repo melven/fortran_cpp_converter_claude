@@ -130,7 +130,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | elementwise `*`, `/`, `**`, array ± scalar, `where (m) a = b` | `cwiseProduct`, `.array()` expressions, `select` |
 | `do`, `do while`, `if`, `select case`, `exit`, `cycle` | `for`, `while`, `if` / `else if` chains, `break`, `continue` |
 | `any([a, b, c])`, `all([a, b])` | `a \|\| b \|\| c`, `a && b` |
-| `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
+| `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | helper lambda `maxloc` / `minloc` / `maxloc2` (around `maxCoeff(&i)`, 1-based result), defined before the first statement using it, again only where that scope is closed; a size-1 result printed (`str`, `write`): the scalar |
 | array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
 | members with `accessors` (`[types.solver_type] accessors = ["n", "tol:set", "x:ref"]`) | protected `n_` (private in final classes) with public `int n() const`, `void tol(scalar value)`, `vec& x()`; own and derived methods use `n_`, other code the accessors (see [Configuration](#configuration)) |
