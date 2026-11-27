@@ -21,6 +21,8 @@ DEFAULTS = {
     "strict": False,
     "keep_original": False,         # command line only
     "pre_patches": [],
+    "cpp_defined": [],              # preprocessor macros known as defined / undefined: their #if blocks resolved
+    "cpp_undefined": [],
     "macros": {},                   # user macros; the <NS>_* defaults are added by normalise()
     "macro_prefix": None,
     "macro_include": None,
@@ -60,6 +62,9 @@ DEFAULTS = {
     "wrap_handle_member": {},
     "wrap_listeners": [],
     "wrap_reverse": [],
+    "wrap_reverse_cpp": [],         # interop = "cpp": only the C++ implementation used from Fortran
+    "wrap_stored": {},              # "type%binding" -> wrapped object arguments kept by the C++ object
+    "c_structs": {},                # type -> {setup, wrapper, ptr}: Fortran helper making its C struct (c_struct)
     "wrap_reverse_factories": {},
     "reverse_factory_instances": {},
 }
@@ -68,7 +73,8 @@ DEFAULTS = {
 STYLE_KEYS = {
     "names": {k: k for k in ("type_suffix", "type_case", "header_ext", "source_ext", "handle_member", "c_prefix",
                              "c_real", "c_single_precision")},
-    "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width")},
+    "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width", "line_width",
+                              "clang_format", "clang_format_style")},
     "types": {k: k for k in ("scalar", "vec", "mat", "ivec", "imat", "int")},
     "conventions": {**{k: k for k in ("member_access", "optional_arrays", "array_args", "int_arrays",
                                       "eigen_placeholders", "gtest_assert", "gtest_eigen_near")},
@@ -95,7 +101,8 @@ SECTION_KEYS = {
                 "includes": ("extra_includes", "append"), "constructor_bindings": ("constructor_bindings", None),
                 "destructor_bindings": ("destructor_bindings", None), "error_arg": ("error_arg", None),
                 "error_success": ("error_success", None), "drop_args": ("drop_args", None), "strict": ("strict", None)},
-    "prepass": {"patches": ("pre_patches", "append")},
+    "prepass": {"patches": ("pre_patches", "append"), "defined": ("cpp_defined", "append"),
+                "undefined": ("cpp_undefined", "append")},
     "tests": {"extensions": ("test_extensions", None), "modules": ("test_modules", None),
               "includes": ("test_includes", "append")},
     "map": {"kinds": ("kind_map", "update"), "constants": ("constant_map", "update"),
@@ -104,10 +111,11 @@ SECTION_KEYS = {
             "headers": ("name_headers", "update")},
     "wrap": {"string_in": ("wrap_string_in", None), "string_out": ("wrap_string_out", None)},
 }
-TYPE_KEYS = {"cpp", "independent", "interop", "factory", "instance", "owned", "constants", "accessors", "unwrap",
+TYPE_KEYS = {"cpp", "c_struct", "independent", "interop", "factory", "instance", "owned", "constants", "accessors",
+             "unwrap",
              "expand", "named_elements", "element_list", "handle_member", "c_name",
              "translate", "bindings"}
-BINDING_KEYS = {"template", "translate", "sizes"}
+BINDING_KEYS = {"template", "translate", "sizes", "stored"}
 PROCEDURE_KEYS = {"c_name", "translate", "sizes"}
 MODULE_KEYS = {"header", "exclude"}
 SECTIONS = set(SECTION_KEYS) | {"style", "macros", "modules", "types", "procedures"}
@@ -126,8 +134,8 @@ def default_macros(prefix):
                             ("CHK_ARGUMENT", "invalid_argument", "invalid argument")):
         macros[f"{p}_{name}"] = f"call {p}_{name}({{0}})"
         macros[f"{p}_{name}_MSG"] = f"call {p}_{name}_MSG({{0}}, {{1}})"
-        calls[f"{low}_{name.lower()}"] = f'if (!({{0}})) throw std::{exc}("{text}: {{0:str}}");'
-        calls[f"{low}_{name.lower()}_msg"] = f"if (!({{0}})) throw std::{exc}({{1}});"
+        calls[f"{low}_{name.lower()}"] = f'if ({{0:not}}) throw std::{exc}("{text}: {{0:notstr}}");'
+        calls[f"{low}_{name.lower()}_msg"] = f"if ({{0:not}}) throw std::{exc}({{1}});"
     return macros, calls
 
 
@@ -196,7 +204,8 @@ def load_config(cfg, path, data):
         _fail(path, f"old config format (keys {', '.join(sorted(old))}): convert it with tools/convert_config.py")
     for sec, vals in data.items():
         if sec not in SECTIONS:
-            _fail(path, f"unknown config section [{sec}]")
+            hint = " (a style file section: move it to the file given by style = ...)" if sec in STYLE_KEYS else ""
+            _fail(path, f"unknown config section [{sec}]{hint}")
         if sec == "style":
             continue
         if not isinstance(vals, dict):
@@ -237,8 +246,8 @@ def load_config(cfg, path, data):
                 load_type(cfg, path, name, ent)
 
 
-TYPE_SIMPLE = {"cpp": "type_map", "constants": "wrap_constants", "accessors": "accessors", "unwrap": "unwrap_types",
-               "expand": "expand_args",
+TYPE_SIMPLE = {"cpp": "type_map", "c_struct": "c_structs", "constants": "wrap_constants", "accessors": "accessors",
+               "unwrap": "unwrap_types", "expand": "expand_args",
                "element_list": "named_element_lists", "handle_member": "wrap_handle_member", "c_name": "c_class_names",
                "factory": "wrap_reverse_factories", "instance": "reverse_factory_instances"}
 
@@ -252,9 +261,10 @@ def load_type(cfg, path, t, ent):
     if ne is not None and ne is not False:
         cfg["named_elements"][t] = "" if ne is True else ne
     interop = ent.get("interop")
-    if interop not in (None, "bidirectional", "listener"):
-        _fail(path, f"types.{t}.interop = {interop!r}: \"bidirectional\" or \"listener\"")
-    _flag(cfg, "wrap_reverse", t, interop == "bidirectional")
+    if interop not in (None, "bidirectional", "cpp", "listener"):
+        _fail(path, f"types.{t}.interop = {interop!r}: \"bidirectional\", \"cpp\" or \"listener\"")
+    _flag(cfg, "wrap_reverse", t, interop in ("bidirectional", "cpp"))
+    _flag(cfg, "wrap_reverse_cpp", t, interop == "cpp")
     _flag(cfg, "wrap_listeners", t, interop == "listener")
     _flag(cfg, "wrap_independent_bases", t, ent.get("independent"))
     _flag(cfg, "wrap_owned", t, ent.get("owned"))
@@ -265,6 +275,8 @@ def load_type(cfg, path, t, ent):
             cfg["method_templates"][f"{t}%{b}"] = bent["template"]
         if "sizes" in bent:
             cfg["wrap_sizes"][f"{t}%{b}"] = bent["sizes"]
+        if "stored" in bent:
+            cfg["wrap_stored"][f"{t}%{b}"] = bent["stored"]
         _flag(cfg, "wrap_translate", f"{t}%{b}", bent.get("translate"))
 
 
@@ -313,11 +325,13 @@ def normalise(cfg):
                                       (re.match(r"^\s*([^=]*[^=\s])\s+(\w+)\s*(?:=\s*(\w+))?\s*$", e) for e in v) if m]
                           for k, v in cfg["expand_args"].items()}
     cfg["wrap_sizes"] = {k.lower(): {a.lower(): e for a, e in v.items()} for k, v in cfg["wrap_sizes"].items()}
+    cfg["wrap_stored"] = {k.lower(): [a.lower() for a in v] for k, v in cfg["wrap_stored"].items()}
     for key in ("call_templates", "method_templates", "procedure_map", "constant_map", "function_map", "type_map",
                 "module_headers", "kind_map", "c_class_names", "c_procedure_names", "named_elements",
-                "named_element_lists", "wrap_handle_member", "reverse_factory_instances"):    # Fortran names
+                "named_element_lists", "wrap_handle_member", "reverse_factory_instances", "c_structs"):    # Fortran names
         cfg[key] = {k.lower(): v for k, v in cfg[key].items()}
-    for key in ("ignore_modules", "wrap_owned", "wrap_listeners", "wrap_reverse", "wrap_independent_bases"):
+    for key in ("ignore_modules", "wrap_owned", "wrap_listeners", "wrap_reverse", "wrap_reverse_cpp",
+                "wrap_independent_bases"):
         cfg[key] = [t.lower() for t in cfg[key]]
     for key in ("exclude", "wrap_translate"):
         cfg[key] = [e.lower().replace(" ", "") for e in cfg[key]]

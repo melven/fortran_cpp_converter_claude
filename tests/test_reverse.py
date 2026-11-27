@@ -6,7 +6,7 @@ import shutil
 
 from f2cpp import config
 from f2cpp.cli import translate
-from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read
+from helpers import CORPUS, SUPPORT, EIGEN, run, run_exe, cfg, flat, read, undocumented
 
 
 def test_reverse_wrapped_types(tmp_path):
@@ -25,7 +25,8 @@ def test_reverse_wrapped_types(tmp_path):
     fh, fc, fb = ((tmp_path / f).read_text() for f in ("thing_factory_mod.hpp", "thing_factory_mod.cpp",
                                                          "thing_factory_mod_c_binding.F90"))
     tw = (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()          # the Fortran types implemented in C++
-    fw = (tmp_path / "project_c_wrapper_thing_factory_mod.F90").read_text()
+    fw = fb             # factories only: their Fortran part is in the binding (no c_wrapper module)
+    assert not (tmp_path / "project_c_wrapper_thing_factory_mod.F90").exists()
     # long use statements: "&" also on the continued line, aligned after "only: "
     assert "  use thing_factory_mod, only: AbstractThingFactory_type, register_thing_factory, &\n" \
            "  &                            unregister_thing_factory\n" in fw
@@ -113,12 +114,12 @@ def test_reverse_wrapped_types(tmp_path):
     ref = run_exe(["./ref"], os.path.join(d, "ref"))
     fsrc = [os.path.join(SUPPORT, "project_str.F90")] + wrapped + [os.path.join(r, "thing_user_mod.F90"), "config_mod_c_binding.F90",
             "thing_mod_c_binding.F90", "project_c_wrapper_thing_mod.F90", "thing_factory_mod_c_binding.F90",
-            "project_c_wrapper_thing_factory_mod.F90", os.path.join(r, "mixed_main.F90")]
+            os.path.join(r, "mixed_main.F90")]
     for f in fsrc:
         run(ff + [f], d)
     # the Fortran library references no symbol of the C++ library
     for o in ("thing_mod_c_binding.o", "thing_factory_mod_c_binding.o", "config_mod_c_binding.o",
-              "project_c_wrapper_thing_mod.o", "project_c_wrapper_thing_factory_mod.o"):
+              "project_c_wrapper_thing_mod.o"):
         assert "_Z" not in run(["nm", "-u", o], d)
     gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
     for f in ("config_mod", "thing_mod", "thing_factory_mod", "linear_thing_mod"):
@@ -177,11 +178,15 @@ def test_reverse_type_fortran_implementation_in_cpp(tmp_path):
     hpp, cpp = (tmp_path / "thing_mod_c_wrapper.hpp").read_text(), (tmp_path / "thing_mod_c_wrapper.cpp").read_text()
     assert "Wrapper" not in (tmp_path / "thing_mod.hpp").read_text().replace("_wrapper", "")
     assert '#include "thing_mod.hpp"\n\n#include "thing_mod.h"  // the C struct (internal header)\n\nnamespace project\n{\n\n' \
-           'namespace AbstractThing_private\n{\n' in hpp
+           '//! internals of AbstractThing: its implementations behind a C struct\nnamespace AbstractThing_private\n{\n' in hpp
     assert "  project_AbstractThing other_{};  //!< the struct of the implementation (copy)" in hpp
     b, h = (tmp_path / "thing_mod_c_binding.F90").read_text(), (tmp_path / "thing_mod.h").read_text()
     # file headers: original header, @file renamed, @brief prefixed
     assert hpp.startswith("//! @file thing_mod_c_wrapper.hpp\n//! @brief C++ wrapper of C structs: things evaluated")
+    import datetime
+    today = datetime.date.today().isoformat()       # @date of the file headers: the date of the generation
+    assert f"\n//! @date {today}\n" in hpp and f"\n!! @date {today}\n" in (tmp_path / "thing_mod_c_binding.F90").read_text()
+    assert f"\n!! @date {today}\n" in (tmp_path / "project_c_wrapper_thing_mod.F90").read_text()
     assert cpp.startswith("//! @file thing_mod_c_wrapper.cpp\n//! @brief C++ wrapper of C structs: things evaluated")
     assert (tmp_path / "project_c_wrapper_thing_mod.F90").read_text().startswith(
         "!> @file project_c_wrapper_thing_mod.F90\n!> @brief Fortran types implemented in C++: things evaluated")
@@ -297,7 +302,7 @@ def test_reverse_type_constants(tmp_path):
     assert "  public :: destroy_Thing_C_from_Fortran\n" in b
     assert "  //! size of the state\n  int stateSize() const;" in hpp
     assert "int Thing::stateSize() const\n{\n  return c_->stateSize;\n}" in cpp and "  c_->stateSize = stateSize;" in cpp
-    assert "if (!(state.size() == stateSize()))" in cpp                   # translated default implementation
+    assert "if (state.size() != stateSize())" in cpp                   # translated default implementation
     assert "struct project_Thing\n{\n  int stateSize = 0;\n  int inputSize = 0;\n  const char* label = nullptr;\n" \
            "  project_Thing_check_convergence check_convergence = nullptr;\n" in h      # constants first
     assert "  type, bind(C) :: Thing_c\n    integer(C_INT) :: stateSize = 0\n    integer(C_INT) :: inputSize = 0\n" \
@@ -312,8 +317,9 @@ def test_reverse_type_constants(tmp_path):
     assert "  Thing* thing = static_cast<Thing*>(self->userData);\n  const int state_n = thing->stateSize();" in cpp
     assert "bool* needAnotherIteration, int* ierr) noexcept" in cpp       # declared spelling
     assert "    ierr = 0\n    PROJECT_CHK_ARGUMENT(size(state) == this%stateSize, ierr)\n" in cw   # wrap_chk_argument
-    assert '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in cw and \
-        '#include "project_macros.h"\n#ifdef PROJECT_SINGLE_PRECISION\n' in b         # both macros used
+    # include right after the module statement (it may contain use statements), precision macros before it
+    assert '#endif\n\nmodule project_c_wrapper_convergence_mod\n#include "project_macros.h"\n  use' in cw and \
+        '#endif\n\nmodule convergence_mod_c_binding\n#include "project_macros.h"\n  use' in b         # both macros used
     # wrap_<method>: pointer views (sizes: constants of the struct), positional arguments, PROJECT_CHK_IERR
     assert "  !" + "=" * 80 + "\n  !> check_convergence of a Fortran implementation" in b
     assert "    real(C_REAL), intent(in), target :: state(*)\n" in b and "    real, pointer, contiguous :: state_f(:)\n" in b
@@ -750,3 +756,201 @@ def test_generated_classes_follow_the_coding_rules(out, tmp_path):
     assert len(files) > 20
     assert not class_rule_violations([(os.path.basename(f), open(f).read()) for f in files])
     assert len(class_rule_violations([("x.hpp", "class A\n{\npublic:\n  A(const A&) = delete;\n};")])) == 2  # the check
+
+
+def test_reverse_cpp_only_and_non_overridable(tmp_path):
+    """interop = "cpp": only the C++ implementation used from Fortran (no create_<Thing>_C_from_Fortran, no C++
+    CWrapper<Thing>); a non_overridable binding is not forwarded (Fortran keeps it, C++: not virtual); stored
+    argument: the C++ object keeps the wrapper (std::unique_ptr), the Fortran bridge the handle (in the C struct,
+    replaced by the next call, released by the final after the C++ object); the caller owns the Fortran object"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    src, counter = os.path.join(r, "sealed_thing_mod.F90"), os.path.join(r, "counter_mod.F90")
+    settings = os.path.join(r, "settings_mod.F90")      # bind(C) type, hand-wrapped C struct
+    options = os.path.join(r, "options_mod.F90")        # Fortran type, C struct made by a hand-written helper
+    (tmp_path / "x.toml").write_text('[types.SealedThing_type]\ninterop = "cpp"\nbindings.attach.stored = ["counter"]\n'
+                                     '[types.ProgramSettings_type]\ncpp = "project_ProgramSettings"\n'
+                                     '[modules.settings_mod]\nheader = "project_settings.h"\n'
+                                     '[types.Options_type]\ncpp = "project_Options"\n'
+                                     'c_struct = {setup = "CWrapperOptions_setup", wrapper = "CWrapperOptions_type", '
+                                     'ptr = "cPtr()"}\n[modules.options_mod]\nheader = "project_options.h"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, d, [settings, options], wrap=[counter, src])
+    hpp, b = read((d,), "sealed_thing_mod.hpp"), read((d,), "sealed_thing_mod_c_binding.F90")
+    cw = read((d,), "sealed_thing_mod_c_binding.F90")      # interop = "cpp": no c_wrapper module
+    assert not (tmp_path / "project_c_wrapper_sealed_thing_mod.F90").exists()
+    assert "  virtual scalar value(scalar x) const = 0;" in hpp and "  scalar twice(scalar x) const;" in hpp
+    assert "C_from_Fortran" not in b + cw and not os.path.exists(tmp_path / "sealed_thing_mod_c_wrapper.hpp")
+    assert "procedure :: value" in cw and "twice" not in cw
+    # stored argument
+    assert "  virtual void attach(std::unique_ptr<Counter> counter) = 0;" in hpp
+    # C struct data: passed by reference (C pointer to the bind(C) object), the C header includes its header
+    assert "  virtual void apply_settings(const project_ProgramSettings& settings) = 0;" in hpp
+    assert '#include "project_settings.h"' in read((d,), "sealed_thing_mod.h")
+    assert "    call f(c_loc(this%c), settings)\n" in cw
+    # C struct of a Fortran helper (c_struct): the wrapper is local (freed after the call), C++ gets the struct
+    assert "  virtual void apply_options(const project_Options& options) = 0;" in hpp
+    assert "    type(CWrapperOptions_type), target :: options_w      ! its C struct (freed with it)\n" in cw
+    assert "    call CWrapperOptions_setup(options_w, options, options_ierr)\n" in cw and \
+        "    call f(c_loc(this%c), options_w%cPtr())\n" in cw
+    assert "    sealedThing->attach(std::move(counter_w));" in read((d,), "sealed_thing_mod.cpp")
+    assert "  void* attach_counter = nullptr;  //!< Fortran: handle of the stored counter" in read((d,), "sealed_thing_mod.h")
+    assert "    counter_old = this%c%attach_counter\n    this%c%attach_counter = project_Counter_setup(counter)" in cw
+    assert "    if (c_associated(counter_old)) call project_Counter_destroy(counter_old)" in cw
+    assert "    attach_counter = this%c%attach_counter" in cw and \
+        "    end if\n    if (c_associated(attach_counter)) call project_Counter_destroy(attach_counter)\n" in cw
+    # not stored: the reason in the TODO (here: the module of the stored type only given with -I)
+    translate([], c, str(tmp_path / "i"), [counter, settings, options], wrap=[src])
+    assert "TODO(f2cpp): stored argument counter: counter_type is not wrapped (give its module with -W or -w)" in \
+        read((str(tmp_path / "i"),), "sealed_thing_mod_c_binding.F90")
+    if not (shutil.which("gfortran") and shutil.which("g++") and os.path.isdir(EIGEN)):
+        return
+    (tmp_path / "drv.F90").write_text("""module drv_mod
+  use, intrinsic :: iso_c_binding, only: C_PTR
+  use counter_mod, only: Counter_type
+  use settings_mod, only: ProgramSettings_type
+  use options_mod, only: Options_type
+  use sealed_thing_mod, only: SealedThing_type
+  use sealed_thing_mod_c_binding, only: project_SealedThing_wrap
+  implicit none
+  interface
+    function make_cpp() result(c) bind(C, name="make_cpp")
+      import :: C_PTR
+      type(C_PTR) :: c
+    end function make_cpp
+  end interface
+contains
+  subroutine run_fortran() bind(C, name="run_fortran")
+    type(Counter_type), pointer :: counter
+    type(ProgramSettings_type) :: settings
+    type(Options_type) :: opts
+    class(SealedThing_type), allocatable :: thing
+    real :: y
+    allocate(counter)                            ! owned by the caller
+    call project_SealedThing_wrap(make_cpp(), thing)
+    call thing%attach(counter)
+    call thing%attach(counter)                   ! replaces the stored handle
+    settings%level = 3
+    call thing%apply_settings(settings)          ! C struct data: counter%add(level) in C++
+    allocate(opts%name, source="fast")
+    opts%level = 2
+    call thing%apply_options(opts)               ! C struct of a helper: counter%add(level + 10 for "fast")
+    y = thing%twice(1.5)                         ! Fortran twice -> C++ value -> counter%add
+    print '(f6.2, i3)', y, counter%count
+    deallocate(thing)                            ! the C++ object, then the handle
+    print '(i3)', counter%count
+    deallocate(counter)
+  end subroutine run_fortran
+end module drv_mod
+""")
+    (tmp_path / "run.cpp").write_text(r"""#include "sealed_thing_mod.hpp"
+#include <memory>
+#include <string>
+class MySealed final : public project::SealedThing
+{
+public:
+  project::scalar value(project::scalar x) const override { counter_->add(1); return x + 1.0; }
+  void attach(std::unique_ptr<project::Counter> counter) override { counter_ = std::move(counter); }
+  void apply_settings(const project_ProgramSettings& settings) override { counter_->add(settings.level); }
+  void apply_options(const project_Options& options) override
+  {
+    counter_->add(options.level + (std::string(options.name) == "fast" ? 10 : 0));
+  }
+
+private:
+  std::unique_ptr<project::Counter> counter_;
+};
+extern "C" project_SealedThing* make_cpp()
+{
+  auto t = std::make_unique<MySealed>();
+  project_SealedThing* c = project::SealedThing_private::toC(*t);
+  t.release(); // NOLINT(bugprone-unused-return-value): owned by the Fortran object
+  return c;
+}
+extern "C" void run_fortran();
+int main()
+{
+  run_fortran();
+  return 0;
+}
+""")
+    ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+          "-Wno-unused-dummy-argument", "-I" + CORPUS]
+    for f in (settings, options, counter, src, "counter_mod_c_binding.F90", "sealed_thing_mod_c_binding.F90",
+              "drv.F90"):
+        run(ff + [f], d)
+    gxx = ["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c"]
+    for f in ("counter_mod.cpp", "sealed_thing_mod.cpp", "run.cpp"):
+        run(gxx + [f, "-o", f.replace(".cpp", "_cxx.o")], d)
+    run(["g++", "settings_mod.o", "options_mod.o", "counter_mod.o", "sealed_thing_mod.o", "counter_mod_c_binding.o", "sealed_thing_mod_c_binding.o",
+         "drv.o", "counter_mod_cxx.o", "sealed_thing_mod_cxx.o", "run_cxx.o",
+         "-lgfortran", "-o", "m"], d)
+    assert run_exe(["./m"], d).split("\n")[:2] == ["  5.00 16", " 16"]
+
+
+def test_reverse_factory_function_with_fortran_base(tmp_path):
+    """factory methods as functions (class(...), allocatable result -> std::unique_ptr result), one with an
+    expanded argument (its components: C parameters, C++ parameters as in translated code); a Fortran-only base
+    type of the factory (dictionary entry) does not appear in C++"""
+    d, r = str(tmp_path), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('[types]\nAbstractThing_type.interop = "cpp"\n'
+                                     'ThingMaker_type.factory = {register = "register_maker", unregister = "unregister_maker"}\n'
+                                     'ConfigNode_type.expand = ["int tixiHandle", "const std::string& xml_path"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    srcs = [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "fn_factory_mod.F90")]
+    report, _ = translate([], c, d, [os.path.join(r, "dict_mod.F90"), os.path.join(r, "node_mod.F90")], wrap=srcs)
+    hpp, h = read((d,), "fn_factory_mod.hpp"), read((d,), "fn_factory_mod.h")
+    cw = read((d,), "fn_factory_mod_c_binding.F90")      # factories only: no c_wrapper module
+    assert "class ThingMaker\n{" in hpp and "DictEntry" not in hpp
+    assert "  virtual std::unique_ptr<AbstractThing> make(const Config& config) const = 0;" in hpp
+    assert "  project_ThingMaker_make make = nullptr;\n  project_ThingMaker_makeFromNode makeFromNode = nullptr;\n" in h
+    assert "  virtual std::unique_ptr<AbstractThing> makeFromNode(int tixiHandle, const std::string& xml_path) const = 0;" in hpp
+    assert "typedef void (*project_ThingMaker_makeFromNode)(const project_ThingMaker*, int, const char*, " \
+           "project_AbstractThing**);" in flat(h)
+    assert "    allocate(xml_path_c, source=trim(node%xml_path) // C_NULL_CHAR)\n" in cw and \
+        "    call f(c_loc(this%c), node%tixiHandle, xml_path_c, thing_p)\n" in cw
+    assert "thingMaker->makeFromNode(tixiHandle, std::string(xml_path));" in read((d,), "fn_factory_mod.cpp")
+    assert "  static void makeFromNode_wrapper(" in hpp          # C / C++ names: declared spelling of the binding
+    b = read((d,), "fn_factory_mod_c_binding.F90")
+    assert "register_maker" not in hpp and "project_unregister_maker" not in b and "project_register_maker" not in b
+    assert "subroutine project_ThingMaker_register(" in cw and "call unregister_maker(" in cw
+    assert "    std::unique_ptr<AbstractThing> thing_u = thingMaker->make(*config_w);\n" \
+           "    *thing = thing_u ? AbstractThing_private::toC(*thing_u) : nullptr;" in read((d,), "fn_factory_mod.cpp")
+    assert "    if (c_associated(thing_p)) call project_AbstractThing_wrap(thing_p, thing)\n  end function make" in cw
+    assert "  use thing_mod_c_binding, only: project_AbstractThing_wrap" in cw      # interop = "cpp": merged
+    assert not any(report.files[f]["todo"] for f in srcs)
+    if shutil.which("gfortran"):
+        ff = ["gfortran", "-c", "-cpp", "-fdefault-real-8", "-fno-realloc-lhs", "-Wall", "-Werror",
+              "-Wno-unused-dummy-argument", "-I" + CORPUS]
+        for f in [os.path.join(SUPPORT, "project_str.F90"), os.path.join(r, "dict_mod.F90"),
+                  os.path.join(r, "node_mod.F90")] + srcs + [
+                "config_mod_c_binding.F90", "thing_mod_c_binding.F90",
+                                                               "fn_factory_mod_c_binding.F90"]:
+            run(ff + [f], d)
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        for f in ("config_mod", "thing_mod", "fn_factory_mod"):
+            run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", f + ".cpp",
+                 "-o", f + "_cxx.o"], d)
+
+
+def test_generated_declarations_are_documented(tmp_path):
+    """every declaration that f2cpp generates for wrapped and bidirectional modules (classes, _private namespaces,
+    toC / wrapFromC, methods, members, factories, listeners, CWrapper classes) has a doxygen comment; class
+    comments: the documentation of the Fortran type, then the role of the class"""
+    w, r = os.path.join(CORPUS, "wrapped"), os.path.join(CORPUS, "reverse")
+    (tmp_path / "x.toml").write_text('[types]\nAbstractListener_type.interop = "listener"\n'
+                                     'AbstractThing_type.interop = "bidirectional"\nStateModel_type.interop = "bidirectional"\n'
+                                     'ThingMaker_type.factory = {register = "register_maker", unregister = "unregister_maker"}\n'
+                                     'MySolver_type.constants = ["n", "params"]\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path), [os.path.join(r, "dict_mod.F90"), os.path.join(r, "node_mod.F90")],
+              wrap=[os.path.join(w, f) for f in ("mysolver_mod.F90", "body_mod.F90", "sphere_mod.F90", "listen_mod.F90",
+                                                 "fstate_mod.F90")] +
+              [os.path.join(r, f) for f in ("config_mod.F90", "thing_mod.F90", "state_model_mod.F90", "fn_factory_mod.F90")])
+    files = glob.glob(str(tmp_path / "*.hpp"))
+    assert len(files) >= 9
+    missing = {os.path.basename(f): undocumented(open(f).read()) for f in files}
+    assert not {f: m for f, m in missing.items() if m}
+    fn = read((str(tmp_path),), "fn_factory_mod.hpp")
+    assert "//! makes things; an entry of the dictionary of makers\n//! factory implemented in C++" in fn
+    assert "//! internals of ThingMaker: its C struct\nnamespace ThingMaker_private" in fn
+    assert "//! iteration parameters\n//! C++ copy of the Fortran type SolverParams_type" in read((str(tmp_path),), "mysolver_mod.hpp")

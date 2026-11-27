@@ -131,6 +131,7 @@ class Binding:
     iface: str = None
     deferred: bool = False
     nopass: bool = False
+    non_overridable: bool = False
     pass_arg: str = None
     access: str = None
     access_need: int = 0         # 0 called by own methods only, 1 by methods of derived types, 2 from elsewhere
@@ -155,6 +156,8 @@ class TypeDef:
     generic_spelling: dict = field(default_factory=dict)
     children: set = field(default_factory=set)
     node: object = None
+    doc: list = field(default_factory=list)     # text of the comment lines right before the type statement
+    bind_c: bool = False                        # type, bind(C): interoperable with a C struct
 
 
 @dataclass(eq=False)     # identity semantics: never compare parse trees
@@ -263,9 +266,12 @@ def collect_param_docs(p, spec):
     for d in spec.content:
         flat += list(d.content) if cls(d) == "Implicit_Part" else [d]
     for i, d in enumerate(flat):
-        if cls(d) != "Type_Declaration_Stmt":
+        if cls(d) == "Type_Declaration_Stmt":
+            names = [lname(e.items[0]) for e in items_of(d.items[2])]
+        elif cls(d) == "Procedure_Declaration_Stmt":       # procedure(iface) :: f  !< ...
+            names = [lname(e.items[0] if cls(e) == "Proc_Decl" else e) for e in items_of(d.items[2])]
+        else:
             continue
-        names = [lname(e.items[0]) for e in items_of(d.items[2])]
         names = [n for n in names if n in p.args or n == p.result]
         if not names:
             continue
@@ -329,6 +335,8 @@ def collect_type(node, module):
             t.parent = lname(a.items[1])
         elif s == "abstract":
             t.abstract = True
+        elif re.sub(r"\s", "", s) == "bind(c)":
+            t.bind_c = True
     for c in node.content[1:]:
         k = cls(c)
         if k == "Private_Components_Stmt":
@@ -352,6 +360,8 @@ def collect_type(node, module):
                             bd.deferred = True
                         elif s == "nopass":
                             bd.nopass = True
+                        elif s == "non_overridable":
+                            bd.non_overridable = True
                         elif s.startswith("pass("):
                             bd.pass_arg = s[5:-1]
                         elif s in ("public", "private"):
@@ -367,13 +377,29 @@ def collect_type(node, module):
     return t
 
 
+def leading_doc(node):
+    """text of the comment lines at the end of node (an Implicit_Part before a type definition), up to a blank
+    line or preprocessor / pFUnit line"""
+    if node is None or cls(node) != "Implicit_Part":
+        return []
+    res = []
+    for c in reversed(node.content):
+        text = str(c)
+        if cls(c) != "Comment" or not text.strip() or text.startswith(("!F2CPP_", "#")):
+            break
+        res.append(re.sub(r"^!>?\s?", "", text.strip()))
+    return res[::-1]
+
+
 def collect_module(node):
     m = Module(lname(node.content[0].items[1]), node)
     m.spelling = str(node.content[0].items[1]).strip()
     for part in node.content:
         if cls(part) == "Specification_Part":
+            prev = None
             for s in part.content:
                 k = cls(s)
+                before, prev = prev, s
                 if k == "Use_Stmt":
                     pass                                # collected below (also inside procedures)
                 elif k == "Access_Stmt":
@@ -386,6 +412,7 @@ def collect_module(node):
                     parse_decl(s, m.vars)
                 elif k == "Derived_Type_Def":
                     t = collect_type(s, m)
+                    t.doc = leading_doc(before)
                     m.types[t.name] = t
                 elif k == "Interface_Block":
                     head = s.content[0].items[0]

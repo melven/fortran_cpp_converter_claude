@@ -70,7 +70,7 @@ class ReverseMixin:
         or "handle" (temporary handle of a wrapped object)"""
         prog, cfg = self.prog, self.cfg
         tr = self.tr(iface)
-        tramp = f"{bd.name}_wrapper"
+        tramp = f"{bd.spelling}_wrapper"
         err = tr.err
         has_err = err in iface.args and iface.vars[err].base == "integer" and not iface.vars[err].rank
         this = iface.pass_arg
@@ -90,6 +90,7 @@ class ReverseMixin:
         cpp_init.append(f"{const_obj}{cls}* {obj_var} = {cpp_obj};")
         cpp_obj = obj_var
         todo = None
+        stored_names, stored = cfg["wrap_stored"].get(f"{lt.name}%{bd.name}", []), []
         fail = self.fail_lines(err) if has_err else [f'error stop "{proc}: called for another object than its owner"']
         for a in iface.args:
             v = iface.vars[a]
@@ -144,7 +145,7 @@ class ReverseMixin:
                 actuals.append(f"{a}_p")
                 post.append(f"if (c_associated({a}_p)) call {self.c_name(rt, 'wrap')}({a}_p, {a})")
                 if rt.module is not self.mod:   # its c_wrapper module (and its C header for the struct)
-                    self.extra_uses.add(f"  use {self.cwrapper_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
+                    self.extra_uses.add(f"  use {self.wrap_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
                     self.c_includes.add(rt.module.name)
                 cpp_init.append(f"*{a} = nullptr;")
                 cpp_pre.append(f"std::unique_ptr<{rcls}> {a}_u;")
@@ -158,6 +159,89 @@ class ReverseMixin:
                 checks += [f"if (.not. listener_same({this}%owner, {a})) then"] + [f"  {x}" for x in fail] + ["end if"]
                 actuals.append(f"{this}%user")
                 cpp_args.append(f"*static_cast<const {prog.type_name(v.tname, self.mod)}*>({a})")
+            elif v.base == "type" and not v.rank and v.tname in cfg["expand_args"]:    # expanded: its components
+                if intent != "in":
+                    todo = f"argument {v.cname}: expanded argument (expand) must be intent(in)"
+                    continue
+                td = prog.find_type(v.tname, self.mod)
+                for ctype, pname, comp in cfg["expand_args"][v.tname]:
+                    cv = prog.find_component(td, comp) if td is not None else None
+                    comp = cv.cname if cv is not None else comp       # declared spelling
+                    kind = cv.base if cv is not None and not cv.rank else \
+                        "character" if re.search(r"string|char", ctype) else "real" if re.search(r"double|float|scalar", ctype) \
+                        else "logical" if "bool" in ctype else "integer"
+                    f_dummies.append(pname)
+                    if kind == "character":
+                        c_params.append(f"const char* {pname}")
+                        f_decls.append(f"character(kind=C_CHAR), intent(in) :: {pname}(*)")
+                        locals_.append(f"character(kind=C_CHAR, len=:), allocatable :: {pname}_c")
+                        pre.append(f"allocate({pname}_c, source=trim({a}%{comp}) // C_NULL_CHAR)")
+                        actuals.append(f"{pname}_c")
+                        cpp_args.append(f"std::string({pname})")
+                    elif kind in ("integer", "real", "logical"):
+                        ct = {"integer": "int", "real": cfg["c_real"], "logical": "bool"}[kind]
+                        ft = {"integer": "integer(C_INT)", "real": "real(C_REAL)", "logical": "logical(C_BOOL)"}[kind]
+                        c_params.append(f"{ct} {pname}")
+                        f_decls.append(f"{ft}, value :: {pname}")
+                        actuals.append(f"logical({a}%{comp}, C_BOOL)" if kind == "logical" else f"{a}%{comp}")
+                        cpp_args.append(pname)
+                    else:
+                        todo = f"argument {v.cname}: expanded component {comp} ({kind})"
+            elif v.base == "type" and not v.rank and a in stored_names:     # stored: kept by the C++ object
+                xt = prog.find_type(v.tname, self.mod)
+                why = "its type is not parsed (give its module with -W or -w)" if xt is None else \
+                    f"{v.tname} is not wrapped (give its module with -W or -w)" \
+                    if xt.module.name not in getattr(prog, "wrapped", ()) else \
+                    f"{v.tname} is not a root type" if not self.is_root(xt) else \
+                    "allocatable" if v.has("allocatable") else \
+                    "only for bidirectional types" if objects != "handle" else \
+                    f"binding {bd.spelling} is not deferred" if not bd.deferred else \
+                    f'{lt.spelling or lt.name} is not interop = "cpp"' if lt.name not in cfg["wrap_reverse_cpp"] else None
+                if why:
+                    todo = f"stored argument {v.cname}: {why}"
+                    continue
+                xh, xcls = self.c_type_name(xt), prog.type_name(xt.name, self.mod)
+                setup, destroy = self.c_name(xt, "setup"), self.c_name(xt, "destroy")
+                self.use_binding(xt, [setup, destroy])
+                slot = f"{bd.spelling}_{a}"         # the handle: in the C struct (Fortran only), released by the final
+                stored.append((slot, destroy, xcls, a))
+                c_params.append(f"{xh}* {a}")
+                f_dummies.append(a)
+                f_decls.append(f"type(C_PTR), value :: {a}")
+                locals_.append(f"type(C_PTR) :: {a}_old")
+                pre += [f"{a}_old = {this}%c%{slot}", f"{this}%c%{slot} = {setup}({a})      ! kept by the C++ object"]
+                actuals.append(f"{this}%c%{slot}")
+                post.append(f"if (c_associated({a}_old)) call {destroy}({a}_old)      ! the replaced one")
+                cpp_pre.append(f"std::unique_ptr<{xcls}> {a}_w = {self.private_ns(xcls)}::wrapFromC(*{a});")
+                cpp_args.append(f"std::move({a}_w)")
+            elif v.base == "type" and not v.rank and v.tname in cfg["type_map"] and \
+                    (v.tname in cfg["c_structs"] or getattr(prog.find_type(v.tname, self.mod), "bind_c", False)):
+                # C struct data (hand-wrapped): a bind(C) object by reference, or the C struct of a Fortran helper
+                if intent != "in" or v.has("pointer") or v.has("allocatable") or v.has("optional"):
+                    todo = f"argument {v.cname}: C struct data ({v.tname}): only intent(in)"
+                    continue
+                st_c = cfg["type_map"][v.tname]
+                xt = prog.find_type(v.tname, self.mod)
+                hdr = cfg["module_headers"].get(xt.module.name) if xt is not None else None
+                self.c_lines.add(f'!#include "{hdr}"' if hdr else f"!typedef struct {st_c} {st_c};")
+                c_params.append(f"const {st_c}* {a}")
+                f_dummies.append(a)
+                cpp_args.append(f"*{a}")
+                helper = cfg["c_structs"].get(v.tname)
+                if helper is None:              # bind(C): by reference is a C pointer
+                    f_decls.append(f"type({xt.spelling or xt.name}), intent(in) :: {a}")
+                    actuals.append(a)
+                    continue
+                f_decls.append(f"type(C_PTR), value :: {a}")
+                locals_.append(f"type({helper['wrapper']}), target :: {a}_w      ! its C struct (freed with it)")
+                setup = f"call {helper['setup']}({a}_w, {a}, {err if has_err else a + '_ierr'})"
+                if has_err:
+                    pre += [f"{cfg['wrap_chk_ierr'][0]}({setup}, {err})"] if cfg["wrap_chk_ierr"] else \
+                        [setup, f"if ({err} /= 0) return"]
+                else:
+                    locals_.append(f"integer :: {a}_ierr")
+                    pre += [setup, f'if ({a}_ierr /= 0) error stop "{proc}: {helper["setup"]} failed"']
+                actuals.append(f"{a}_w%{helper['ptr']}")
             elif v.base == "type" and not v.rank:                            # temporary handle
                 xt = prog.find_type(v.tname, self.mod)
                 if xt is None or xt.module.name not in getattr(prog, "wrapped", ()) or not self.is_root(xt) or \
@@ -238,9 +322,28 @@ class ReverseMixin:
             else:
                 todo = f"argument {v.cname}: {self.component_kind(v)}"
         res_v = iface.vars.get(iface.result) if iface.kind == "function" else None
-        if res_v is not None and (res_v.rank or res_v.base not in ("real", "integer", "logical")):
+        created = None
+        if res_v is not None and res_v.base == "type" and not res_v.rank and res_v.tname in self.reverse_types() \
+                and res_v.has("allocatable"):   # created object as function result (factory): owned by Fortran
+            r, rt = iface.result, prog.find_type(res_v.tname, self.mod)
+            rh, rcls = self.c_type_name(rt), prog.type_name(rt.name, self.mod)
+            created = (r, rcls)
+            c_params.append(f"{rh}** {r}")
+            f_dummies.append(r)
+            f_decls.append(f"type(C_PTR), intent(out) :: {r}")
+            locals_.append(f"type(C_PTR) :: {r}_p")
+            pre.append(f"{r}_p = C_NULL_PTR")
+            actuals.append(f"{r}_p")
+            post.append(f"if (c_associated({r}_p)) call {self.c_name(rt, 'wrap')}({r}_p, {r})")
+            if rt.module is not self.mod:
+                self.extra_uses.add(f"  use {self.wrap_module(rt.module)}, only: {self.c_name(rt, 'wrap')}")
+                self.c_includes.add(rt.module.name)
+            cpp_init.append(f"*{r} = nullptr;")
+            cpp_post += [f"*{r} = {r}_u ? {self.private_ns(rcls)}::toC(*{r}_u) : nullptr;",
+                         f"{r}_u.release(); // NOLINT(bugprone-unused-return-value)"]
+        elif res_v is not None and (res_v.rank or res_v.base not in ("real", "integer", "logical")):
             todo = f"result {res_v.cname}: {self.component_kind(res_v)}"
-        if res_v is not None:                   # the result: by reference
+        elif res_v is not None:                 # the result: by reference
             r = iface.result
             c_params.append(f"{self.c_type(res_v)}* {r}")
             f_dummies.append(r)
@@ -274,7 +377,7 @@ class ReverseMixin:
             out.append(f"    {self.fortran_decl(res_v)} :: {iface.result}")
         elif res_v is not None and res_v.node not in decl_nodes:
             out.append(f"    {lower_keywords(str(res_v.node))}")
-        res = {"todo": todo, "tramp": tramp}
+        res = {"todo": todo, "tramp": tramp, "stored": stored if not todo else []}
         if todo:
             res["fortran"] = out + [f'    error stop "{proc}: {todo}"', f"  end {kw} {proc}"]
             return res
@@ -295,7 +398,9 @@ class ReverseMixin:
                                    for c in c_params)       # parameter types (function pointers: without name)
         res["abstract"] = self.abstract_interface(aiface, res["c_types"], f"{cls}::{tramp}", f_dummies, f_decls)
         call = f"{cpp_obj}->{bd.spelling}({', '.join(cpp_args)});"
-        if res_v is not None:
+        if created:
+            call = f"std::unique_ptr<{created[1]}> {created[0]}_u = {call}"
+        elif res_v is not None:
             call = f"*{iface.result} = {call}"
         on_error = [f"    *{err} = -1;"] if has_err else ["    std::terminate();"]
         msg = f"encountered exception in {bd.spelling}"
@@ -499,9 +604,11 @@ class ReverseMixin:
     def fortran_any_decl(self):
         """C++ (.hpp): Fortran data (class(*)) of calls in a std::any (definitions: fortran_any_cpp)"""
         ht = self.cppany["ht"]
-        return [f"namespace {self.any_ns()}", "{",
-                f"std::any any_from_fortran({ht}* c);  //!< Fortran data (class(*)): in a std::any (copies share it)",
-                f"const {ht}* any_to_fortran(const std::any& a);  //!< back to Fortran (empty: NULL; C++ data throws)",
+        return [f"//! internals of {self.mod.spelling}: class(*) data of Fortran in C++", f"namespace {self.any_ns()}", "{",
+                "//! Fortran data (class(*)): in a std::any (copies share it, the last one deletes it in Fortran)",
+                f"std::any any_from_fortran({ht}* c);",
+                "//! back to Fortran (empty std::any: NULL; C++ data throws std::invalid_argument)",
+                f"const {ht}* any_to_fortran(const std::any& a);",
                 "}", ""]
 
     def fortran_any_cpp(self):
@@ -568,20 +675,28 @@ class ReverseMixin:
         typedefs.append(f"!typedef struct {ht} {ht};")
         methods = []
         for bd, iface in self.methods_of(lt):
+            if bd.non_overridable:          # cannot be overridden by the Fortran bridge: stays Fortran
+                continue
             this = iface.pass_arg
-            m = self.forward(lt, bd, iface, proc=f"{self.c_class(lt).lower()}_cpp_{bd.name}",
-                             aiface=f"{ht}_{bd.name}", funptr=f"{this}%{bd.name}_fn",
+            m = self.forward(lt, bd, iface, proc=f"{self.c_class(lt).lower()}_cpp_{bd.spelling}",
+                             aiface=f"{ht}_{bd.spelling}", funptr=f"{this}%{bd.spelling}_fn",
                              self_c="void* userData", self_dummy="userData", self_actual=f"{this}%userData",
                              cpp_obj=f"static_cast<{cls}*>(userData)", cls=cls, objects="owner")
-            m["fn"], m["proc"], m["typedef"] = f"{bd.name}_fn", f"{self.c_class(lt).lower()}_cpp_{bd.name}", f"{ht}_{bd.name}"
+            m["fn"], m["proc"] = f"{bd.spelling}_fn", f"{self.c_class(lt).lower()}_cpp_{bd.spelling}"
+            m["typedef"] = f"{ht}_{bd.spelling}"
             methods.append((bd, iface, m))
         live = [m for m in methods if not m[2]["todo"]]
         # --- C++ class
+        hpp.emit(0, f"//! internals of {cls}: its Fortran object")
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"{ht}* toC(const {cls}& l);  //!< the Fortran object of the listener")
+        hpp.emit(0, "//! the Fortran object of the listener l (passed to set_listener in Fortran)")
+        hpp.emit(0, f"{ht}* toC(const {cls}& l);")
         hpp.emit(0, "}")
         hpp.emit(0, "")
+        for line in self.type_doc(lt, f"listener (Fortran type {lt.spelling or lt.name}): implement the methods in "
+                                      "C++, set the object as listener of wrapped objects"):
+            hpp.emit(0, line)
         hpp.emit(0, f"class {name}")
         hpp.emit(0, "{")
         hpp.emit(0, "public:")
@@ -642,12 +757,16 @@ class ReverseMixin:
         self.report.add("translated", "wrapped-listener")
 
     def pure_virtuals(self, hpp, methods):
-        """deferred: pure virtual; with a default implementation: virtual (definition: default_methods)"""
-        for bd, iface, _ in methods:
+        """deferred: pure virtual; with a default implementation: virtual (definition: default_methods);
+        stored arguments: std::unique_ptr of the wrapper (moved into the C++ object)"""
+        for bd, iface, m in methods:
             ret, _, params, const = self.signature(self.tr(iface), iface, True)
+            for _, _, xcls, a in (m or {}).get("stored", []):
+                params = re.sub(rf"(?:const\s+)?{re.escape(xcls)}\s*[*&]+\s*{a}\b", f"std::unique_ptr<{xcls}> {a}", params)
             hpp.emit(0, "")
             self.doc(hpp, iface, 1, bd.spelling)
-            hpp.emit(1, f"virtual {ret} {bd.spelling}({params}){const}" + (" = 0;" if bd.deferred else ";"))
+            virtual = "" if bd.non_overridable else "virtual "
+            hpp.emit(1, f"{virtual}{ret} {bd.spelling}({params}){const}" + (" = 0;" if bd.deferred else ";"))
 
     def default_methods(self, cpp, methods):
         """translated Fortran default implementations of the non-deferred bindings"""
@@ -708,12 +827,13 @@ class ReverseMixin:
         saved_uses, self.extra_uses = self.extra_uses, cw["uses"]
         methods, cpp_only = [], []
         for bd, iface in self.methods_of(lt):
-            if not bd.deferred and self.translated_here(lt, bd, iface):      # wrap_translate: C++ only
+            if not bd.deferred and (bd.non_overridable or self.translated_here(lt, bd, iface)):
+                # C++ only (translate; non_overridable: Fortran keeps its implementation, the C++ one is not virtual)
                 cpp_only.append((bd, iface, None))
                 continue
             this = iface.pass_arg
             proc = self.cw_proc_name(bridge, bd)
-            m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.name}", funptr=f"{this}%c%{bd.name}",
+            m = self.forward(lt, bd, iface, proc=proc, aiface=f"{ht}_{bd.spelling}", funptr=f"{this}%c%{bd.spelling}",
                              self_c=f"{ht}* self", self_dummy="this", self_actual=f"c_loc({this}%c)",
                              cpp_obj=f"static_cast<{cls}*>(self->userData)", cls=cls, objects="handle")
             m["proc"] = proc
@@ -725,7 +845,9 @@ class ReverseMixin:
         consts, const_todo = self.reverse_constants(lt)          # C struct: constants, functions, userData
         members = [f"  const char* {v.cname} = nullptr;" if k == "string" else
                    f"  {self.c_type(v)} {v.cname} = " + ("false;" if k == "logical" else "0;") for v, k in consts]
-        members += [f"  {ht}_{bd.name} {bd.name} = nullptr;" for bd, _, m in live]
+        members += [f"  {ht}_{bd.spelling} {bd.spelling} = nullptr;" for bd, _, m in live]
+        kept = [s for _, _, m in live for s in m["stored"]]      # handles of stored arguments (Fortran only)
+        members += [f"  void* {slot} = nullptr;  //!< Fortran: handle of the stored {a}" for slot, _, _, a in kept]
         if factory is None:
             members.append(f"  {ht}_destroy destroy = nullptr;")
         members += ["  void* userData = nullptr;"]
@@ -735,11 +857,20 @@ class ReverseMixin:
         strings = [v for v, k in consts if k == "string"]     # C++: held by the object, c_str() in the struct
         cnames = ", ".join(v.cname for v, _ in consts)
         # --- C++ class
+        hpp.emit(0, f"//! internals of {cls}: its C struct")
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"{ht}* toC(const {cls}& x);  //!< the C struct of x")
+        hpp.emit(0, "//! the C struct of x (function pointers, userData: x), passed to Fortran")
+        hpp.emit(0, f"{ht}* toC(const {cls}& x);")
         hpp.emit(0, "}")
         hpp.emit(0, "")
+        ftn = lt.spelling or lt.name
+        role = (f"factory implemented in C++ (Fortran type {ftn}): the constructor registers it under its name in the "
+                "Fortran registration, the destructor unregisters it") if factory is not None else \
+            (f"Fortran type {ftn} implemented in C++: derive from this class; Fortran calls the methods through the "
+             "C struct")
+        for line in self.type_doc(lt, role):
+            hpp.emit(0, line)
         hpp.emit(0, f"class {name}")
         hpp.emit(0, "{")
         hpp.emit(0, "public:")
@@ -782,7 +913,7 @@ class ReverseMixin:
         hpp.emit(0, "")
         init = [f"  c_->{v.cname} = {v.cname}_.c_str();" if k == "string" else f"  c_->{v.cname} = {v.cname};"
                 for v, k in consts] + \
-            [f"  c_->{bd.name} = &{m['tramp']};" for bd, _, m in live] + \
+            [f"  c_->{bd.spelling} = &{m['tramp']};" for bd, _, m in live] + \
             (["  c_->destroy = &destroy_wrapper;"] if factory is None else []) + ["  c_->userData = this;"]
         reg, unreg = self.c_name(lt, "register"), self.c_name(lt, "unregister")
         if factory is None:
@@ -807,7 +938,7 @@ class ReverseMixin:
         # --- Fortran binding: interfaces of the functions, bind(C) struct (what C sees)
         for _, _, m in live:
             self.bridges += m["abstract"]
-        cw["binding_names"] += [f"{ht}_{bd.name}" for bd, _, _ in live] + [st]
+        cw["binding_names"] += [f"{ht}_{bd.spelling}" for bd, _, _ in live] + [st]
         if factory is None:
             self.bridges += self.abstract_interface(f"{ht}_destroy", f"{ht}*", f"{cls}::destroy_wrapper", ["this"],
                                                     ["type(C_PTR), value :: this"])
@@ -817,7 +948,8 @@ class ReverseMixin:
                          f"  type, bind(C), public :: {st}"] + \
             [f"    type(C_PTR) :: {v.cname} = C_NULL_PTR  !< C string" if k == "string" else
              f"    {self.f_type(v)} :: {v.cname} = " + (".false." if k == "logical" else "0") for v, k in consts] + \
-            [f"    type(C_FUNPTR) :: {bd.name} = C_NULL_FUNPTR" for bd, _, m in live] + \
+            [f"    type(C_FUNPTR) :: {bd.spelling} = C_NULL_FUNPTR" for bd, _, m in live] + \
+            [f"    type(C_PTR) :: {slot} = C_NULL_PTR  !< handle of the stored {a}" for slot, _, _, a in kept] + \
             (["    type(C_FUNPTR) :: destroy = C_NULL_FUNPTR"] if factory is None else []) + \
             ["    type(C_PTR) :: userData = C_NULL_PTR  !< the implementation (C++ or Fortran object)", f"  end type {st}", ""]
         str_in = cfg["wrap_string_in"]
@@ -841,11 +973,16 @@ class ReverseMixin:
             cw["procs"] += m["fortran"]
         fin, wrap = f"{bridge[:-5].lower()}_final", self.c_name(lt, "wrap")
         if factory is None:
-            cw["procs"] += ["", "  !> deletes the C++ object", f"  subroutine {fin}(this)",
-                            f"    type({bridge}), intent(inout) :: this", f"    procedure({ht}_destroy), pointer :: f", "",
-                            "    if (.not. associated(this%c)) return",
+            cw["procs"] += ["", "  !> deletes the C++ object" + (" (then the handles of the stored arguments)" if kept else ""),
+                            f"  subroutine {fin}(this)",
+                            f"    type({bridge}), intent(inout) :: this", f"    procedure({ht}_destroy), pointer :: f"] + \
+                [f"    type(C_PTR) :: {slot}" for slot, _, _, _ in kept] + ["",
+                            "    if (.not. associated(this%c)) return"] + \
+                [f"    {slot} = this%c%{slot}      ! the struct is freed with the C++ object" for slot, _, _, _ in kept] + [
                             "    if (c_associated(this%c%destroy)) then", "      call c_f_procpointer(this%c%destroy, f)",
-                            "      call f(c_loc(this%c))", "    end if", f"  end subroutine {fin}", "",
+                            "      call f(c_loc(this%c))", "    end if"] + \
+                [f"    if (c_associated({slot})) call {destroy}({slot})" for slot, destroy, _, _ in kept] + [
+                            f"  end subroutine {fin}", "",
                             "  !> x: the Fortran object of the C++ object c (owns it)",
                             f"  subroutine {wrap}(c, x)", "    type(C_PTR), intent(in) :: c",
                             f"    class({ft}), allocatable, target, intent(out) :: x", "",
@@ -866,7 +1003,7 @@ class ReverseMixin:
                  f"  subroutine {unreg}(name) bind(C, name=\"{unreg}\")"] + self.dllexport(unreg) + \
                 ["    type(C_PTR), value :: name", "", f"    call {factory['unregister']}({name_in[1]}(name))",
                  f"  end subroutine {unreg}"]
-        if factory is None:                     # the other direction: Fortran implementations used in C++
+        if factory is None and lt.name not in cfg["wrap_reverse_cpp"]:     # the other direction: Fortran in C++
             self.fortran_behind(lt, [(bd, iface, m["todo"]) for bd, iface, m in methods], fb)
         self.report.add("translated", "wrapped-reverse")
 
@@ -906,7 +1043,7 @@ class ReverseMixin:
             [x for v, k in consts for x in (self.string_to_c(v) if k == "string" else
              [f"    cthing%{v.cname} = " + (f"logical(fthing%ptr%{v.cname}, C_BOOL)" if k == "logical" else
                                           f"fthing%ptr%{v.cname}")])] + \
-            [f"    cthing%{bd.name} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
+            [f"    cthing%{bd.spelling} = c_funloc({routine})" for bd, _, routine, _ in entries] + \
             [f"    ! {TODO}: {bd.spelling} not wrapped ({todo}): C++ {wcls}::{bd.spelling} throws"
              for bd, _, todo in todos] + \
             ["    cthing%userData = c_loc(fthing)", f"  end subroutine {create}"]
@@ -926,7 +1063,7 @@ class ReverseMixin:
         hpp, cpp = self.cwc["hpp"], self.cwc["cpp"]
         ns = self.private_ns(name)
         over = "//! override base class implementation -> call corresponding C function pointer"
-        self.emit_lines(hpp, [f"namespace {ns}", "{", "",
+        self.emit_lines(hpp, [f"//! internals of {cls}: its implementations behind a C struct", f"namespace {ns}", "{", "",
                               f"//! {cls} implemented behind a C struct (e.g. Fortran: {create}): a copy of the struct; "
                               "its implementation (userData) outlives this object",
                               f"class {wcls} final : public {cls}", "{", "public:",
@@ -951,15 +1088,15 @@ class ReverseMixin:
         for bd, iface, _, part in entries:
             ret, _, params, const = self.signature(self.tr(iface), iface, False)
             lines = [f"{ret} {wcls}::{bd.spelling}({params}){const}", "{",
-                     f"  if( other_.{bd.name} == nullptr )",
+                     f"  if( other_.{bd.spelling} == nullptr )",
                      f'    throw std::logic_error("{wcls}::{bd.spelling}: no implementation");']
             lines += [f"  {x}" for x in part["cpp_pre"]]
-            call = f"other_.{bd.name}(&other_{''.join(', ' + a for a in part['cpp_args'])});"
+            call = f"other_.{bd.spelling}(&other_{''.join(', ' + a for a in part['cpp_args'])});"
             lines.append(f"  {call}")
             lines += [f"  {x}" for x in part["cpp_mid"]]      # owned results first (also on errors)
             if part["has_err"]:
                 lines += ["  if( ierr != 0 )",
-                          f'    throw std::runtime_error("Error: calling C {ht}::{bd.name} function pointer in '
+                          f'    throw std::runtime_error("Error: calling C {ht}::{bd.spelling} function pointer in '
                           f'{wcls}::{bd.spelling}!");']
             lines += [f"  {x}" for x in part["cpp_post"]] + ["}", ""]
             self.emit_lines(cpp, lines)
@@ -1092,6 +1229,19 @@ class ReverseMixin:
         return {"fortran": fortran, "cpp_pre": cpp_pre, "cpp_args": cpp_args, "cpp_post": cpp_post,
                 "cpp_mid": cpp_mid, "any_data": any_data,
                 "has_err": has_err}
+
+    def cw_merged(self, m):
+        """the Fortran part of module m's reverse types is in its binding module (no c_wrapper module): all are
+        factories (nothing uses them), or all are factories / interop = "cpp" and m has no other public types
+        (whose bindings other modules use; a dependency cycle otherwise)"""
+        rev = [t for t in m.types.values() if t.name in self.reverse_types()]
+        rest = [t for t in rev if t.name not in self.cfg["wrap_reverse_factories"]]
+        others = [t for t in m.types.values() if t.name not in self.reverse_types() and m.is_public(t.name)]
+        return bool(rev) and (not rest or (all(t.name in self.cfg["wrap_reverse_cpp"] for t in rest) and not others))
+
+    def wrap_module(self, m):
+        """the Fortran module with project_<Thing>_wrap of the reverse types of module m"""
+        return f"{m.spelling or m.name}_c_binding" if self.cw_merged(m) else self.cwrapper_module(m)
 
     def cwrapper_module(self, m):
         """name of the c_wrapper module of module m: project_thing -> project_c_wrapper_thing"""

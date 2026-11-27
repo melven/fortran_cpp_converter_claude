@@ -39,6 +39,7 @@ class X:
     res_var: Var = None      # result variable of the called function
     fwd: str = None          # optional dummy: the std::optional object itself
     neg: object = None       # the negated expression, if it has a simpler form than !(...)
+    one: object = None       # array of size 1 (maxloc of a vector): the scalar element
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
@@ -57,6 +58,61 @@ REL_OPS = {".lt.": "<", ".le.": "<=", ".gt.": ">", ".ge.": ">=", ".eq.": "==", "
            "<": "<", "<=": "<=", ">": ">", ">=": ">=", "==": "==", "/=": "!="}
 MATH1 = {"sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh"}
 EIGEN_ARRAY_FN = {"asin": "asin", "acos": "acos", "atan": "atan"}
+
+
+def arg_spans(line):
+    """(start, end) of every argument of every call in a C++ line (string literals and a trailing // comment
+    respected)"""
+    spans, stack, i, n = [], [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if c == '"':
+            i += 1
+            while i < n and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+        elif line.startswith("//", i):
+            break
+        elif c == "(":
+            stack.append(i + 1)
+        elif c == "," and stack:
+            spans.append((stack[-1], i))
+            stack[-1] = i + 1
+        elif c == ")" and stack:
+            spans.append((stack.pop(), i))
+        i += 1
+    return spans
+
+
+def top_level_plus(text):
+    """text contains a + outside of parentheses and string literals"""
+    depth, i, n = 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif text.startswith(" + ", i) and depth == 0:
+            return True
+        i += 1
+    return False
+
+
+def cancel_shift(a, b):
+    """integer comparison of two shifted values (i + 1 == j + 1, from 0-based indices): the same top-level
+    constant on both sides cancels"""
+    shift = re.compile(r"(.+) ([+-]) (\d+)")
+    ma, mb = shift.fullmatch(a.code), shift.fullmatch(b.code)
+    if a.prec == P_ADD and b.prec == P_ADD and a.base == b.base == "integer" and ma and mb and \
+            ma.group(2, 3) == mb.group(2, 3):
+        ca, cb = ma.group(1), mb.group(1)
+        return X(ca, 0, "integer", P_ADD if re.search(r"[+-]", ca) else P_MUL), \
+            X(cb, 0, "integer", P_ADD if re.search(r"[+-]", cb) else P_MUL)
+    return a, b
 
 
 def par(x, need=100, strict=False):
@@ -78,6 +134,9 @@ class Translator:
         self.named = {}         # named_elements: array -> ({element index: C++ variable}, variables declared)
         self.brace_arrays = False   # array constructors as braced lists
         self.via_getters = False    # translated method of a wrapped class: components are getters
+        self.plain_doc = False      # procedure body: !< / !> become ordinary comments
+        self.frames = []            # statements being translated: [indent, helper definitions to insert before]
+        self.helper_lines = set()   # definitions of helper lambdas (helper)
         self.cfg = program.cfg
         self.err = self.cfg["error_arg"].lower()
         # macros that stay macros in C++ (replacement "call NAME(...)")
@@ -86,6 +145,10 @@ class Translator:
         self.overrides = {}
         self.out = []
         self.loop_local = set()    # loop variables that are only used inside their loops
+        self.local_loops = set()   # id of loops that declare their variable (its value after the loop is not used)
+        self.dead = set()          # id of assignments whose value is never read (emit.dead_assignments): dropped
+        self.dead_kept = set()     # the same with possible side effects: kept, review note
+        self.dead_lines = set()    # source lines of removed assignments (their trailing comments are dropped)
         self.loop_decl = set()     # ... declared in the for statement
         self.body_decl = {}        # id(assignment) -> variable declared there (loop body, emit.loop_body_decl)
         self.shift = {}            # loop variable -> offset: Fortran value = C++ value + offset
@@ -400,7 +463,7 @@ class Translator:
 
     def x_Parenthesis(self, node):
         x = self.expr(node.items[1])
-        return X(f"({x.code})", x.rank, x.base, 100, tname=x.tname, arr=x.arr)
+        return X(f"({x.code})", x.rank, x.base, 100, tname=x.tname, arr=x.arr, neg=x.neg)
 
     def x_Int_Literal_Constant(self, node):
         return X(str(node.items[0]), 0, "integer")
@@ -410,7 +473,8 @@ class Translator:
         return X(s if "." in s or "e" in s else s + ".0", 0, "real")
 
     def x_Logical_Literal_Constant(self, node):
-        return X("true" if "T" in str(node.items[0]).upper() else "false", 0, "logical")
+        t = "T" in str(node.items[0]).upper()
+        return X("true" if t else "false", 0, "logical", neg=X("false" if t else "true", 0, "logical"))
 
     def x_Char_Literal_Constant(self, node):
         return X(cstring(str(node.items[0])), 0, "character")
@@ -511,6 +575,8 @@ class Translator:
         if "{" not in fn:
             xs = [self.expr(node) for _, node in map(self.split_arg, args)
                   if not self.is_err(node) and not self.is_dropped(node)]
+            if fn.startswith("std::"):      # size-1 array (str(maxloc(v)) prints one number): the scalar
+                xs = [x.one if x.one is not None else x for x in xs]
             if fn.startswith("std::") and any(x.rank > 0 for x in xs):
                 fn = fn[5:]         # Eigen argument: the project's overload, not the std function
             return f"{fn}({', '.join(self.matrix(x) for x in xs)})"
@@ -952,6 +1018,8 @@ class Translator:
             res.code = f"{base}.middleRows({seg[0][0]}, {seg[0][1]})"
         elif len(sc) == 2 and seg[1] and kinds[0] == "all":
             res.code = f"{base}.middleCols({seg[1][0]}, {seg[1][1]})"
+        elif len(sc) == 1 and kinds[0] == "idx" and v.base == "integer":
+            res.code = f"{base}[{sc[0][1]}]"   # works for std::vector<int> and Eigen::VectorXi (either declaration)
         elif len(sc) == 1:
             res.code = base if kinds[0] == "all" else f"{base}({sc[0][1]})"
         elif kinds == ["all", "all"]:
@@ -971,19 +1039,25 @@ class Translator:
         x = self.expr(operand)
         o = op.lower()
         if o == ".not.":
-            if x.neg is not None:
-                return x.neg
-            return X("!" + par(x, P_UNARY), x.rank, "logical", P_UNARY, arr=x.arr)
+            return self.negation(x)
         if o == "-":
             return X("-" + par(x, P_UNARY), x.rank, x.base, P_UNARY, arr=x.arr)
         return x
+
+    @staticmethod
+    def negation(x):
+        """!x, or the simpler form x.neg (n < 0 for n >= 0, De Morgan)"""
+        return x.neg if x.neg is not None else X("!" + par(x, P_UNARY), x.rank, "logical", P_UNARY, arr=x.arr, neg=x)
 
     def as_array(self, x):
         """operand for an Eigen coefficient-wise (Array) expression"""
         return x.code if x.rank == 0 or x.arr else par(x) + ".array()"
 
     def binary(self, lhs, op, rhs):
-        a, b = self.expr(lhs), self.expr(rhs)
+        return self.binary_x(self.expr(lhs), op, self.expr(rhs))
+
+    def binary_x(self, a, op, b):
+        """binary operation of translated operands"""
         o = op.lower()
         rank = max(a.rank, b.rank)
         base = "real" if "real" in (a.base, b.base) else (a.base if a.base == b.base else "unknown")
@@ -1001,13 +1075,31 @@ class Translator:
             c, p = REL_OPS[o], P_EQ if REL_OPS[o] in ("==", "!=") else P_REL
             if rank > 0:
                 return X(f"{self.as_array_p(a, p)} {c} {self.as_array_p(b, p)}", rank, "logical", p, arr=True)
-            return X(f"{par(a, p)} {c} {par(b, p, True)}", 0, "logical", p)
+            a, b = cancel_shift(a, b)
+            neg = None      # !(a < b) is not a >= b for NaN: negated only for == / != and non-real operands
+            if c in ("==", "!=") or {a.base, b.base} <= {"integer", "character", "logical"}:
+                nc = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!=", "!=": "=="}[c]
+                neg = X(f"{par(a, p)} {nc} {par(b, p, True)}", 0, "logical", p)
+            return X(f"{par(a, p)} {c} {par(b, p, True)}", 0, "logical", p, neg=neg)
         if o in (".and.", ".or.", ".eqv.", ".neqv."):
             c, p = {".and.": ("&&", P_AND), ".or.": ("||", P_OR), ".eqv.": ("==", P_EQ),
                     ".neqv.": ("!=", P_EQ)}[o]
+            neg = None      # De Morgan if both parts have a simple negation
+            if rank == 0 and o in (".and.", ".or.") and a.neg is not None and b.neg is not None:
+                neg = self.binary_x(a.neg, ".or." if o == ".and." else ".and.", b.neg)
             if o == ".or.":     # a && b || c is correct, but compilers warn: parenthesise &&
-                return X(f"{par(a, P_AND, True)} {c} {par(b, P_AND, True)}", rank, "logical", p, arr=rank > 0)
-            return X(f"{par(a, p)} {c} {par(b, p, True)}", rank, "logical", p, arr=rank > 0)
+                return X(f"{par(a, P_AND, True)} {c} {par(b, P_AND, True)}", rank, "logical", p, arr=rank > 0,
+                         neg=neg)
+            return X(f"{par(a, p)} {c} {par(b, p, True)}", rank, "logical", p, arr=rank > 0, neg=neg)
+        if o in "+-" and rank == 0 and a.base == b.base == "integer" and re.fullmatch(r"\d+", b.code):
+            m = re.fullmatch(r"(.+) ([+-]) (\d+)", a.code) if a.prec == P_ADD else None
+            if m:                                   # i + 1 + 1 -> i + 2, i + 1 - 1 -> i (shifted loop variables)
+                c = (int(m.group(3)) if m.group(2) == "+" else -int(m.group(3))) + \
+                    (int(b.code) if o == "+" else -int(b.code))
+                head = m.group(1)
+                if c == 0:
+                    return X(head, 0, "integer", P_ADD if re.search(r"[-+*/]", head) else P_MUL)
+                return X(f"{head} {'+' if c > 0 else '-'} {abs(c)}", 0, "integer", P_ADD)
         if o in "+-":
             if rank > 0 and (a.rank == 0 or b.rank == 0 or a.arr or b.arr):
                 return X(f"{self.as_array_p(a, P_ADD)} {o} {self.as_array_p(b, P_ADD, o == '-')}",
@@ -1080,6 +1172,20 @@ class Translator:
 
     def is_err(self, node):
         return cls(node) == "Name" and lname(node) == self.err
+
+    def template_args(self, args):
+        """arguments of a call template: X (or code of expanded arguments / keywords)"""
+        res = []
+        for a in args:
+            kw, node = self.split_arg(a)
+            if self.is_err(node) or self.is_dropped(node):
+                continue
+            if self.expanded_name(node):
+                res += [n for _, n, _ in self.expanded_name(node)]
+                continue
+            x = self.expr(node)
+            res.append(f"/*{kw}=*/ " + self.matrix(x) if kw else x)
+        return res
 
     def plain_args(self, args):
         res = []
@@ -1337,6 +1443,8 @@ class Translator:
 
     def comment_text(self, node):
         text = str(node)[1:]
+        if self.plain_doc:
+            return "//" + (text[1:] if text[:1] in "<>" and text[:1] else text)
         dox = self.cfg["doxygen"]
         return dox + text[1:] if text[:1] == ">" else dox + "<" + text[1:] if text[:1] == "<" else "//" + text
 
@@ -1360,6 +1468,8 @@ class Translator:
             return
         if s.strip() in FORTRAN_SEPARATORS:
             return
+        if node.item is not None and node.item.span[0] in self.dead_lines:
+            return                          # trailing comment of a removed assignment
         c = self.comment_text(node)
         trailing = prev is not None and node.item is not None and last_line(prev) == node.item.span[0]
         if trailing and self.out and self.out[-1].strip() and not self.out[-1].lstrip().startswith("//"):
@@ -1463,6 +1573,9 @@ class Translator:
 
     def stmt(self, node, ind):
         k = cls(node)
+        if id(node) in self.dead:           # value never read, no side effects
+            self.dead_lines.add(last_line(node))
+            return
         if k in self.CONSTRUCTS:
             # fparser attaches comments preceding a construct to the construct itself
             n_lead = 0
@@ -1472,7 +1585,19 @@ class Translator:
             node = _Trimmed(node, n_lead) if n_lead else node
         start = len(self.out)
         self.notes = []
+        if id(node) in self.dead_kept:
+            self.note("dead-assignment", f"value of {node.items[0]} never read: only the expression is evaluated "
+                                         "(possible side effects)")
         self.saw_transpose = False
+        self.frames.append([ind, []])
+        try:
+            self.stmt_(node, ind, k, start)
+        finally:
+            _, helpers = self.frames.pop()
+        if helpers:
+            self.out[start:start] = [" " * (2 * ind) + h for h in helpers]
+
+    def stmt_(self, node, ind, k, start):
         k = cls(node.node) if cls(node) == "_Trimmed" else k
         heads = [c for c in node.content if cls(c) in self.HEADERS] if k in self.CONSTRUCTS else [node]
         try:
@@ -1485,26 +1610,89 @@ class Translator:
                 self.emit(ind, "// F: " + str(node).split("\n")[0])
             n0 = len(self.out)
             m(node, ind)
-            if id(node) in self.body_decl:          # declared at this assignment (loop body)
+            if k == "Call_Stmt":
+                self.hoist_message(n0, ind)
+            if id(node) in self.body_decl and id(node) not in self.dead_kept:     # declared here (loop body)
                 self.declare_here(self.body_decl[id(node)], n0, ind)
             if self.notes and k not in self.CONSTRUCTS and len(self.out) > n0:
                 self.out[n0] += f"  // {TODO}: " + "; ".join(self.notes)
             self.report.add("translated", k)
         except Untranslatable as e:
             del self.out[start:]
+            self.frames[-1][1].clear()
             self.report.add("untranslated", e.category)
             self.fortran_comment(node, ind, f"not translated ({e.category})")
         except Exception as e:      # a bug of f2cpp (not an unsupported construct): logged, reported as error
             if self.cfg["strict"]:
                 raise
             del self.out[start:]
+            self.frames[-1][1].clear()
             self.report.add("error", f"internal:{type(e).__name__}:{k}")
             self.internal_error(e, node)
             self.fortran_comment(node, ind, f"not translated (f2cpp internal error: {type(e).__name__})")
 
+    def helper(self, name, definition):
+        """name of a local helper lambda without captures (constexpr auto name = definition;), defined before the
+        current statement unless a definition is visible there (same or enclosing scope); None outside of
+        statements"""
+        if not self.frames:
+            return None
+        ind, line = self.frames[-1][0], f"constexpr auto {name} = {definition};"
+        for fi, pending in reversed(self.frames):
+            if line in pending and fi <= ind:
+                return name
+        if self.visible(lambda s: s == line, ind):
+            return name
+        self.frames[-1][1].append(line)
+        self.helper_lines.add(line)
+        return name
+
+    def visible(self, test, ind):
+        """a line of self.out (stripped) for which test is true is in scope at indentation ind"""
+        low = 2 * ind
+        for out_line in reversed(self.out):
+            s = out_line.split("\n")[0]
+            if not s.strip() or s.lstrip().startswith("#"):
+                continue
+            depth = len(s) - len(s.lstrip())
+            if depth <= low and test(s.strip()):
+                return True
+            low = min(low, depth)
+        return False
+
+    def hoist_message(self, n0, ind):
+        """a call statement longer than line_width: its longest string concatenation argument into a local
+        const std::string msg (msg2, ... if a msg is in scope or a variable)"""
+        width = self.cfg["line_width"]
+        if not width or len(self.out) != n0 + 1 or len(self.out[n0]) <= width or "\n" in self.out[n0]:
+            return
+        line = self.out[n0]
+        best = None
+        for s, e in arg_spans(line):
+            text = line[s:e].strip()
+            if '"' in text and top_level_plus(text) and (best is None or e - s > best[1] - best[0]):
+                best = (s, e)
+        if best is None:
+            return
+        k = 1
+        while True:
+            name = "msg" if k == 1 else f"msg{k}"
+            if self.lookup(name) is None and not self.visible(lambda t, p=f"const std::string {name} = ": t.startswith(p), ind):
+                break
+            k += 1
+        s, e = best
+        lead = line[s:e][:len(line[s:e]) - len(line[s:e].lstrip())]
+        self.out[n0:] = [" " * (2 * ind) + f"const std::string {name} = {line[s:e].strip()};",
+                         line[:s] + lead + name + line[e:]]
+
     # simple statements
     def s_Assignment_Stmt(self, node, ind):
         lhs_n, _, rhs_n = node.items
+        if id(node) in self.dead_kept:      # value never read: only the expression (possible side effects)
+            x = self.expr(rhs_n)
+            call = x.prec >= 100 and x.code.endswith(")") and not x.code.startswith("(")     # f(...), a.f(...)
+            self.emit(ind, f"{self.matrix(x)};" if call else f"static_cast<void>({self.matrix(x)});")
+            return
         if self.via_getters and cls(lhs_n) in ("Data_Ref", "Name"):
             lx = self.ref(lhs_n)
             if lx.via_accessor and lx.whole and lx.rank > 0 and self.expr(rhs_n).rank > 0:
@@ -1752,14 +1940,22 @@ class Translator:
                 return
             template = self.call_template(n)
             if template is not None:
-                codes = self.plain_args(args)
+                xs = self.template_args(args)
+                template = re.sub(r"!\(\{(\d+)\}\)", r"{\1:not}", template)     # !({0}) -> the negation
 
                 def sub(m):
-                    c = codes[int(m.group(1))]
-                    return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) else c
-                text = re.sub(r"\{(\d+)(:str)?\}", sub, template)
+                    x = xs[int(m.group(1))]
+                    if m.group(2) == ":not" or m.group(2) == ":notstr" and getattr(x, "code", "") != "false":
+                        x = self.negation(x) if isinstance(x, X) else f"!({x})"
+                    c = self.matrix(x) if isinstance(x, X) else x
+                    return c.replace("\\", "\\\\").replace('"', '\\"') if m.group(2) in (":str", ":notstr") else c
+                text = re.sub(r"\{(\d+)(:str|:not|:notstr)?\}", sub, template)
+                if text.startswith("if (false) "):     # assertion of .true.
+                    text = ""
+                if text.startswith("if (true) "):      # assertion of .false.
+                    text = text[len("if (true) "):]
                 if text.strip():                # an empty template drops the call
-                    self.emit(ind, text.replace("if (!(false)) ", "", 1) if text.startswith("if (!(false)) ") else text)
+                    self.emit(ind, text)
                 return
             if p is not None:
                 self.spelled(p, desig)
@@ -1817,6 +2013,10 @@ class Translator:
         elif name == "relativelyequal" and len(xs) == 2 and xs[0].rank == 0:
             code = f"{A}_NEAR({c[0]}, {c[1]}, {par(self.expr(kw['tolerance']), P_MUL) if 'tolerance' in kw else tol}" \
                    f" * std::abs({c[0]}))"
+        elif name in ("true", "false") and len(xs) == 1 and c[0] in ("true", "false"):
+            if (c[0] == "true") == (name == "true"):        # @assertTrue(.true.): nothing to check
+                return
+            code = ("FAIL()" if A == "ASSERT" else "ADD_FAILURE()")     # @assertTrue(.false.): this path fails
         elif name in simple and len(xs) == (1 if name in ("true", "false") else 2):
             if xs[0].rank > 0 and name in ("true", "false"):
                 c[0] = f"({c[0]}).all()" if name == "true" else f"({c[0]}).any()"
@@ -1978,8 +2178,9 @@ class Translator:
         sub = Translator(self.prog, self.mod, self.proc, self.report)
         # same translation state: overrides, shifted loop variables, loop declarations
         sub.named, sub.via_getters = self.named, self.via_getters
-        sub.overrides, sub.shift, sub.loop_local, sub.loop_decl = \
-            self.overrides, self.shift, self.loop_local, self.loop_decl
+        sub.overrides, sub.shift, sub.loop_local, sub.loop_decl, sub.local_loops = \
+            self.overrides, self.shift, self.loop_local, self.loop_decl, self.local_loops
+        sub.dead, sub.dead_kept, sub.dead_lines = self.dead, self.dead_kept, self.dead_lines
         sub.body_decl = self.body_decl
         sub.stmt(node.items[1], 0)
         if len(sub.out) == 1 and not sub.out[0].startswith("//"):
@@ -2030,6 +2231,7 @@ class Translator:
             return
         parts = []                                          # internal write: build a std::string
         for p in pieces:
+            p = p.one if p.one is not None else p
             if p.base not in ("character", "integer", "real", "logical") or (p.rank > 0 and p.base == "character"):
                 raise Untranslatable("write:internal-item")
             parts.append(par(p, P_ADD, True) if p.base == "character" else
@@ -2149,9 +2351,10 @@ class Translator:
             n = lname(var)
             v = self.lookup(n)
             i = self.expr(var).code
-            decl = f"{self.cpp_type(v)} " if n in self.loop_decl and v is not None else ""
+            local = n in self.loop_local or id(node.node if isinstance(node, _Trimmed) else node) in self.local_loops
+            decl = f"{self.cpp_type(v)} " if (n in self.loop_decl or local) and v is not None else ""
             st = self.expr(bounds[2]).code if len(bounds) > 2 else "1"
-            if n in self.loop_local and st in ("1", "-1"):
+            if local and st in ("1", "-1"):
                 idx, other, arg = self.index_uses(node, n)
                 shift = 1 if idx > other and not arg else 0
             lo, hi = self.minus(bounds[0], shift), self.expr(bounds[1])
@@ -2602,15 +2805,24 @@ def i_loc(tr, n, pos, kw):
     if set(kw) - {"dim"} or len(pos) > 2 or x.rank not in (1, 2) or (dim is not None and x.rank != 1):
         raise Untranslatable(f"intrinsic:{n}(mask/dim)")
     fn = "maxCoeff" if n == "maxloc" else "minCoeff"
-    obj = f"({tr.matrix(x)})" if x.arr else par(x)
     i, iv = tr.cfg["int"], tr.cfg["ivec"]
     if x.rank == 2:
+        name = tr.helper(n + "2", f"[](const auto& x_) {{ Eigen::Index r_, c_; x_.{fn}(&r_, &c_); "
+                                  f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}")
+        if name is not None:
+            return X(f"{name}({tr.matrix(x)})", 1, "integer")
+        obj = f"({tr.matrix(x)})" if x.arr else par(x)
         return X(f"[&] {{ Eigen::Index r_, c_; {obj}.{fn}(&r_, &c_); "
                  f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}()", 1, "integer")
-    scalar = f"[&] {{ Eigen::Index i_; {obj}.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}()"
+    name = tr.helper(n, f"[](const auto& x_) {{ Eigen::Index i_; x_.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}")
+    if name is not None:
+        scalar = f"{name}({tr.matrix(x)})"
+    else:
+        obj = f"({tr.matrix(x)})" if x.arr else par(x)
+        scalar = f"[&] {{ Eigen::Index i_; {obj}.{fn}(&i_); return static_cast<{i}>(i_) + 1; }}()"
     if dim is not None:
         return X(scalar, 0, "integer")
-    return X(f"({iv}(1) << {scalar}).finished()", 1, "integer")
+    return X(f"({iv}(1) << {scalar}).finished()", 1, "integer", one=X(scalar, 0, "integer"))
 
 
 def i_null(tr, n, pos, kw):

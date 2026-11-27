@@ -46,13 +46,13 @@ entries are printed).
 |---|---|
 | `[project]` | `namespace` (default `project`), `namespace_map` (`[[module-regex, "child"], ...]`: child namespaces), `includes` (in every header; must provide `scalar`, `vec`, `mat`), `constructor_bindings` (`["configure"]`), `destructor_bindings` (`["finalize"]`), `error_arg` (`"ierr"`), `error_success` (`["0"]`), `drop_args` (names of `class(*)` user data dummies), `strict` (internal errors stop the run) |
 | `[macros]` | `prefix` (default: the outer namespace in upper case), `include` (the Fortran include file of the macros: generated Fortran then uses `<P>_CHK_IERR`, `<P>_CHK_ARGUMENT`, `<P>_ASSERT(.false., ierr)`; dropped in C++); `[macros.NAME]`: `fortran` (replacement before parsing), `cpp` (C++ statement of the call it becomes) |
-| `[prepass]` | `patches = [[regex, replacement], ...]` |
+| `[prepass]` | `patches = [[regex, replacement], ...]`; `defined` / `undefined` (macro names, e.g. `["__INTEL_COMPILER"]`): `#if` / `#ifdef` / `#ifndef` / `#elif` blocks are resolved before parsing if the condition has the same value for all other macros (`defined(A) || defined(B)` with `A` in `defined`; comparisons such as `X > 1` stay) |
 | `[map]` | `kinds`, `constants`, `includes` (Fortran `#include` → C++, `""`: dropped), `functions` (function / subroutine → C++ function or template), `calls` (call → C++ statement; glob patterns), `interfaces` (abstract interface → C++ type), `headers` (C++ name → include, added to the `.hpp` / `.cpp` whose code uses the name, also from templates; whole words: `Logger = '"project_logging.hpp"'`) |
 | `[tests]` | `extensions` (`[".pf", ".pfunit"]`), `modules` (test framework modules), `includes` |
 | `[wrap]` | `string_in`, `string_out` (string helpers of the project) |
 | `[modules.M]` | `header` (header of a module that is not translated, or output name of a translated one; `""`: no include, no missing-module warning), `exclude` (names not emitted, glob patterns; `M` may be a pattern) |
-| `[types.T]` | `cpp` (existing C++ class), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, `"listener"`), `factory = {register, unregister}`, `instance` |
-| `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`) |
+| `[types.T]` | `cpp` (existing C++ class), `c_struct` (Fortran helper making its C struct, for bidirectional methods), `accessors` (see below), `unwrap`, `expand`, `named_elements` (`true` or the C++ class), `element_list`; wrapped modules: `constants`, `owned`, `independent`, `handle_member`, `c_name`, `translate` (all methods in C++), `interop` (`"bidirectional"`: implemented in C++, Fortran implementations also usable in C++; `"cpp"`: only implemented in C++, used from Fortran; `"listener"`), `factory = {register, unregister}`, `instance` |
+| `[types.T.bindings.B]` | `template` (C++ for calls of the binding), `translate`, `sizes` (`{x = "this%n"}`), `stored` (`interop = "cpp"`: wrapped object arguments that the C++ object keeps, see below) |
 | `[procedures.P]` | `c_name`, `translate`, `sizes` |
 
 Names are case-insensitive; `T` may be a glob pattern for `template` (`[types."*_config_type".bindings]`).
@@ -78,7 +78,7 @@ solve.template = "..."`.
 | Style section | Content |
 |---|---|
 | `[names]` | type suffix / case, file extensions, handle member of wrapped classes, C names (`c_prefix`, `c_real`) |
-| `[layout]` | include guard, doxygen prefix, brace style, width of C declarations |
+| `[layout]` | include guard, doxygen prefix, brace style, width of C declarations; `line_width` (C++ lines longer than this are broken by clang-format, only those lines; a longer call gets its longest string concatenation argument as `const std::string msg` before it; 0: off), `clang_format`, `clang_format_style` (`""`: f2cpp's style, `"file"`: the project's `.clang-format`) |
 | `[types]` | `scalar`, `vec`, `mat`, `ivec`, `imat`, `int` |
 | `[conventions]` | member access, optional / array / integer array arguments, Eigen placeholders, size checks of wrapped methods, gtest asserts |
 | `[members]` | templates of the data member name, the accessor names and the accessors |
@@ -95,6 +95,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | `type :: xyz_type`, `extends`, `abstract`, `deferred`, `final` | `class xyz`, inheritance, `override` / `= 0`, destructor |
 | type without derived type in the run | `class xyz final` |
 | binding that is overridden in a derived type / root of a hierarchy | `virtual` method / virtual destructor; other methods are not virtual |
+| `procedure, non_overridable` | `virtual ... override final` if it overrides a base binding, else not virtual; bidirectional types / listeners: not forwarded (the Fortran implementation stays, C++: the translated default, not virtual) |
 | `procedure, private :: f`, `private` after `contains` (module-private) | `private:` if only methods of the type call it, `protected:` if methods of derived types do, else public (style `member_access = "fortran"`: `private:`); constructors / destructors stay public |
 | binding `configure` with `intent(out)` passed object (`project.constructor_bindings`) | constructor; `call obj%configure(a)` → `obj = xyz(a);` |
 | binding `finalize` without further arguments (`project.destructor_bindings`) | destructor; explicit calls are commented out with a TODO |
@@ -105,7 +106,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | generic interface / generic binding (`generic :: solve => solve_a, solve_b`) | overloads named `solve`; a call is matched to the specific procedure by number, keywords, rank and type of the arguments |
 | `real` / `real(kind=8)` | `scalar` / `map.kinds` entry (`double`) |
 | `real` array rank 1 / 2 | `vec` / `mat` |
-| integer array rank 1 | `std::vector<int>` if it is only indexed, sized, filled, copied or passed on; `Eigen::VectorXi` if it is used in array expressions, sections, as vector subscript, passed to unknown procedures, or visible to other modules (dummies / results of public procedures and of methods of public types, public components, public module variables: the same with and without `-I`) (style `int_arrays = "eigen"`: always) |
+| integer array rank 1 | `std::vector<int>` if it is only indexed, sized, filled, copied or passed on; `Eigen::VectorXi` if it is used in array expressions, sections, as vector subscript, passed to unknown procedures, or visible to other modules (dummies / results of public procedures and of methods of public types, public components, public module variables: the same with and without `-I`) (style `int_arrays = "eigen"`: always); elements are always `v[i]` (valid for both types) |
 | numeric array rank 3 | `std::vector<mat>`: `a(:, :, i)` → `a[i - 1]` |
 | array of objects, rank 1 / 2 | `std::vector<T>` / `Eigen::Array<T, Dynamic, Dynamic>`: `b(i, j)%m(k, l)` → `b(i - 1, j - 1).m(k - 1, l - 1)` |
 | any array of rank ≥ 4 (objects: ≥ 3) | flat `vec` / `std::vector<T>` with explicit column-major index and a TODO; extents from the declaration or an `allocate` in the module |
@@ -129,7 +130,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | elementwise `*`, `/`, `**`, array ± scalar, `where (m) a = b` | `cwiseProduct`, `.array()` expressions, `select` |
 | `do`, `do while`, `if`, `select case`, `exit`, `cycle` | `for`, `while`, `if` / `else if` chains, `break`, `continue` |
 | `any([a, b, c])`, `all([a, b])` | `a \|\| b \|\| c`, `a && b` |
-| `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | inline lambda around `maxCoeff(&i)`, 1-based result |
+| `maxloc(x, 1)`, `maxloc(a)` (also `minloc`) | helper lambda `constexpr auto maxloc` / `minloc` / `maxloc2` (around `maxCoeff(&i)`, 1-based result), defined before the first statement using it, again only where that scope is closed; a size-1 result printed (`str`, `write`): the scalar |
 | array with a constant lower bound (`c(0:n)`, `c(-1:)`, `allocate(c(-1:n))`) | index shifted by the bound: `c(k)` → `c(k)` resp. `c(k + 1)`, also for vector subscripts: `c(idx)` → `c((idx.array() + 1))`; variable lower bounds get a TODO |
 | `lbound(a, d)` / `ubound(a, d)` | Fortran values: declared lower bound / `size + lower - 1` (indices are shifted at each use) |
 | members with `accessors` (`[types.solver_type] accessors = ["n", "tol:set", "x:ref"]`) | protected `n_` (private in final classes) with public `int n() const`, `void tol(scalar value)`, `vec& x()`; own and derived methods use `n_`, other code the accessors (see [Configuration](#configuration)) |
@@ -148,10 +149,14 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | test module that is used by another module (shared test helpers) | additionally `<module>.hpp` with its types, constants and helper prototypes; the helpers are then not `static` |
 | `@assertEqual(e, a, tolerance=t)`, `@assertTrue`, ... | `ASSERT_NEAR(e, a, t)` for scalars and Eigen types (the project must provide the Eigen variant, see style `gtest_eigen_near`, `tests.includes`), `ASSERT_TRUE`, ... |
 | `@assertEqual(0, ierr)` / `@assertTrue(ierr /= 0)` after a call | dropped / `ASSERT_ANY_THROW(call)` |
-| comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped |
+| `@assertTrue(.true.)` / `@assertTrue(.false.)` (e.g. the same number of assertions in each path) | dropped / `FAIL();` (`ADD_FAILURE();` with `gtest_assert = "EXPECT"`) |
+| comments, `#ifdef`, `#include` (`map.includes`) | preserved; the separator lines of the generated Fortran (`!` + 80 `=`, `!` + 70 `-`) are dropped; `#if` / `#else` with identical branches: one copy; empty `#if` blocks: removed |
+| local variables of intrinsic types not used in the C++ body (also after dropped statements) | removed (report info `unused-variable`) |
+| `x = expr` to a local scalar of intrinsic type whose value is never read (in the procedure, or in a loop that declares `x` itself) | removed if `expr` surely has no side effects (only operators, variables, components, intrinsics; report info `dead-assignment`); otherwise only `expr` is evaluated (`f(...);`, review note) |
+| `i == j` of two 0-based loop variables | `i == j` (identical shifts on both sides of a comparison cancel) |
 | doxygen `!>` / `!<` | `//!` / `//!<` (style `doxygen = "///"` for the other style) |
 | `integer, intent(in) :: arg !< text` (also `!>` lines before the declaration) | `//! @param[in] arg text` in the documentation of the function in the header; result: `@return` |
-| file header comment (first comment block) | top of `.hpp` and `.cpp`, file name after `@file` replaced |
+| file header comment (first comment block) | top of `.hpp` and `.cpp` (and of generated bindings), file name after `@file` replaced, `@date` set to the date of the generation |
 | module documentation comment | plain `//` comment before the namespace (not doxygen) |
 | type, procedure and binding names | spelling of the definition (`Block_LU_type` → `Block_LU`, `myFunction`); TODO if the source is inconsistent |
 
@@ -176,8 +181,8 @@ The macros are named after the prefix (`[macros] prefix`, default: the outer nam
 |---|---|---|
 | `P_CHK_IERR(stmt, ierr)` | `stmt` | plain call, exceptions propagate |
 | `P_ALLOCATE(a(n), ierr)` | `allocate(a(n))` | `resize` / `make_unique` |
-| `P_ASSERT(c, ierr)` | `call P_ASSERT(c)` | `if (!(c)) throw std::logic_error("assertion failed: c");` |
-| `P_CHK_ARGUMENT(c, ierr)` | `call P_CHK_ARGUMENT(c)` | `std::invalid_argument("invalid argument: c")` |
+| `P_ASSERT(c, ierr)` | `call P_ASSERT(c)` | `if (!c) throw std::logic_error("assertion failed: !c");` (`!c`: the negation, `n >= 0` → `n < 0`) |
+| `P_CHK_ARGUMENT(c, ierr)` | `call P_CHK_ARGUMENT(c)` | `std::invalid_argument("invalid argument: !c")` |
 | `P_ASSERT_MSG(c, msg, ierr)`, `P_CHK_ARGUMENT_MSG` | `call P_ASSERT_MSG(c, msg)` | the same with `msg` as text |
 
 Other or changed macros:
@@ -187,8 +192,12 @@ Other or changed macros:
 include = "myproj_macros.h"                # Fortran header of the macros: dropped in C++, used by generated Fortran
 [macros.MYPROJ_CHK_ARGUMENT_MSG]
 fortran = "call myproj_chk_argument_msg({0}, {1})"            # {0}, {1}: macro arguments (without ierr)
-cpp = 'if (!({0})) throw std::invalid_argument({1});'         # C++ of the call; {0:str}: argument as text
+cpp = 'if ({0:not}) throw std::invalid_argument({1});'         # C++ of the call; {0:str}: argument as text
 ```
+
+`{0:not}` / `{0:notstr}`: the negated argument (code / text); `!({0})` means `{0:not}`. Negations are simplified:
+`n >= 0` → `n < 0`, De Morgan for `&&` / `||`, `.not. f` → `f`; real comparisons other than `==` / `!=` stay
+`!(x >= 0.0)` (NaN). A condition `.true.` drops the statement, `.false.` leaves the unconditional `throw`.
 
 `[map.calls]` gives the C++ statement of other calls; keys may be glob patterns (`"log_*" = ""` drops all such
 calls); an exact name takes precedence over a pattern.
@@ -286,7 +295,8 @@ is destroyed.
 Fortran names longer than 63 characters (C names of long class / method names, `setup` / `destroy`)
 are shortened to 54 characters + `_` + 8 hex digits of a hash; `bind(C, name=...)` keeps the full C name.
 
-Abstract types implemented in C++ (Fortran dependents stay, the implementations are translated):
+Abstract types implemented in C++ (Fortran dependents stay, the implementations are translated; `interop = "cpp"`: without the
+other direction, i.e. no `create_<Thing>_C_from_Fortran` / C++ `CWrapper<Thing>`):
 
 ```toml
 [types]
@@ -308,8 +318,13 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
 - array sizes that both sides know (integer literals and constants, from `sizes`, a size check or the
   documentation `dimension (this\%stateSize)`): no `_n` argument; Fortran checks `size(x)` (`ierr = -1`, or
   with `[macros] include = "project_macros.h"`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`
-  with the include before the module; without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
+  with the include right after the `module` statement (it may contain `use` statements); without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
   and resizes outputs; otherwise the size is passed (`x, x_n`)
+- stored arguments (`[types.T.bindings.attach] stored = ["counter"]`, deferred bindings of `interop = "cpp"` types,
+  wrapped root types): C++ gets `std::unique_ptr<Counter> counter` (the wrapper, to keep; not the Fortran object,
+  which the caller owns and which must outlive the C++ object); the bridge keeps the handle in the C struct
+  (`attach_counter`, Fortran only), releases the previous one after the next call and the last one in the final,
+  after the C++ object
 - the other direction: a Fortran implementation behind the struct for C / C++:
   `create_Thing_C_from_Fortran(fthing, cthing, ierr)` (`fthing`: `AbstractThingWrapper_type` with
   `class(AbstractThing_type), pointer :: ptr`; `cthing` intent(out), stored by the caller) sets the function
@@ -327,18 +342,32 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
 - C++ `AbstractThing`: pure virtual methods (translation signatures), private static `<method>_wrapper`
   (`noexcept`; arguments from C, exceptions -> `*ierr = -1`), `destroy_wrapper` (back into a `unique_ptr`),
   `std::unique_ptr<project_AbstractThing> c_`; the C header stays out of the `.hpp`
+- C / C++ names of the methods (struct members, function pointer typedefs, `<method>_wrapper`): the declared spelling of
+  the binding
 - the binding module has what C sees (C struct `AbstractThing_c`, interfaces of the functions, each with a C
   function pointer typedef of the same name, e.g. `project_AbstractThing_evaluate`, used by the struct); the
   module `project_c_wrapper_<module>` (file of the same name; procedures named like the bindings,
   `procedure :: evaluate`, prefixed for a second type with the same name or names of intrinsics) has
   `CWrapperThing_type`: extends the abstract
   type, calls the function pointers, owns the C++ object (final -> `destroy`); `project_AbstractThing_wrap(c, x)`
-  makes one; factories: `CWrapperThingFactory_type` and register / unregister
-- factories: C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
+  makes one; factories: `CWrapperThingFactory_type` and register / unregister. No c_wrapper module (this part in the
+  binding module, all C declarations of the module from one file) for modules whose bidirectional types are all
+  factories, or all factories / `interop = "cpp"` types without other public types in the module (else a dependency
+  cycle is possible: other modules use the bindings of forward-wrapped types); `project_<Thing>_wrap` is then in
+  `<module>_c_binding`
+- factories: the `register` / `unregister` procedures of `factory = {...}` are not wrapped themselves (only for the generated
+  registration); C++ constructor `AbstractThingFactory(name)` registers via `project_AbstractThingFactory_register`
   in the existing Fortran registration (`CWrapperThingFactory_type`, a copy is stored), destructor
-  unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)`: `release()` to Fortran
+  unregisters; `create_thing(..., std::unique_ptr<AbstractThing>& thing)` (Fortran `intent(out)` dummy) or
+  `std::unique_ptr<AbstractThing> create_thing(...)` (Fortran function with an allocatable `class(...)` result): `release()` to
+  Fortran; a Fortran-only base type of the factory (e.g. a dictionary entry) does not appear in C++
 - translated factories get `using Base::Base;` and `<Factory>_private::instance("name")`
-- arguments: wrapped objects (temporary handles), real / integer / logical scalars (in / out / inout),
+- arguments: wrapped objects (temporary handles), C struct data (`intent(in)` objects of a `bind(C)` type mapped with `cpp`
+  to its C struct: passed by reference, C++ `const Struct&`; the C header includes `[modules.M] header` of its module or
+  forward-declares the struct; a Fortran type with a hand-written helper: `[types.T] c_struct = {setup = "CWrapperT_setup",
+  wrapper = "CWrapperT_type", ptr = "cPtr()"}`: the bridge calls `setup(w, x, ierr)` on a local wrapper and passes `w%cPtr()`),
+  expanded arguments (`expand`, `intent(in)`: their integer / real /
+  logical / character components as C parameters, C++ parameters as in translated code), real / integer / logical scalars (in / out / inout),
   real / integer rank-1 arrays (copied; the size must not change), created objects, scalar results, `ierr`
 - the Fortran library references no symbol of the C++ library (registration at run time); a global
   factory instance in a static library is only constructed if its object file is linked

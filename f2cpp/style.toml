@@ -17,6 +17,10 @@ include_guard = "ifndef"       # "ifndef": #ifndef FILE_NAME_HPP ... #endif; "pr
 doxygen = "//!"                # prefix of documentation comments ("//!" or "///")
 brace_style = "allman"         # "allman": { on its own line; "attached": if (...) {
 c_decl_width = 100             # longer C declarations (C header, binding comments): one parameter per line
+line_width = 0                 # C++ lines longer than this are broken by clang-format (only those lines),
+                               # long calls: message argument into const std::string msg; 0: off
+clang_format = "clang-format"  # the executable
+clang_format_style = ""        # "": f2cpp's style (indent 2, brace_style); "file": the project's .clang-format
 
 [types]                        # C++ types (scalar, vec, mat must be provided by an included header)
 scalar = "scalar"

@@ -31,6 +31,34 @@ def parse_file(path, cfg, parser):
     return mods
 
 
+def break_long_lines(text, cfg, path):
+    """C++ lines longer than line_width (style): broken by clang-format, only those lines (--lines); the rest of
+    the file stays as it is. Without clang-format: unchanged (one warning)"""
+    width = cfg["line_width"]
+    long = [k + 1 for k, line in enumerate(text.split("\n")) if width and len(line) > width]
+    if not long:
+        return text
+    import shutil
+    import subprocess
+    exe = shutil.which(cfg["clang_format"])
+    if exe is None:
+        if not getattr(break_long_lines, "warned", False):
+            print(f"f2cpp: {cfg['clang_format']} not found: long lines are not broken", file=sys.stderr)
+            break_long_lines.warned = True
+        return text
+    style = cfg["clang_format_style"] or (
+        "{BasedOnStyle: LLVM, IndentWidth: 2, ContinuationIndentWidth: 4, ColumnLimit: %d, "
+        "BreakBeforeBraces: %s, PointerAlignment: Left, SortIncludes: Never, "
+        "AllowShortFunctionsOnASingleLine: Inline, AllowShortIfStatementsOnASingleLine: WithoutElse}"
+        % (width, "Allman" if cfg["brace_style"] == "allman" else "Attach"))
+    r = subprocess.run([exe, f"--style={style}", f"--assume-filename={path}"] + [f"--lines={k}:{k}" for k in long],
+                       input=text, capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"f2cpp: {cfg['clang_format']} failed for {path}: {r.stderr.strip()}", file=sys.stderr)
+        return text
+    return r.stdout
+
+
 def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapped_interface=(), check_config=False):
     """translate all files in paths; interface_only files are parsed for their symbols only (wrapped_interface:
     modules wrapped in their own run); wrap files get the C++ interface of the translation, implemented by calls of
@@ -102,7 +130,7 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapp
                 out = os.path.join(outdir, prog.file_stem(m.name) + suffix)
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 with open(out, "w") as f:
-                    f.write(text)
+                    f.write(break_long_lines(text, cfg, out))
                 written.append(out)
             out = os.path.join(outdir, prog.file_stem(m.name) + "_c_binding.F90")
             os.makedirs(os.path.dirname(out), exist_ok=True)    # module_headers may contain a directory
@@ -128,7 +156,7 @@ def translate(paths, cfg, outdir, interface_only=(), report=None, wrap=(), wrapp
                 out = os.path.join(outdir, prog.file_stem(m.name) + ext)
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 with open(out, "w") as f:
-                    f.write(text)
+                    f.write(break_long_lines(text, cfg, out))
                 written.append(out)
     return report, written
 

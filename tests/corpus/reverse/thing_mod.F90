@@ -1,5 +1,6 @@
 !> @file thing_mod.F90
 !> @brief things evaluated by the Fortran dependents, implemented in C++ (wrap_reverse)
+!! @date 2020-01-01
 !
 ! Some licence text.
 module thing_mod

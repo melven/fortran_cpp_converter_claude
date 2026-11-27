@@ -90,6 +90,10 @@ def convert(old):
 
     # --- macros: defaults <PREFIX>_*, roles in the generated Fortran from the include
     dmacros, dcalls = config.default_macros(prefix)
+
+    def is_default(target, t):       # also the old default form if (!({0})) ... {0:str}
+        d = dcalls.get(target)
+        return d is not None and t in (d, d.replace("{0:notstr}", "{0:str}").replace("{0:not}", "!({0})"))
     calls = {k.lower(): v for k, v in old.get("call_templates", {}).items()}
     macros = {}
     for m, repl in old.get("macros", {}).items():
@@ -99,13 +103,13 @@ def convert(old):
         if dmacros.get(m) != repl:
             ent["fortran"] = repl
         if target in calls:
-            if calls[target] != dcalls.get(target) or "fortran" in ent:
+            if not is_default(target, calls[target]) or "fortran" in ent:
                 ent["cpp"] = calls[target]
             del calls[target]
         if ent:
             macros[m] = ent
     for c in list(calls):
-        if dcalls.get(c) == calls[c]:
+        if is_default(c, calls[c]):
             del calls[c]
     inc = None
     roles = {"wrap_chk_ierr": f"{prefix}_CHK_IERR", "wrap_chk_argument": f"{prefix}_CHK_ARGUMENT",

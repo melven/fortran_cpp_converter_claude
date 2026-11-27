@@ -15,7 +15,7 @@ import re
 from fparser.two.utils import walk
 from fparser.two import Fortran2003 as F
 
-from .emit import ModuleEmitter, BANNER, squeeze, strip_blank
+from .emit import ModuleEmitter, BANNER, squeeze, strip_blank, today
 from .model import cls, lname, items_of
 from .translate import TODO, Untranslatable, FORTRAN_SEPARATORS
 from .reverse import ReverseMixin
@@ -32,6 +32,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
     # ------------------------------------------------------------------ names
     def c_class_name(self, tname):
         return self.cfg["c_class_names"].get(tname) or self.prog.type_name(tname).split("::")[-1]
+
+    def type_doc(self, t, role):
+        """//! lines before a generated class: the documentation of the Fortran type, then its role"""
+        return [f"//! {line}".rstrip() for line in t.doc] + [f"//! {role}"]
 
     def c_class(self, t):
         return self.c_class_name(t.name)
@@ -137,11 +141,14 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         classes inherit it). Pure C++ later: delete it with the constructor and handle_."""
         hm = self.handle_member(t) if t is not None else self.cfg["handle_member"]
         cls = name.split("::")[-1]
+        hpp.emit(0, f"//! internals of {cls}: conversion between the C++ object and its C object (handle)")
         hpp.emit(0, f"namespace {cls}_private")
         hpp.emit(0, "{")
-        hpp.emit(0, f"std::unique_ptr<{cls}> wrapFromC({ht}& c);  //!< C++ object of the C object c")
+        hpp.emit(0, "//! the C++ object of the C object c (a handle of the Fortran object, created in Fortran)")
+        hpp.emit(0, f"std::unique_ptr<{cls}> wrapFromC({ht}& c);")
         if self.owned(t):
-            hpp.emit(0, f"{ht}* toC(const {cls}& x);  //!< the C object of x (passed to Fortran)")
+            hpp.emit(0, "//! the C object of x (passed to Fortran)")
+            hpp.emit(0, f"{ht}* toC(const {cls}& x);")
         hpp.emit(0, "}")
         hpp.emit(0, "")
         cpp.emit(0, f"std::unique_ptr<{cls}> {cls}_private::wrapFromC({ht}& c)")
@@ -1081,7 +1088,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         for c in self.header_comments():
             line = re.sub(re.escape(os.path.basename(self.src)), name, str(c), flags=re.I)
             line = re.sub(r"(@file:?\s*)\S+\.(f90|f|pfunit|pf)\b", lambda m: m.group(1) + name, line, flags=re.I)
-            lines.append(line)
+            lines.append(today(line))
         return self.brief(lines, prefix)
 
     # ------------------------------------------------------------------ module
@@ -1096,7 +1103,10 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
         self.extra_uses = set()                     # binding modules of other wrapped modules (owned types)
         self.cpp_data_used, self.fortran_data_used = False, False   # class(*): C++ / Fortran data in the Any struct
         self.bridges, self.c_includes = [], set()   # Fortran types of listeners / reverse types; C headers
+        self.c_lines = set()                        # C header lines for hand-wrapped C structs (bind(C) types)
         self.cw = {"spec": [], "procs": [], "uses": set(), "binding_names": []}    # c_wrapper module
+        # factories / interop = "cpp" (cw_merged): no c_wrapper module, all in the binding (one header)
+        self.cw_in_binding = self.cw_merged(mod)
         self.wrap_routines, self.public_extra = set(), []       # wrap_<method>; Fortran entries made public
         self.needs_cstdio = False
         self.cwc = {"hpp": self.tr(), "cpp": self.tr()}     # C++ CWrapper<Thing> (Fortran implementations)
@@ -1113,7 +1123,12 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 [f"    {line}" for line in self.constants_struct(self.plain_consts(td))[1]] + \
                 [f"  end type {self.c_class(td)}_c", ""]
             if td.module is self.mod:
+                for line in self.type_doc(td, f"C++ copy of the Fortran type {td.spelling or td.name} (constants of "
+                                              "wrapped objects, copied from Fortran)"):
+                    hpp.emit(0, line)
+                self.document_members = True
                 self.emit_type(hpp, td, 0)
+                self.document_members = False
                 hpp.emit(0, "")
             self.report.add("translated", "wrapped-constant-type")
         for t in self.wrapped_types():
@@ -1153,6 +1168,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if self.is_root(t):
                 self.setup_destroy(t, self.consts, fb)
             self.wrap_from_c(t, name, ht, hpp, cpp)
+            for line in self.type_doc(t, f"C++ interface of the Fortran type {t.spelling or t.name} (implemented in "
+                                         "Fortran, called through its C binding)"):
+                hpp.emit(0, line)
             hpp.emit(0, f"class {name}{final}{base}")
             hpp.emit(0, "{")
             hpp.emit(0, "public:")
@@ -1248,6 +1266,9 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                     hpp.emit(1, f"{prog.type_name(td.name)} {v.cname}_;  //!< C++ copy of the constant {v.cname}")
             hpp.emit(0, "};")
             hpp.emit(0, "")
+        for line in sorted(self.c_lines, reverse=True):     # #include before typedef
+            if line not in typedefs:
+                typedefs.insert(0, line)
         for m in sorted(self.c_includes):              # C headers of other modules (reverse types)
             rstem = prog.modules[m].spelling if m in cfg["module_headers"] else os.path.basename(prog.file_stem(m))
             if f'!#include "{rstem}.h"' not in typedefs:
@@ -1263,6 +1284,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                 continue
             if p.method_of or not (mod.is_public(p.name) or (p.generic and mod.is_public(p.generic.lower()))):
                 continue
+            if p.name in {n.lower() for f in cfg["wrap_reverse_factories"].values() for n in f.values()}:
+                continue        # registration of C++ factories: called by their constructor / destructor only
             if self.translated_here(None, None, p):
                 self.translated_method(None, None, p, hpp, cpp)
                 continue
@@ -1335,7 +1358,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
              f"  use {mod.spelling}"]
         if needs_str:
             b.append(f"  use {cfg['wrap_string_in'][0]}, only: {cfg['wrap_string_in'][1]}")
-        b += sorted(uses | self.extra_uses)
+        b += sorted(uses | self.extra_uses | (self.cw["uses"] if self.cw_in_binding else set()))
         b += ["  implicit none", f"#ifdef {single}", "#define C_REAL C_FLOAT", "#else", "#define C_REAL C_DOUBLE",
               "#endif", "", "!@c_declaration", "!", "!#include <stdbool.h>", "!", f"!#ifdef {single}",
               f"!#define {real} float", "!#else", f"!#define {real} double", "!#endif", "!"]
@@ -1352,10 +1375,13 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                   f"  type, public :: {self.wrapper_type(t)}",
                   f"    class({t.spelling or t.name}), pointer :: ptr => null()",
                   f"  end type {self.wrapper_type(t)}", ""]
-        b += ["contains"] + short_names(fb) + ["", f"end module {mod.spelling}_c_binding", ""]
+        if self.cw_in_binding:                      # the Fortran part of the factories
+            b += self.cw["spec"]
+        b += ["contains"] + short_names(fb + (self.cw["procs"] if self.cw_in_binding else [])) + \
+            ["", f"end module {mod.spelling}_c_binding", ""]
         self.finish_module(b)
         cw = None                                   # c_wrapper module: Fortran types implemented in C++
-        if self.cw["spec"] or self.cw["procs"]:
+        if (self.cw["spec"] or self.cw["procs"]) and not self.cw_in_binding:
             name = self.cwrapper_module(mod)
             what = ", ".join(t.spelling or t.name for t in self.wrapped_types() if t.name in self.reverse_types())
             cw = (self.fortran_file_header(f"{name}.F90", "Fortran types implemented in C++: ") or
@@ -1424,7 +1450,7 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
             if chk and any(line.lstrip().startswith(chk[0] + "(") for line in b) and \
                     f'#include "{chk[1]}"' not in includes:
                 includes.append(f'#include "{chk[1]}"')
-        macros = includes + macros
+        b[m + 1:m + 1] = includes           # after the module statement (an include may contain use statements)
         b[m:m] = macros + [""]
         start = max([j for j, line in enumerate(b) if line.startswith("  public ::")] or [b.index("  private")]) + 1
         b[:] = declaration_separators(procedure_separators(spec_sections(b, start)))
