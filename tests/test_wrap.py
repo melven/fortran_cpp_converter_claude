@@ -910,3 +910,27 @@ def test_wrapped_calls_with_error_macro(tmp_path):
         for f in (os.path.join(w, "body_mod.F90"), "body_mod_c_binding.F90", os.path.join(w, "sphere_mod.F90"),
                   "sphere_mod_c_binding.F90"):
             run(ff + [f], d)
+
+
+def test_int_arrays_same_for_translated_interface_and_wrapped(tmp_path):
+    """the user of a module with integer arrays in its interface is the same C++ whether the module is translated in
+    the run, given with -I, wrapped (-W) or a wrapped interface (-w): arguments std::vector<int>, elements v[i]
+    (translated accessor: const std::vector<int>&, wrapped accessor: Eigen::Map)"""
+    w = os.path.join(CORPUS, "wrapped")
+    lib, user = os.path.join(w, "grid_mod.F90"), os.path.join(w, "grid_user_mod.F90")
+    c = cfg()
+    c["accessors"]["grid_type"] = {"idx": (None, "get"), "n": (None, "get")}
+    outs = {}
+    for mode, args in (("t", ([lib, user], {})), ("I", ([user], {"interface_only": [lib]})),
+                       ("W", ([user], {"wrap": [lib]})), ("w", ([user], {"wrapped_interface": [lib]}))):
+        d = tmp_path / mode
+        translate(args[0], c, str(d), **args[1])
+        outs[mode] = read((str(d),), "grid_user_mod.cpp")
+    assert outs["t"] == outs["I"] == outs["W"] == outs["w"]
+    assert "std::vector<int> v(n);" in outs["t"] and "g.idx()[1]" in outs["t"] and "v[n - 1]" in outs["t"]
+    assert "const std::vector<int>& idx() const" in read((str(tmp_path / "t"),), "grid_mod.hpp")
+    wh = read((str(tmp_path / "W"),), "grid_mod.hpp")
+    assert "Eigen::Map<const Eigen::VectorXi> idx() const;" in wh and "void setup(const std::vector<int>& idx);" in wh
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        for mode in ("t", "W"):
+            cxx((str(tmp_path / mode),), "grid_user_mod")

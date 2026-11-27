@@ -319,7 +319,8 @@ LinearThingFactory_type.instance = "linear"    # translated factories: global in
   documentation `dimension (this\%stateSize)`): no `_n` argument; Fortran checks `size(x)` (`ierr = -1`, or
   with `[macros] include = "project_macros.h"`: `PROJECT_CHK_ARGUMENT(size(x) == this%n, ierr)`
   with the include right after the `module` statement (it may contain `use` statements); without error flag `error stop`), C++ maps with `stateSize()`; `CWrapperThing` checks inputs (`std::invalid_argument`)
-  and resizes outputs; otherwise the size is passed (`x, x_n`)
+  and resizes outputs; otherwise the size is passed (`x, x_n`); integer arrays: `std::vector<int>` in the C++ virtual,
+  copied from the Fortran memory (`intent(in)`) and back with a size check (`out` / `inout`)
 - stored arguments (`[types.T.bindings.attach] stored = ["counter"]`, deferred bindings of `interop = "cpp"` types,
   wrapped root types): C++ gets `std::unique_ptr<Counter> counter` (the wrapper, to keep; not the Fortran object,
   which the caller owns and which must outlive the C++ object); the bridge keeps the handle in the C struct

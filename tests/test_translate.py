@@ -1323,3 +1323,21 @@ end module long_mod
     assert "  a(Eigen::seq(ib - 1, ie - 1), Eigen::seq(jb - 1, je - 1)) =\n" in cpp
     if shutil.which("g++") and os.path.isdir(EIGEN):
         cxx((d,), "long_mod")
+
+
+def test_interface_independent_of_the_run(tmp_path):
+    """every corpus module translated alone (the others with -I) gives the same C++ as all in one run: what a module
+    shows other modules (e.g. std::vector<int> vs Eigen::VectorXi) depends on the module only"""
+    mods = [os.path.join(CORPUS, f) for f in sorted(os.listdir(CORPUS))
+            if f.endswith(".F90") and f not in ("driver.F90", "legacy_mod.F90")]
+    legacy = os.path.join(CORPUS, "legacy_mod.F90")
+    translate(mods, cfg(), str(tmp_path / "all"), [legacy])
+    differ = []
+    for m in mods:
+        d = tmp_path / os.path.basename(m)
+        translate([m], cfg(), str(d), [legacy] + [o for o in mods if o != m])
+        stem = os.path.basename(m)[:-4]
+        for ext in (".hpp", ".cpp"):
+            if (d / (stem + ext)).exists() and read((str(d),), stem + ext) != read((str(tmp_path / "all"),), stem + ext):
+                differ.append(stem + ext)
+    assert not differ

@@ -954,3 +954,20 @@ def test_generated_declarations_are_documented(tmp_path):
     assert "//! makes things; an entry of the dictionary of makers\n//! factory implemented in C++" in fn
     assert "//! internals of ThingMaker: its C struct\nnamespace ThingMaker_private" in fn
     assert "//! iteration parameters\n//! C++ copy of the Fortran type SolverParams_type" in read((str(tmp_path),), "mysolver_mod.hpp")
+
+
+def test_reverse_type_integer_arrays(tmp_path):
+    """integer arrays of a bidirectional type: std::vector<int> in the C++ virtual; the glue copies from the
+    Fortran memory (intent(in)) and back with a size check (inout); compiles"""
+    (tmp_path / "x.toml").write_text('[types]\nAbstractPicker_type.interop = "bidirectional"\n')
+    c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
+    translate([], c, str(tmp_path), wrap=[os.path.join(CORPUS, "reverse", "picker_mod.F90")])
+    h, cpp = (tmp_path / "picker_mod.hpp").read_text(), (tmp_path / "picker_mod.cpp").read_text()
+    assert "virtual void pick(const std::vector<int>& idx, std::vector<int>& marks) = 0;" in h
+    assert "std::vector<int> marks_v(marks, marks + marks_n);\n" \
+           "    picker->pick(std::vector<int>(idx, idx + idx_n), marks_v);" in cpp
+    assert "std::copy(marks_v.begin(), marks_v.end(), marks);" in cpp
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        for f in ("picker_mod", "picker_mod_c_wrapper"):
+            run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-c", f + ".cpp",
+                 "-o", f + "_cxx.o"], str(tmp_path))

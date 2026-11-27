@@ -310,7 +310,17 @@ class ReverseMixin:
                 # passed directly (same kind as the C type, else: compile error; contiguous copy by the compiler)
                 actuals += [a] + ([] if known else [f"int(size({a}), C_INT)"])
                 et = tr.eigen_type(v, 1)
-                if intent == "in":
+                if tr.storage(v) == "stdvec":       # std::vector<int>: a copy of the Fortran array
+                    if intent == "in":
+                        cpp_args.append(f"std::vector<int>({a}, {a} + {a}_n)")
+                    else:
+                        cpp_pre.append(f"std::vector<int> {a}_v({a}_n);" if intent == "out" else
+                                       f"std::vector<int> {a}_v({a}, {a} + {a}_n);")
+                        cpp_args.append(f"{a}_v")
+                        cpp_post += [f"if( static_cast<int>({a}_v.size()) != {a}_n )",
+                                     f'  throw std::length_error("{cls}::{bd.spelling}: dimension of parameter {v.cname} '
+                                     'changed!");', f"std::copy({a}_v.begin(), {a}_v.end(), {a});"]
+                elif intent == "in":
                     cpp_args.append(f"{et}(Eigen::Map<const {et}>({a}, {a}_n))")
                 else:                           # a C++ vector, copied back (the size must not change)
                     cpp_pre.append(f"{et} {a}_v({a}_n);" if intent == "out" else
