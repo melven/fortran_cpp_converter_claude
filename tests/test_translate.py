@@ -136,18 +136,21 @@ def test_features(out):
     assert "mutable vec work;  //!< scratch space" in hpp and "'work' is translated as an owning array" not in hpp
     assert "if (work.size() == 0) work.resize(max_items);" in cpp and "if (work.size() > 0) work(0) = m;" in cpp
     assert "tmp(0) = static_cast<scalar>(std::rand()) / RAND_MAX;" in cpp
-    # integer arrays: std::vector<int> unless used in array expressions / as vector subscript; interface (public
-    # procedures, components, variables): Eigen, independent of the callers of the run (same with -I)
-    assert "int count_marked(const Eigen::VectorXi& flags);" in hpp and "int count_ones(const std::vector<int>& flags)" in cpp
-    assert "std::vector<int> marks;" in cpp and "Eigen::VectorXi sel;" in cpp
+    # integer arrays: std::vector<int>; the interface (public procedures, components, variables) always, independent
+    # of the callers of the run (same with -I); locals used in array expressions / as vector subscript: Eigen, unless
+    # linked to a std::vector (then their Eigen uses go through the view asEigen)
+    assert "int count_marked(const std::vector<int>& flags);" in hpp and "int count_ones(const std::vector<int>& flags)" in cpp
+    assert "std::vector<int> marks;" in cpp and "std::vector<int> sel;" in cpp
     assert "std::vector<int> fixed = {1, 0, 1};" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
     assert "marks.resize(m);" in cpp and "std::fill(marks.begin(), marks.end(), 0);" in cpp
     assert "marks[i - 1] = 1;" in cpp and "copy = marks;" in cpp and "fixed = {1, 0, 1};" in cpp
     assert "count_ones(marks) + count_ones(copy) + count_ones(fixed) + count_marked(sel) + primes[3];" in cpp
-    assert "sel = (Eigen::VectorXi(2) << 1, 2).finished();" in cpp and "shifted = (sel.array() + 1).matrix();" in cpp
+    assert "sel = {1, 2};" in cpp and "Eigen::VectorXi shifted = (asEigen(sel).array() + 1).matrix();" in cpp
+    assert "v((asEigen(sel).array() - 1)).sum()) + shifted[0];" in cpp
+    assert "auto asEigen(const C& v)" in cpp and "auto asEigen(C& v)" in cpp
     assert "if (!copy.empty()) copy.clear();" in cpp
-    assert "if (flags.size() == 2 || flags.size() == 4 || (n > 0 && n < 2)) n = 0;" in cpp
-    assert "if (!(n == 0 && flags.size() >= 0)) n = 1;" in cpp
+    assert "if (static_cast<int>(flags.size()) == 2 || static_cast<int>(flags.size()) == 4 || (n > 0 && n < 2)) n = 0;" in cpp
+    assert "if (!(n == 0 && static_cast<int>(flags.size()) >= 0)) n = 1;" in cpp
     assert "(Eigen::Array<bool, Eigen::Dynamic, 1>(2) << (n == 0), (n == 1)).finished()" in cpp
     # output statements, string arrays, owned pointers
     assert 'std::fill(lines.begin(), lines.end(), "");' in cpp
@@ -166,7 +169,7 @@ def test_features(out):
     assert "g.blocks(0 + 2 * (1 + 2 * (i + n * (j)))) = " in cpp
     assert "+ g.cells(i, j).total + 2;" in cpp
     assert "if (g.cells(i, j).samples.size() > 0) g.cells(i, j).samples.resize(0);" in cpp    # one-line if
-    assert "tmp = v((order.array() - 1));" in cpp and "v((iperm.array() - 1)) = tmp;" in cpp
+    assert "tmp = v((order.array() - 1));" in cpp and "v((asEigen(iperm).array() - 1)) = tmp;" in cpp
     assert "std::stable_sort(order.begin(), order.end()," in cpp
     assert "g.spare = std::move(tmp);" in cpp
     assert "double accurate_sum(" in cpp
@@ -474,7 +477,7 @@ def test_vector_subscript_of_components_with_lower_bounds(tmp_path):
     path = str(tmp_path / "ns_mod.F90")
     report, _ = translate([path], cfg(), str(tmp_path))
     cpp = (tmp_path / "ns_mod.cpp").read_text()
-    assert "norm_scal = norm_scal_grp_tmp((norm_scal_grp_idx(Eigen::seq(1, Eigen::last)).array() + 1));" in cpp
+    assert "norm_scal = norm_scal_grp_tmp((asEigen(norm_scal_grp_idx)(Eigen::seq(1, Eigen::last)).array() + 1));" in cpp
     assert not report.files[path]["untranslated"]
 
 
@@ -604,10 +607,10 @@ def test_optional_arrays_are_empty_by_default(out, tmp_path):
         "subroutine h(a)\nreal, intent(in) :: a(:)\ncall f(a, s=1.0)\ncall f(a, a)\nend subroutine\nend module\n")
     translate([str(tmp_path / "o_mod.F90")], config.load(), str(tmp_path))
     hpp, cpp = (tmp_path / "o_mod.hpp").read_text(), (tmp_path / "o_mod.cpp").read_text()
-    assert "void f(const vec& a, const vec& w = vec(), const Eigen::VectorXi& idx = Eigen::VectorXi(), " \
+    assert "void f(const vec& a, const vec& w = vec(), const std::vector<int>& idx = std::vector<int>(), " \
            "std::optional<scalar> s = std::nullopt);" in hpp       # public procedure: Eigen integer vector
-    assert "if (w.size() == 0) return;" in cpp and "if (idx.size() > 0) g(w);" in cpp
-    assert "f(a, vec(), Eigen::VectorXi(), 1.0);" in cpp and "f(a, a);" in cpp
+    assert "if (w.size() == 0) return;" in cpp and "if (!idx.empty()) g(w);" in cpp
+    assert "f(a, vec(), std::vector<int>(), 1.0);" in cpp and "f(a, a);" in cpp
 
 
 def test_unwrapped_mutable_wrapper_type(tmp_path):
@@ -915,13 +918,13 @@ def test_unwrapped_type_with_companions(tmp_path):
     c = config.load([os.path.join(SUPPORT, "f2cpp.toml"), str(tmp_path / "x.toml")])
     translate([os.path.join(CORPUS, "unwrap", "blocks_mod.F90")], c, str(tmp_path))
     hpp, cpp = (tmp_path / "blocks_mod.hpp").read_text(), (tmp_path / "blocks_mod.cpp").read_text()
-    assert "  //! the operator\n  std::vector<std::unique_ptr<Op>> arr;\n  //! first row\n  Eigen::VectorXi arr_offset1;\n" \
-           "  //! first column\n  Eigen::VectorXi arr_offset2;" in hpp        # companions of a public component
+    assert "  //! the operator\n  std::vector<std::unique_ptr<Op>> arr;\n  //! first row\n  std::vector<int> arr_offset1;\n" \
+           "  //! first column\n  std::vector<int> arr_offset2;" in hpp        # companions of a public component
     assert "class Block;" not in hpp and "class Block\n" not in hpp and "mutable" not in hpp
     assert "  arr_offset1.resize(n);\n  arr_offset2.resize(n);\n  arr.resize(n);" in cpp
-    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1(i) = 10 * (i + 1);\n" \
-           "    arr_offset2(i) = arr_offset1(i) + 1;" in cpp
-    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2(i)));" in cpp
+    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1[i] = 10 * (i + 1);\n" \
+           "    arr_offset2[i] = arr_offset1[i] + 1;" in cpp
+    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2[i]));" in cpp
     if not shutil.which("g++") or not os.path.isdir(EIGEN):
         return
     (tmp_path / "main.cpp").write_text('#include "blocks_mod.hpp"\n#include <cstdio>\nint main()\n{\n'
@@ -1041,8 +1044,8 @@ def test_unlimited_polymorphic_as_any(tmp_path):
 
 
 def test_int_arrays_same_with_interface_only(tmp_path):
-    """int_arrays = "auto": what other modules see is Eigen::VectorXi, so a caller is the same whether the callee is
-    translated in the run or given with -I (private procedures: std::vector<int> unless linked, see count_ones)"""
+    """int_arrays = "auto": what other modules see is std::vector<int> (decided by the module alone), so a caller is
+    the same whether the callee is translated in the run or given with -I"""
     (tmp_path / "ia_mod.F90").write_text(
         "module ia_mod\n  implicit none\n  private\n  public :: total\ncontains\n"
         "  integer function total(flags)\n    integer, intent(in) :: flags(:)\n    total = ones(flags)\n  end function\n"
@@ -1056,9 +1059,9 @@ def test_int_arrays_same_with_interface_only(tmp_path):
     translate([a, b], cfg(), str(tmp_path / "t"))
     translate([b], cfg(), str(tmp_path / "i"), [a])
     user = read((str(tmp_path / "t"),), "ib_mod.cpp")
-    assert user == read((str(tmp_path / "i"),), "ib_mod.cpp") and "Eigen::VectorXi marks(n);" in user
+    assert user == read((str(tmp_path / "i"),), "ib_mod.cpp") and "std::vector<int> marks(n);" in user
     lib = read((str(tmp_path / "t"),), "ia_mod.cpp")
-    assert "int total(const Eigen::VectorXi& flags)" in lib and "int ones(const Eigen::VectorXi& flags)" in lib
+    assert "int total(const std::vector<int>& flags)" in lib and "int ones(const std::vector<int>& flags)" in lib
 
 
 def test_includes_by_name(tmp_path):
@@ -1150,7 +1153,7 @@ def test_dead_assignments_removed(tmp_path):
     cpp = read((str(tmp_path),), "dead_mod.cpp")
     body = cpp.split("void block_sums(")[1].split("\n}\n")[0]
     assert "unused" not in body and "removed" not in body and "w =" not in body and "u =" not in body
-    assert body.count("int re = ") == 1 and "int re = offs(i + 1) - 1;  // read here: kept" in body
+    assert body.count("int re = ") == 1 and "int re = offs[i + 1] - 1;  // read here: kept" in body
     assert "  p.norm1();  // TODO(f2cpp): value of t never read: only the expression is evaluated (possible side " \
            "effects)" in body and "scalar t" not in body
     assert report.files[os.path.join(CORPUS, "dead_mod.F90")]["info"]["dead-assignment"] == 4
@@ -1192,14 +1195,14 @@ def test_int_arrays_of_private_types_reachable_from_the_interface(tmp_path):
     files = [str(tmp_path / "pa_mod.F90"), str(tmp_path / "pb_mod.F90")]
     translate(files, cfg(), str(tmp_path / "one"))
     translate(files[1:], cfg(), str(tmp_path / "sep"), files[:1])
-    assert "Eigen::VectorXi row_idx;" in read((str(tmp_path / "one"),), "pa_mod.hpp")
+    assert "std::vector<int> row_idx;" in read((str(tmp_path / "one"),), "pa_mod.hpp")
     one, sep = read((str(tmp_path / "one"),), "pb_mod.cpp"), read((str(tmp_path / "sep"),), "pb_mod.cpp")
-    assert "m.blk[0].row_idx(0)" in one and one == sep
+    assert "m.blk[0].row_idx[0]" in one and one == sep
     # a private procedure passed as actual argument: signature of the abstract interface
-    (tmp_path / "ca_mod.F90").write_text('module ca_mod\n  implicit none\n  abstract interface\n    integer function pick_fn(idx)\n      integer, intent(in) :: idx(:)\n    end function\n  end interface\ncontains\n  integer function apply(f, n)\n    procedure(pick_fn) :: f\n    integer, intent(in) :: n\n    integer :: v(n), i\n    do i = 1, n\n      v(i) = i\n    end do\n    apply = f(v)\n  end function\nend module\n')
-    (tmp_path / "cb_mod.F90").write_text('module cb_mod\n  use ca_mod\n  implicit none\n  private\n  public :: run\ncontains\n  integer function first(idx)\n    integer, intent(in) :: idx(:)\n    first = idx(1)\n  end function\n  integer function run(n)\n    integer, intent(in) :: n\n    run = apply(first, n)\n  end function\nend module\n')
+    (tmp_path / "ca_mod.F90").write_text('module ca_mod\n  implicit none\n  abstract interface\n    integer function pick_fn(idx)\n      integer, intent(in) :: idx(:)\n    end function\n  end interface\ncontains\n  integer function apply_pick(f, n)\n    procedure(pick_fn) :: f\n    integer, intent(in) :: n\n    integer :: v(n), i\n    do i = 1, n\n      v(i) = i\n    end do\n    apply_pick = f(v)\n  end function\nend module\n')
+    (tmp_path / "cb_mod.F90").write_text('module cb_mod\n  use ca_mod\n  implicit none\n  private\n  public :: run\ncontains\n  integer function first(idx)\n    integer, intent(in) :: idx(:)\n    first = idx(1)\n  end function\n  integer function run(n)\n    integer, intent(in) :: n\n    run = apply_pick(first, n)\n  end function\nend module\n')
     translate([str(tmp_path / "ca_mod.F90"), str(tmp_path / "cb_mod.F90")], cfg(), str(tmp_path / "cb"))
-    assert "int first(const Eigen::VectorXi& idx)" in read((str(tmp_path / "cb"),), "cb_mod.cpp")
+    assert "int first(const std::vector<int>& idx)" in read((str(tmp_path / "cb"),), "cb_mod.cpp")
     if shutil.which("g++") and os.path.isdir(EIGEN):
         cxx((str(tmp_path / "cb"),), "cb_mod")
 

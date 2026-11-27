@@ -55,6 +55,7 @@ class Var:
     empty_arrays = True          # class attribute: config optional_arrays == "empty"
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
+    fixed: str = None            # rank-1 integer array of an interface: "vec" (std::vector) / "eigen" (-W component)
     unwrapped: str = None        # variable of an unwrapped wrapper type: name of the wrapped component
     companions: dict = None      # unwrapped variable: other components -> companion variables <name>_<comp>
     elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
@@ -755,19 +756,42 @@ class Program:
                         for u in [self.find_type(v.tname, t.module)] if u is not None]
             if t.parent and self.find_type(t.parent, t.module) is not None:
                 exposed.append(self.find_type(t.parent, t.module))
-        for scope, _ in scopes:
+        wrapped_comps = {id(v) for m in self.modules.values() if m.name in getattr(self, "wrapped", ())
+                         for t in m.types.values() for v in t.comps.values()}
+        for scope, _ in scopes:                 # interface: std::vector, components of wrapped types: Eigen::Map
             for v in scope.values():
-                v.needs_eigen = True
-        changed = True
-        while changed:
-            changed = False
-            for a, b in self.links:
-                if a.needs_eigen != b.needs_eigen:
-                    a.needs_eigen = b.needs_eigen = changed = True
-        for m in translated:
-            for scope in [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.procs.values()]:
+                if v.base == "integer" and v.rank == 1:
+                    v.fixed = "eigen" if id(v) in wrapped_comps else "vec"
+        # arrays linked by argument passing / assignment get one type: a fixed one if the group has one
+        # (std::vector first), else Eigen if one of them is used in Eigen operations
+        parent = {}
+
+        def find(v):
+            while parent.get(id(v), v) is not v:
+                v = parent[id(v)]
+            return v
+        for a, b in self.links:
+            ra, rb = find(a), find(b)
+            if ra is not rb:
+                parent[id(ra)] = rb
+        arrays = {}
+        for m in self.modules.values():
+            procs = list(m.procs.values()) + list(m.ifaces.values())
+            procs += [q for p in procs for q in p.internal.values()]
+            for scope in [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in procs]:
                 for v in scope.values():
-                    v.int_vec = v.base == "integer" and v.rank == 1 and not v.needs_eigen
+                    arrays[id(v)] = v
+        for a, b in self.links:
+            arrays[id(a)], arrays[id(b)] = a, b
+        groups = {}
+        for v in arrays.values():
+            if v.base == "integer" and v.rank == 1:
+                groups.setdefault(id(find(v)), []).append(v)
+        for members in groups.values():
+            fixed = {v.fixed for v in members if v.fixed}
+            kind = "vec" if "vec" in fixed else "eigen" if fixed or any(v.needs_eigen for v in members) else "vec"
+            for v in members:
+                v.int_vec = (v.fixed or kind) == "vec"
 
     def visible(self, module):
         seen, todo = [], [module]

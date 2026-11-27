@@ -429,10 +429,26 @@ class Translator:
 
     # ------------------------------------------------------------------ expressions
     def expr(self, node):
-        """translate an expression; an integer array used here needs to be an Eigen vector"""
+        """translate an expression; an integer array used here needs to be an Eigen vector (a std::vector<int>:
+        its Eigen view)"""
         x = self.ref(node)
+        if self.int_std(x):
+            return self.view(x)
         self.touch(x)
         return x
+
+    def int_std(self, x):
+        """x is a whole std::vector<int> (variable or function result)"""
+        if x.rank != 1 or x.base != "integer":
+            return False
+        if x.var is not None:
+            return x.whole and self.storage(x.var) == "stdvec"
+        return x.res_var is not None and self.storage(x.res_var) == "stdvec"
+
+    def view(self, x):
+        """Eigen view (Eigen::Map, no copy) of a std::vector<int>"""
+        return X(f"{self.cfg['int_view']}({x.raw or x.code})", x.rank, x.base, 100, x.var, x.tname,
+                 whole=x.whole, res_var=x.res_var)
 
     @staticmethod
     def int_array(v):
@@ -981,6 +997,13 @@ class Translator:
         base = par(x)
         res = X("", 0, v.base, 100, v, v.tname)
         depth, lr = self.nest(v)
+        if v.base == "integer" and v.rank == 1 and cls(subs[0]) != "Subscript_Triplet":
+            k, c = self.sub_code(subs[0], lbs[0])
+            if k == "idx":                      # v[i]: std::vector<int>, Eigen::VectorXi and Eigen::Map
+                res.code = f"{base}[{c}]"
+                return res
+        if st == "stdvec" and v.base == "integer" and v.rank == 1:     # section: on the Eigen view
+            base, depth, st = self.view(x).code, 0, "eigen"
         if depth:
             trail = [self.sub_code(s, lb) for s, lb in zip(subs[lr:], lbs[lr:], strict=True)]
             full = all(cls(s) == "Subscript_Triplet" and s.items == (None, None, None) for s in subs[:lr])
@@ -1246,6 +1269,10 @@ class Translator:
             else:
                 x = self.expr(given[d])
             code = self.matrix(x)
+            if self.int_array(dv) and self.storage(dv) == "stdvec" and x.rank == 1 and not self.int_std(x):
+                if dv.intent != "in":           # Eigen section / Map passed to std::vector<int>&
+                    raise Untranslatable("int-array-argument")
+                code = f"{self.cfg['int_copy']}({code})"
             passes_handle = dv.ptr_like and not dv.opt_kind       # unique_ptr& / pointer& dummy
             if x.rank > 0 and dv.rank > 0 and dv.intent != "in" and self.storage(dv) == "eigen" and \
                     not (x.whole or (x.obj and "(" not in code.split("]")[-1] and "." not in code.split("]")[-1])):
@@ -1786,6 +1813,11 @@ class Translator:
         if lhs.rank > 0 and rhs.rank == 0:
             raise Untranslatable("array=scalar:" + (self.storage(v) if v is not None else "unknown"))
         code = self.matrix(rhs)
+        if self.int_array(v) and lhs.whole and rhs.rank == 1:
+            if self.storage(v) == "stdvec" and not self.int_std(rhs):
+                code = f"{self.cfg['int_copy']}({code})"        # Eigen expression -> std::vector<int>
+            elif self.storage(v) != "stdvec" and self.int_std(rhs):
+                code = self.view(rhs).code                      # std::vector<int> -> Eigen
         if lhs.rank > 0 and v is not None and self.storage(v) in ("eigen", "vec3", "flat") and \
                 v.base != "character":
             alias = self.aliasing(lhs_n, rhs_n)

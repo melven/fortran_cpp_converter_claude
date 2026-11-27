@@ -11,6 +11,8 @@ handle_member = "handle_"      # C++ member holding the C handle of wrapped clas
 c_prefix = ""                  # C names <c_prefix>_<Class>_<method>; "": the outer namespace in lower case
 c_real = ""                    # C type macro of real; "": <NS>_REAL
 c_single_precision = ""        # "": <NS>_SINGLE_PRECISION
+int_view = "asEigen"           # generated helper: Eigen view (Eigen::Map, no copy) of a std::vector<int> / std::array
+int_copy = "toVector"          # generated helper: std::vector copy of an Eigen vector expression
 
 [layout]
 include_guard = "ifndef"       # "ifndef": #ifndef FILE_NAME_HPP ... #endif; "pragma": #pragma once
@@ -40,8 +42,8 @@ optional_arrays = "empty"
 # "auto": const vec& / vec&, Eigen::Ref only for out/inout dummies that receive a slice in a translated call;
 # "plain": always const vec& / vec&; "ref": always Eigen::Ref
 array_args = "auto"
-# "auto": rank-1 integer arrays are std::vector<int> unless used in array expressions, sections, as vector
-# subscripts or passed where an Eigen vector is needed; "eigen": always ivec
+# "auto": rank-1 integer arrays are std::vector<int> (interface always; locals unless used in Eigen operations and
+# not linked to a std::vector; Eigen operations on std::vector through the view int_view); "eigen": always ivec
 int_arrays = "auto"
 # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen 5) or "Eigen" (Eigen 3.4)
 eigen_placeholders = "Eigen::placeholders"

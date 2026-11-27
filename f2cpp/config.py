@@ -72,7 +72,7 @@ DEFAULTS = {
 # style file: section -> {key: internal key}
 STYLE_KEYS = {
     "names": {k: k for k in ("type_suffix", "type_case", "header_ext", "source_ext", "handle_member", "c_prefix",
-                             "c_real", "c_single_precision")},
+                             "c_real", "c_single_precision", "int_view", "int_copy")},
     "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width", "line_width",
                               "clang_format", "clang_format_style")},
     "types": {k: k for k in ("scalar", "vec", "mat", "ivec", "imat", "int")},

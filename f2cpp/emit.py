@@ -1288,6 +1288,7 @@ class ModuleEmitter:
                     aliases.out + strip_blank(hpp.out)
                 h += ([""] + protos_pub.out if protos_pub.out else []) + [""] + self.guard()[1]
                 h = "\n".join(self.braces(squeeze(h)))
+            cpp_priv.out = self.int_helpers("\n".join(cpp.out + cpp_priv.out)) + cpp_priv.out
             if not shared and aliases.out:      # no header: forward declarations and aliases first
                 cpp_priv.out = types_fwd + [""] + aliases.out + cpp_priv.out
             return h, self.assemble_test(top, dirs, cpp_priv, protos_priv, cpp, fixture, mod_doc, shared)
@@ -1313,6 +1314,7 @@ class ModuleEmitter:
         c += inc_c + self.name_includes(body, guard_text) + [""]
         c += self.std_includes(body, self.SOURCE_INCLUDES)
         c += dirs.out + ["", self.open_ns(), ""] + self.using_other_ns()
+        cpp_priv.out = self.int_helpers(body) + cpp_priv.out
         if cpp_priv.out or protos_priv.out:
             c += ["namespace {", ""] + strip_blank(cpp_priv.out) + ([""] if cpp_priv.out else []) + \
                  protos_priv.out + ["", "}  // namespace", ""]
@@ -1325,6 +1327,28 @@ class ModuleEmitter:
                          "}", ""]
         c += strip_blank(cpp.out) + ([""] + inst if inst else []) + ["", f"}}  // namespace {self.ns}", ""]
         return "\n".join(self.braces(squeeze(h))), "\n".join(self.braces(squeeze(c)))
+
+    def int_helpers(self, body):
+        """definitions of the view / copy helpers of std::vector<int> (style int_view, int_copy) used in body"""
+        view, copy = self.cfg["int_view"], self.cfg["int_copy"]
+        dox = self.cfg["doxygen"]
+        out = []
+        if re.search(rf"\b{re.escape(view)}\(", body):
+            for const, what in (("", "Eigen view"), ("const ", "read-only Eigen view")):
+                out += [f"{dox} {what} of the elements of a std::vector / std::array (Eigen::Map, no copy)",
+                        "template <class C>",
+                        f"auto {view}({const}C& v) {{",
+                        f"  return Eigen::Map<{const}Eigen::Matrix<typename C::value_type, Eigen::Dynamic, 1>>("
+                        "v.data(), static_cast<Eigen::Index>(v.size()));",
+                        "}", ""]
+        if re.search(rf"\b{re.escape(copy)}\(", body):
+            out += [f"{dox} copy of an Eigen vector expression as std::vector",
+                    "template <class D>",
+                    f"std::vector<typename D::Scalar> {copy}(const Eigen::DenseBase<D>& e) {{",
+                    "  const Eigen::Matrix<typename D::Scalar, Eigen::Dynamic, 1> v = e;",
+                    "  return std::vector<typename D::Scalar>(v.data(), v.data() + v.size());",
+                    "}", ""]
+        return out
 
     def missing_modules(self):
         """report used modules whose definitions are neither parsed (file or -I) nor mapped"""

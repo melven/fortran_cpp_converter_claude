@@ -389,7 +389,7 @@ def test_wrapped_constant_of_a_translated_type(tmp_path):
     assert "  offsets_.row = c.offsets.row;\n  offsets_.col = c.offsets.col;\n" \
            "  offsets_.w = Eigen::Map<const vec>(c.offsets.w, 2);\n" \
            "  offsets_.scale = Eigen::Map<const vec>(c.offsets.scale, c.offsets.scale_size);\n" in cpp
-    assert "  offsets_.idx = Eigen::Map<const Eigen::VectorXi>(c.offsets.idx, c.offsets.idx_size);" in cpp
+    assert "  offsets_.idx.assign(c.offsets.idx, c.offsets.idx + c.offsets.idx_size);" in cpp
     if shutil.which("g++") and os.path.isdir(EIGEN):
         run(["g++", "-std=c++17", "-Wall", "-Werror", "-I.", "-I" + SUPPORT, "-I" + EIGEN, "-fsyntax-only",
              "holder_mod.cpp"], str(tmp_path))

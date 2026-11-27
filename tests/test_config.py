@@ -78,8 +78,8 @@ def test_custom_macro_names(tmp_path):
         "[map.functions]\nstr = \"std::to_string\"\nlog_debug = \"xy_log_debug\"\n")
     translate([str(tmp_path / "m_mod.F90")], config.load(str(tmp_path / "c.toml")), str(tmp_path))
     cpp = (tmp_path / "m_mod.cpp").read_text()
-    assert 'if (!(block_dim.array() >= 0).all()) throw std::invalid_argument(' in cpp
-    assert 'xy_log_debug("n = " + std::to_string(block_dim.size()));' in cpp
+    assert 'if (!(asEigen(block_dim).array() >= 0).all()) throw std::invalid_argument(' in cpp
+    assert 'xy_log_debug("n = " + std::to_string(static_cast<int>(block_dim.size())));' in cpp
     assert 'if (!sys.offsets.mask(Eigen::seq(ub - 1, ue - 1)).any()) xy_log_debug("none");' in cpp
     assert "xy_log_debug(std::to_string(ext_fn(sys.handle, sys.path, sys.a.b)));" in cpp
 
