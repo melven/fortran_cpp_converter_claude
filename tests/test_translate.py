@@ -1185,7 +1185,8 @@ end module op_mod
 
 
 def test_int_arrays_of_private_types_reachable_from_the_interface(tmp_path):
-    """components of a private type reached through a public component: interface (Eigen), as with -I"""
+    """components of a private type reached through a public component, procedures passed as arguments: interface
+    (Eigen), as with -I"""
     (tmp_path / "pa_mod.F90").write_text('module pa_mod\n  implicit none\n  private\n  public :: mat_type\n  type :: blk_type\n    integer, allocatable :: row_idx(:)\n  end type\n  type :: mat_type\n    type(blk_type), allocatable :: blk(:)\n  end type\nend module\n')
     (tmp_path / "pb_mod.F90").write_text('module pb_mod\n  use pa_mod\n  implicit none\ncontains\n  function first(m) result(k)\n    type(mat_type), intent(in) :: m\n    integer :: k\n    k = m%blk(1)%row_idx(1)\n  end function\nend module\n')
     files = [str(tmp_path / "pa_mod.F90"), str(tmp_path / "pb_mod.F90")]
@@ -1194,6 +1195,13 @@ def test_int_arrays_of_private_types_reachable_from_the_interface(tmp_path):
     assert "Eigen::VectorXi row_idx;" in read((str(tmp_path / "one"),), "pa_mod.hpp")
     one, sep = read((str(tmp_path / "one"),), "pb_mod.cpp"), read((str(tmp_path / "sep"),), "pb_mod.cpp")
     assert "m.blk[0].row_idx(0)" in one and one == sep
+    # a private procedure passed as actual argument: signature of the abstract interface
+    (tmp_path / "ca_mod.F90").write_text('module ca_mod\n  implicit none\n  abstract interface\n    integer function pick_fn(idx)\n      integer, intent(in) :: idx(:)\n    end function\n  end interface\ncontains\n  integer function apply(f, n)\n    procedure(pick_fn) :: f\n    integer, intent(in) :: n\n    integer :: v(n), i\n    do i = 1, n\n      v(i) = i\n    end do\n    apply = f(v)\n  end function\nend module\n')
+    (tmp_path / "cb_mod.F90").write_text('module cb_mod\n  use ca_mod\n  implicit none\n  private\n  public :: run\ncontains\n  integer function first(idx)\n    integer, intent(in) :: idx(:)\n    first = idx(1)\n  end function\n  integer function run(n)\n    integer, intent(in) :: n\n    run = apply(first, n)\n  end function\nend module\n')
+    translate([str(tmp_path / "ca_mod.F90"), str(tmp_path / "cb_mod.F90")], cfg(), str(tmp_path / "cb"))
+    assert "int first(const Eigen::VectorXi& idx)" in read((str(tmp_path / "cb"),), "cb_mod.cpp")
+    if shutil.which("g++") and os.path.isdir(EIGEN):
+        cxx((str(tmp_path / "cb"),), "cb_mod")
 
 
 def test_negated_check_conditions(tmp_path):

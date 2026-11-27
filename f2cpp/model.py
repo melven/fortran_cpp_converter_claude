@@ -694,6 +694,24 @@ class Program:
         m = self.modules.get(modname)
         return m.spelling if m is not None and m.spelling else modname
 
+    @staticmethod
+    def passed_procedures(m):
+        """procedures of module m used as actual arguments or procedure pointer targets (their signature is fixed
+        by an interface)"""
+        from fparser.two.utils import walk
+        from fparser.two import Fortran2003 as F
+        names = set()
+        for lst in walk(m.node, (F.Actual_Arg_Spec_List, F.Section_Subscript_List)):
+            for a in lst.items:
+                a = a.items[1] if cls(a) == "Actual_Arg_Spec" else a
+                if cls(a) == "Name":
+                    names.add(lname(a))
+        for a in walk(m.node, (F.Actual_Arg_Spec, F.Pointer_Assignment_Stmt)):
+            x = a.items[1] if cls(a) == "Actual_Arg_Spec" else a.items[2]
+            if cls(x) == "Name":
+                names.add(lname(x))
+        return names & set(m.procs)
+
     def decide_int_vectors(self, translated):
         """after the analysis pass: integer arrays without Eigen-only uses become std::vector<int>; only for
         entities used inside their module: what other modules see (dummies / results of public procedures and of
@@ -711,12 +729,13 @@ class Program:
                 public = {t.name for t in m.types.values() if m.is_public(t.name)}
                 exposed += [t for t in m.types.values() if t.name in public]
                 specifics = {s for g, names in m.generics.items() if m.is_public(g) for s in names}
+                passed = self.passed_procedures(m)
                 scopes += [({n: v for n, v in m.vars.items() if m.is_public(n, v.access)}, m)] + \
                     [(p.vars, m) for p in m.ifaces.values()]
                 for p in m.procs.values():
                     t = self.find_type(p.method_of, m) if p.method_of else None
                     if p.external or (t is not None and self.polymorphic(t)) or m.is_public(p.name) or \
-                            p.name in specifics or p.method_of in public:      # fixed signatures
+                            p.name in specifics or p.method_of in public or p.name in passed:   # fixed signatures
                         scopes.append(({a: p.vars[a] for a in p.args + [p.result] if a in p.vars}, m))
         # types reachable from the interface (dummies, module variables, public components, parents) are seen by
         # other modules as well, also when their names are private: their public / accessor components too
