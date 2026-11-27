@@ -106,7 +106,7 @@ Templates use `{placeholders}` (no brace escaping); unknown placeholders are err
 | generic interface / generic binding (`generic :: solve => solve_a, solve_b`) | overloads named `solve`; a call is matched to the specific procedure by number, keywords, rank and type of the arguments |
 | `real` / `real(kind=8)` | `scalar` / `map.kinds` entry (`double`) |
 | `real` array rank 1 / 2 | `vec` / `mat` |
-| integer array rank 1 | `std::vector<int>` if it is only indexed, sized, filled, copied or passed on; `Eigen::VectorXi` if it is used in array expressions, sections, as vector subscript, passed to unknown procedures, or visible to other modules (dummies / results of public procedures and of methods of public types, public components, public module variables: the same with and without `-I`) (style `int_arrays = "eigen"`: always) |
+| integer array rank 1 | `std::vector<int>` if it is only indexed, sized, filled, copied or passed on; `Eigen::VectorXi` if it is used in array expressions, sections, as vector subscript, passed to unknown procedures, or visible to other modules (dummies / results of public procedures and of methods of public types, public components, public module variables: the same with and without `-I`) (style `int_arrays = "eigen"`: always); elements are always `v[i]` (valid for both types) |
 | numeric array rank 3 | `std::vector<mat>`: `a(:, :, i)` → `a[i - 1]` |
 | array of objects, rank 1 / 2 | `std::vector<T>` / `Eigen::Array<T, Dynamic, Dynamic>`: `b(i, j)%m(k, l)` → `b(i - 1, j - 1).m(k - 1, l - 1)` |
 | any array of rank ≥ 4 (objects: ≥ 3) | flat `vec` / `std::vector<T>` with explicit column-major index and a TODO; extents from the declaration or an `allocate` in the module |

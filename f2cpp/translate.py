@@ -1018,6 +1018,8 @@ class Translator:
             res.code = f"{base}.middleRows({seg[0][0]}, {seg[0][1]})"
         elif len(sc) == 2 and seg[1] and kinds[0] == "all":
             res.code = f"{base}.middleCols({seg[1][0]}, {seg[1][1]})"
+        elif len(sc) == 1 and kinds[0] == "idx" and v.base == "integer":
+            res.code = f"{base}[{sc[0][1]}]"   # works for std::vector<int> and Eigen::VectorXi (either declaration)
         elif len(sc) == 1:
             res.code = base if kinds[0] == "all" else f"{base}({sc[0][1]})"
         elif kinds == ["all", "all"]:

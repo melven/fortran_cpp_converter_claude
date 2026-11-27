@@ -919,9 +919,9 @@ def test_unwrapped_type_with_companions(tmp_path):
            "  //! first column\n  Eigen::VectorXi arr_offset2;" in hpp        # companions of a public component
     assert "class Block;" not in hpp and "class Block\n" not in hpp and "mutable" not in hpp
     assert "  arr_offset1.resize(n);\n  arr_offset2.resize(n);\n  arr.resize(n);" in cpp
-    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1(i) = 10 * (i + 1);\n" \
-           "    arr_offset2(i) = arr_offset1(i) + 1;" in cpp
-    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2(i)));" in cpp
+    assert "    arr[i] = std::make_unique<Scale>();\n    arr_offset1[i] = 10 * (i + 1);\n" \
+           "    arr_offset2[i] = arr_offset1[i] + 1;" in cpp
+    assert "blocks_total + arr[i]->apply(static_cast<scalar>(arr_offset2[i]));" in cpp
     if not shutil.which("g++") or not os.path.isdir(EIGEN):
         return
     (tmp_path / "main.cpp").write_text('#include "blocks_mod.hpp"\n#include <cstdio>\nint main()\n{\n'
@@ -1150,7 +1150,7 @@ def test_dead_assignments_removed(tmp_path):
     cpp = read((str(tmp_path),), "dead_mod.cpp")
     body = cpp.split("void block_sums(")[1].split("\n}\n")[0]
     assert "unused" not in body and "removed" not in body and "w =" not in body and "u =" not in body
-    assert body.count("int re = ") == 1 and "int re = offs(i + 1) - 1;  // read here: kept" in body
+    assert body.count("int re = ") == 1 and "int re = offs[i + 1] - 1;  // read here: kept" in body
     assert "  p.norm1();  // TODO(f2cpp): value of t never read: only the expression is evaluated (possible side " \
            "effects)" in body and "scalar t" not in body
     assert report.files[os.path.join(CORPUS, "dead_mod.F90")]["info"]["dead-assignment"] == 4
