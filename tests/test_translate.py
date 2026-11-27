@@ -1184,6 +1184,18 @@ end module op_mod
     assert "a == b" in body and "zero" not in body and "x == 0.0" not in body
 
 
+def test_int_arrays_of_private_types_reachable_from_the_interface(tmp_path):
+    """components of a private type reached through a public component: interface (Eigen), as with -I"""
+    (tmp_path / "pa_mod.F90").write_text('module pa_mod\n  implicit none\n  private\n  public :: mat_type\n  type :: blk_type\n    integer, allocatable :: row_idx(:)\n  end type\n  type :: mat_type\n    type(blk_type), allocatable :: blk(:)\n  end type\nend module\n')
+    (tmp_path / "pb_mod.F90").write_text('module pb_mod\n  use pa_mod\n  implicit none\ncontains\n  function first(m) result(k)\n    type(mat_type), intent(in) :: m\n    integer :: k\n    k = m%blk(1)%row_idx(1)\n  end function\nend module\n')
+    files = [str(tmp_path / "pa_mod.F90"), str(tmp_path / "pb_mod.F90")]
+    translate(files, cfg(), str(tmp_path / "one"))
+    translate(files[1:], cfg(), str(tmp_path / "sep"), files[:1])
+    assert "Eigen::VectorXi row_idx;" in read((str(tmp_path / "one"),), "pa_mod.hpp")
+    one, sep = read((str(tmp_path / "one"),), "pb_mod.cpp"), read((str(tmp_path / "sep"),), "pb_mod.cpp")
+    assert "m.blk[0].row_idx(0)" in one and one == sep
+
+
 def test_negated_check_conditions(tmp_path):
     """ASSERT / CHK_ARGUMENT: the negated condition in if and message (n < 0, De Morgan); real comparisons stay
     !(x >= 0.0) (NaN); .true. dropped, .false. throws"""

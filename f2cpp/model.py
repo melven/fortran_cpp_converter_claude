@@ -701,24 +701,44 @@ class Program:
         so the choice does not depend on the callers of the run (same with -I)"""
         if self.cfg["int_arrays"] != "auto":
             return
+        scopes, exposed = [], []        # (variables, module); exposed: types other modules can see
         for m in self.modules.values():
             if m not in translated:             # -I modules: their interface; existing C++ code: Eigen vectors
-                scopes = [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in m.ifaces.values()] + \
-                    [p.vars for p in m.procs.values()]
+                scopes += [(sc, m) for sc in [m.vars] + [t.comps for t in m.types.values()] +
+                           [p.vars for p in m.ifaces.values()] + [p.vars for p in m.procs.values()]]
+                exposed += list(m.types.values())
             else:
                 public = {t.name for t in m.types.values() if m.is_public(t.name)}
+                exposed += [t for t in m.types.values() if t.name in public]
                 specifics = {s for g, names in m.generics.items() if m.is_public(g) for s in names}
-                scopes = [{n: v for n, v in m.vars.items() if m.is_public(n, v.access)}] + \
-                    [{n: v for n, v in t.comps.items() if (v.access == "public" if v.access else not t.private_comps)}
-                     for t in m.types.values() if t.name in public] + [p.vars for p in m.ifaces.values()]
+                scopes += [({n: v for n, v in m.vars.items() if m.is_public(n, v.access)}, m)] + \
+                    [(p.vars, m) for p in m.ifaces.values()]
                 for p in m.procs.values():
                     t = self.find_type(p.method_of, m) if p.method_of else None
                     if p.external or (t is not None and self.polymorphic(t)) or m.is_public(p.name) or \
                             p.name in specifics or p.method_of in public:      # fixed signatures
-                        scopes.append({a: p.vars[a] for a in p.args + [p.result] if a in p.vars})
-            for scope in scopes:
-                for v in scope.values():
-                    v.needs_eigen = True
+                        scopes.append(({a: p.vars[a] for a in p.args + [p.result] if a in p.vars}, m))
+        # types reachable from the interface (dummies, module variables, public components, parents) are seen by
+        # other modules as well, also when their names are private: their public / accessor components too
+        exposed += [t for sc, m in scopes for v in sc.values() if v.base == "type" and v.tname
+                    for t in [self.find_type(v.tname, m)] if t is not None]
+        seen = set()
+        while exposed:
+            t = exposed.pop()
+            if id(t) in seen:
+                continue
+            seen.add(id(t))
+            acc = self.cfg["accessors"].get(t.name, {})
+            comps = {n: v for n, v in t.comps.items()
+                     if (v.access == "public" if v.access else not t.private_comps) or n in acc or "*" in acc}
+            scopes.append((comps, t.module))
+            exposed += [u for v in comps.values() if v.base == "type" and v.tname
+                        for u in [self.find_type(v.tname, t.module)] if u is not None]
+            if t.parent and self.find_type(t.parent, t.module) is not None:
+                exposed.append(self.find_type(t.parent, t.module))
+        for scope, _ in scopes:
+            for v in scope.values():
+                v.needs_eigen = True
         changed = True
         while changed:
             changed = False
