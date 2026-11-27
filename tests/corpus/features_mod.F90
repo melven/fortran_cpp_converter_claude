@@ -10,7 +10,8 @@ module features_mod
   public :: stats_type, clamp, mean, normInf, accumulate, describe_kind, fill, apply_scale
   public :: int_arrays, count_marked
   public :: argmax, text_demo, node_type, relink
-  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history, loop_locals, two_loops
+  public :: holder_type, update_holder, setup_solver, grid_type, grid_demo, history_type, get_history, loop_locals, &
+    two_loops, fixed_sizes
   public :: accurate_sum, count_positive, swap_rows, shape_ratio, use_legacy, first_index
 
   integer, parameter, public :: max_items = 10
@@ -508,5 +509,19 @@ contains
     end do
     s = s + j                 ! used after this loop: outside
   end function two_loops
+
+  !> integer arrays of constant size: std::array
+  function fixed_sizes(k) result(s)
+    integer, intent(in) :: k
+    integer :: s, i
+    integer, parameter :: nmax = 4
+    integer :: p(3), q(nmax)
+    p = [3, 1, 2]
+    q = 0
+    do i = 1, 3
+      q(p(i)) = q(p(i)) + k
+    end do
+    s = q(1) + q(nmax) + size(p) + sum(q)
+  end function fixed_sizes
 
 end module features_mod

@@ -1248,6 +1248,8 @@ class WrapEmitter(ReverseMixin, ModuleEmitter):
                             size = f"{src}_size"
                         if kind in ("fixed", "array") and tr.storage(w) == "eigen":
                             cpp.emit(1, f"{dst} = Eigen::Map<const {tr.eigen_type(w, 1)}>({src}, {size});")
+                        elif kind in ("fixed", "array") and w.arr_n is not None:
+                            cpp.emit(1, f"std::copy({src}, {src} + {size}, {dst}.begin());")
                         elif kind in ("fixed", "array"):
                             cpp.emit(1, f"{dst}.assign({src}, {src} + {size});")
                         else:

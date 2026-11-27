@@ -124,8 +124,9 @@ def test_features(out):
     assert "{\n  constexpr auto maxloc = [](const auto& x_) { Eigen::Index i_; x_.maxCoeff(&i_); " \
            "return static_cast<int>(i_) + 1; };\n  constexpr auto minloc = " in argmax
     assert "  int k = maxloc(x.cwiseAbs()) + minloc(x);\n  constexpr auto maxloc2 = " in argmax
-    assert "Eigen::VectorXi idx = maxloc2(a);" in argmax and argmax.count("constexpr auto maxloc =") == 1
-    assert "Eigen::VectorXi one = (Eigen::VectorXi(1) << minloc(x)).finished();" in argmax
+    assert "return std::array<int, 2>{static_cast<int>(r_) + 1, static_cast<int>(c_) + 1}; };" in argmax
+    assert "std::array<int, 2> idx = maxloc2(a);" in argmax and argmax.count("constexpr auto maxloc =") == 1
+    assert "std::array<int, 1> one = {minloc(x)};" in argmax
     assert "else if (maxloc(x) > 2)" in argmax
     assert "text = std::to_string(maxloc(x));" in argmax       # size-1 array printed: the scalar
     assert "if (samples.size() == 0)\n" in cpp and "if (samples.size() > 0) samples.resize(0);" in cpp
@@ -141,13 +142,17 @@ def test_features(out):
     # linked to a std::vector (then their Eigen uses go through the view asEigen)
     assert "int count_marked(const std::vector<int>& flags);" in hpp and "int count_ones(const std::vector<int>& flags)" in cpp
     assert "std::vector<int> marks;" in cpp and "std::vector<int> sel;" in cpp
-    assert "std::vector<int> fixed = {1, 0, 1};" in cpp and "const std::vector<int> primes = {2, 3, 5, 7};" in cpp
+    assert "std::vector<int> fixed = {1, 0, 1};" in cpp and "const std::array<int, 4> primes = {2, 3, 5, 7};" in cpp
     assert "marks.resize(m);" in cpp and "std::fill(marks.begin(), marks.end(), 0);" in cpp
     assert "marks[i - 1] = 1;" in cpp and "copy = marks;" in cpp and "fixed = {1, 0, 1};" in cpp
     assert "count_ones(marks) + count_ones(copy) + count_ones(fixed) + count_marked(sel) + primes[3];" in cpp
     assert "sel = {1, 2};" in cpp and "Eigen::VectorXi shifted = (asEigen(sel).array() + 1).matrix();" in cpp
     assert "v((asEigen(sel).array() - 1)).sum()) + shifted[0];" in cpp
     assert "auto asEigen(const C& v)" in cpp and "auto asEigen(C& v)" in cpp
+    body = cpp.split("int fixed_sizes(int k)")[1].split("\n}\n")[0]       # constant size: std::array
+    assert "std::array<int, 3> p = {3, 1, 2};" in body and "std::array<int, nmax> q{};" in body
+    assert "std::fill(q.begin(), q.end(), 0);" in body and "q[p[i] - 1] = q[p[i] - 1] + k;" in body
+    assert "asEigen(q).sum()" in body
     assert "if (!copy.empty()) copy.clear();" in cpp
     assert "if (static_cast<int>(flags.size()) == 2 || static_cast<int>(flags.size()) == 4 || (n > 0 && n < 2)) n = 0;" in cpp
     assert "if (!(n == 0 && static_cast<int>(flags.size()) >= 0)) n = 1;" in cpp

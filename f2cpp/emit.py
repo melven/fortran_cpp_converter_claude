@@ -64,9 +64,13 @@ class ModuleEmitter:
                 return f"{code}({' * '.join(f'({d})' if not d.isalnum() else d for d in sizes)})"
             if st in ("eigen", "objmat"):
                 return f"{code}({', '.join(sizes)})"
+            if st == "stdvec" and v.arr_n is not None:
+                return code + "{}"
             if st in ("vec3", "stdvec"):
                 return f"{code}({tr.nested_ctor(v, sizes)})"
         elif sizes and member:
+            if st == "stdvec" and v.arr_n is not None:
+                return code + "{}"
             if st == "eigen":
                 fn = f"{t}({', '.join(sizes)})"
                 return f"{code} = {fn}"
@@ -1068,8 +1072,9 @@ class ModuleEmitter:
                        ("memory", ["std::unique_ptr", "std::shared_ptr"]), ("stdexcept", ["std::invalid_argument"]),
                        ("any", ["std::any"]),
                        ("optional", ["std::optional"]), ("string", ["std::string"]), ("vector", ["std::vector"]),
-                       ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
-    SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill"]),
+                       ("array", ["std::array"]), ("cstdint", ["std::int"]), ("complex", ["std::complex"])]
+    SOURCE_INCLUDES = [("algorithm", ["std::max", "std::min", "std::sort", "std::stable_sort", "std::fill", "std::copy"]),
+                       ("array", ["std::array"]),
                        ("cmath", ["std::"]), ("cstdlib", ["std::rand"]), ("iostream", ["std::cout"]),
                        ("limits", ["numeric_limits"]),
                        ("numeric", ["std::iota"]), ("stdexcept", ["throw std::"]),

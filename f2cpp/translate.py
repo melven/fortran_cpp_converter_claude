@@ -40,6 +40,7 @@ class X:
     fwd: str = None          # optional dummy: the std::optional object itself
     neg: object = None       # the negated expression, if it has a simpler form than !(...)
     one: object = None       # array of size 1 (maxloc of a vector): the scalar element
+    stdc: bool = False       # value of a std::array / std::vector<int> (not a variable), e.g. maxloc2(a)
     on_this: bool = False    # member of the object the method is called on
     obj: bool = False        # element of std::vector<mat>: a real matrix object, not a block
     uptr_elem: bool = False  # element of a std::vector<std::unique_ptr<T>> (unwrapped type)
@@ -400,6 +401,8 @@ class Translator:
             self.report.add("todo", "flat-array")
             return self.eigen_type(v, 1) if v.base not in ("type", "character") else f"std::vector<{e}>"
         t = self.leaf_type(v)
+        if st == "stdvec" and v.arr_n is not None:         # constant size
+            return f"std::array<{t}, {self.ref(v.arr_n).code}>"
         for _ in range(self.nest(v)[0]):
             t = f"std::vector<{t}>"
         return t
@@ -441,6 +444,8 @@ class Translator:
         """x is a whole std::vector<int> (variable or function result)"""
         if x.rank != 1 or x.base != "integer":
             return False
+        if x.stdc:
+            return True
         if x.var is not None:
             return x.whole and self.storage(x.var) == "stdvec"
         return x.res_var is not None and self.storage(x.res_var) == "stdvec"
@@ -1269,10 +1274,12 @@ class Translator:
             else:
                 x = self.expr(given[d])
             code = self.matrix(x)
-            if self.int_array(dv) and self.storage(dv) == "stdvec" and x.rank == 1 and not self.int_std(x):
-                if dv.intent != "in":           # Eigen section / Map passed to std::vector<int>&
+            if self.int_array(dv) and self.storage(dv) == "stdvec" and x.rank == 1 and \
+                    (not self.int_std(x) or (x.var is not None and x.var.arr_n is not None and dv.arr_n is None)):
+                if dv.intent != "in":           # Eigen section / Map / std::array passed to std::vector<int>&
                     raise Untranslatable("int-array-argument")
-                code = f"{self.cfg['int_copy']}({code})"
+                code = f"std::vector<int>({code}.begin(), {code}.end())" if self.int_std(x) else \
+                    f"{self.cfg['int_copy']}({code})"
             passes_handle = dv.ptr_like and not dv.opt_kind       # unique_ptr& / pointer& dummy
             if x.rank > 0 and dv.rank > 0 and dv.intent != "in" and self.storage(dv) == "eigen" and \
                     not (x.whole or (x.obj and "(" not in code.split("]")[-1] and "." not in code.split("]")[-1])):
@@ -1813,8 +1820,12 @@ class Translator:
         if lhs.rank > 0 and rhs.rank == 0:
             raise Untranslatable("array=scalar:" + (self.storage(v) if v is not None else "unknown"))
         code = self.matrix(rhs)
-        if self.int_array(v) and lhs.whole and rhs.rank == 1:
-            if self.storage(v) == "stdvec" and not self.int_std(rhs):
+        if self.int_array(v) and lhs.whole and rhs.rank == 1 and self.storage(v) == "stdvec" and rhs.one is not None:
+            code = f"{{{rhs.one.code}}}"                         # one element: one = {minloc(x)}
+        elif self.int_array(v) and lhs.whole and rhs.rank == 1:
+            if self.storage(v) == "stdvec" and v.arr_n is not None and not self.int_std(rhs):
+                target = self.view(lhs).code                    # Eigen expression -> std::array (same size)
+            elif self.storage(v) == "stdvec" and not self.int_std(rhs):
                 code = f"{self.cfg['int_copy']}({code})"        # Eigen expression -> std::vector<int>
             elif self.storage(v) != "stdvec" and self.int_std(rhs):
                 code = self.view(rhs).code                      # std::vector<int> -> Eigen
@@ -2838,9 +2849,9 @@ def i_loc(tr, n, pos, kw):
     i, iv = tr.cfg["int"], tr.cfg["ivec"]
     if x.rank == 2:
         name = tr.helper(n + "2", f"[](const auto& x_) {{ Eigen::Index r_, c_; x_.{fn}(&r_, &c_); "
-                                  f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}")
+                                  f"return std::array<{i}, 2>{{static_cast<{i}>(r_) + 1, static_cast<{i}>(c_) + 1}}; }}")
         if name is not None:
-            return X(f"{name}({tr.matrix(x)})", 1, "integer")
+            return X(f"{name}({tr.matrix(x)})", 1, "integer", stdc=True)
         obj = f"({tr.matrix(x)})" if x.arr else par(x)
         return X(f"[&] {{ Eigen::Index r_, c_; {obj}.{fn}(&r_, &c_); "
                  f"return ({iv}(2) << r_ + 1, c_ + 1).finished(); }}()", 1, "integer")

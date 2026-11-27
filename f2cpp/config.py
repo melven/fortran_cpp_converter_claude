@@ -76,7 +76,7 @@ STYLE_KEYS = {
     "layout": {k: k for k in ("include_guard", "doxygen", "brace_style", "c_decl_width", "line_width",
                               "clang_format", "clang_format_style")},
     "types": {k: k for k in ("scalar", "vec", "mat", "ivec", "imat", "int")},
-    "conventions": {**{k: k for k in ("member_access", "optional_arrays", "array_args", "int_arrays",
+    "conventions": {**{k: k for k in ("member_access", "optional_arrays", "array_args", "int_arrays", "std_array",
                                       "eigen_placeholders", "gtest_assert", "gtest_eigen_near")},
                     "size_checks": "wrap_size_checks"},
     "members": {"member": "member_name", **{k: "member_" + k for k in ("getter_name", "setter_name", "getter",

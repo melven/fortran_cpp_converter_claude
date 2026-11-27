@@ -45,6 +45,7 @@ array_args = "auto"
 # "auto": rank-1 integer arrays are std::vector<int> (interface always; locals unless used in Eigen operations and
 # not linked to a std::vector; Eigen operations on std::vector through the view int_view); "eigen": always ivec
 int_arrays = "auto"
+std_array = true               # rank-1 integer arrays of constant size (not dummies): std::array<int, N>
 # namespace of the slicing placeholders all / last: "Eigen::placeholders" (Eigen 5) or "Eigen" (Eigen 3.4)
 eigen_placeholders = "Eigen::placeholders"
 size_checks = false            # wrapped methods: check array sizes in the C++ glue before the call

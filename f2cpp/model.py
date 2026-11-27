@@ -56,6 +56,7 @@ class Var:
     needs_eigen: bool = False    # rank-1 integer array used in a way that requires an Eigen vector
     int_vec: bool = False        # rank-1 integer array stored as std::vector<int>
     fixed: str = None            # rank-1 integer array of an interface: "vec" (std::vector) / "eigen" (-W component)
+    arr_n: object = None         # std::vector<int> of constant size: std::array<int, N> (node of N)
     unwrapped: str = None        # variable of an unwrapped wrapper type: name of the wrapped component
     companions: dict = None      # unwrapped variable: other components -> companion variables <name>_<comp>
     elem_uptr: bool = False      # array of an unwrapped type around an allocatable object: unique_ptr elements
@@ -696,6 +697,22 @@ class Program:
         return m.spelling if m is not None and m.spelling else modname
 
     @staticmethod
+    def const_extent(v, scopes):
+        """extent node of a rank-1 array with constant size (lower bound 1, upper bound a literal or a named
+        constant of the scopes), not a dummy / allocatable / pointer; else None"""
+        if v.rank != 1 or v.is_dummy or v.has("allocatable") or v.has("pointer") or not v.dims:
+            return None
+        lo, hi = v.dims[0]
+        if hi is None or (lo is not None and str(lo).strip() != "1"):
+            return None
+        if cls(hi) == "Int_Literal_Constant":
+            return hi
+        if cls(hi) == "Name":
+            c = next((s[lname(hi)] for s in scopes if lname(hi) in s), None)
+            return hi if c is not None and c.has("parameter") and c.rank == 0 else None
+        return None
+
+    @staticmethod
     def passed_procedures(m):
         """procedures of module m used as actual arguments or procedure pointer targets (their signature is fixed
         by an interface)"""
@@ -774,13 +791,14 @@ class Program:
             ra, rb = find(a), find(b)
             if ra is not rb:
                 parent[id(ra)] = rb
-        arrays = {}
+        arrays, consts = {}, {}         # consts: id(var) -> named constants visible in its scope
         for m in self.modules.values():
             procs = list(m.procs.values()) + list(m.ifaces.values())
             procs += [q for p in procs for q in p.internal.values()]
-            for scope in [m.vars] + [t.comps for t in m.types.values()] + [p.vars for p in procs]:
+            for scope, names in [(m.vars, [m.vars])] + [(t.comps, [m.vars]) for t in m.types.values()] + \
+                    [(p.vars, [p.vars, getattr(p.host, "vars", {}), m.vars]) for p in procs]:
                 for v in scope.values():
-                    arrays[id(v)] = v
+                    arrays[id(v)], consts[id(v)] = v, names
         for a, b in self.links:
             arrays[id(a)], arrays[id(b)] = a, b
         groups = {}
@@ -790,8 +808,15 @@ class Program:
         for members in groups.values():
             fixed = {v.fixed for v in members if v.fixed}
             kind = "vec" if "vec" in fixed else "eigen" if fixed or any(v.needs_eigen for v in members) else "vec"
-            for v in members:
+            sizes = [self.const_extent(v, consts.get(id(v), [])) for v in members] if self.cfg["std_array"] else \
+                [None] * len(members)
+            same = len({str(n) for n in sizes}) == 1 and sizes[0] is not None and "eigen" not in fixed
+            if same:                            # constant size (all linked arrays): std::array, Eigen uses via the view
+                kind = "vec"
+            for v, n in zip(members, sizes, strict=True):
                 v.int_vec = (v.fixed or kind) == "vec"
+                if v.int_vec and n is not None and (same or v.fixed):
+                    v.arr_n = n
 
     def visible(self, module):
         seen, todo = [], [module]
